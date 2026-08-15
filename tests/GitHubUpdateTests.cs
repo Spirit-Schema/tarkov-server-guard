@@ -19,10 +19,12 @@ internal static class GitHubUpdateTests
         Run("semantic versions are strict and ordered", TestSemanticVersions);
         Run("production repository is fixed and token-free", TestFixedRepository);
         Run("update checks run at most once per day", TestDailyCheckCadence);
+        Run("a successful no-update check records the daily cadence", TestNoUpdateCadence);
         Run("future clock state cannot suppress checks", TestFutureClockRecovery);
         Run("only newer stable releases are accepted", TestStableUpgradeBoundary);
         Run("later defers the same release for 24 hours", TestDeferral);
-        Run("network failures are harmless and throttled", TestFailureBoundary);
+        Run("network failures preserve state and remain retryable", TestFailureBoundary);
+        Run("cancelled checks preserve state and remain retryable", TestCancellationBoundary);
         Run("missing Velopack performs no persistent check", TestUnavailableEngine);
         Run("update state is atomic and recovers from backup", TestStateBackupRecovery);
         Run("oversized update state is ignored safely", TestOversizedStateBoundary);
@@ -105,6 +107,34 @@ internal static class GitHubUpdateTests
         Assert(store.State.LastCheckUtc == now, "Future timestamp was not repaired.");
     }
 
+    private static void TestNoUpdateCadence()
+    {
+        DateTime now = new DateTime(2026, 8, 15, 2, 0, 0, DateTimeKind.Utc);
+        var clock = new FakeClock(now);
+        var engine = new FakeEngine(null);
+        var store = new MemoryStateStore
+        {
+            State = new UpdateCheckState
+            {
+                LastCheckUtc = now.AddDays(-2),
+                DeferredVersion = "0.7.9",
+                DeferredUntilUtc = now.AddHours(6)
+            }
+        };
+        var service = new GitHubUpdateService("0.7.1", engine, store, clock);
+
+        Assert(Get(service) == null, "A no-update result unexpectedly returned a candidate.");
+        Assert(engine.CheckCount == 1, "The no-update check did not enter the engine once.");
+        Assert(store.SaveCount == 1, "The successful no-update check was not persisted once.");
+        Assert(store.State.LastCheckUtc == now, "The successful no-update timestamp was not recorded.");
+        Assert(store.State.DeferredVersion == "0.7.9"
+            && store.State.DeferredUntilUtc == now.AddHours(6),
+            "The successful no-update check changed deferral state.");
+
+        Assert(Get(service) == null, "A no-update result was checked again before 24 hours.");
+        Assert(engine.CheckCount == 1, "The successful no-update check was not throttled.");
+    }
+
     private static void TestStableUpgradeBoundary()
     {
         AssertCandidate("0.7.2", true);
@@ -149,12 +179,68 @@ internal static class GitHubUpdateTests
         DateTime start = new DateTime(2026, 8, 15, 6, 0, 0, DateTimeKind.Utc);
         var clock = new FakeClock(start);
         var engine = new FakeEngine(null) { CheckException = new IOException("offline") };
-        var store = new MemoryStateStore();
+        DateTime originalLastCheck = start.AddDays(-2);
+        DateTime originalDeferral = start.AddHours(4);
+        var store = new MemoryStateStore
+        {
+            State = new UpdateCheckState
+            {
+                LastCheckUtc = originalLastCheck,
+                DeferredVersion = "0.7.9",
+                DeferredUntilUtc = originalDeferral
+            }
+        };
         var service = new GitHubUpdateService("0.7.1", engine, store, clock);
         Assert(Get(service) == null, "Network failure escaped as an update.");
         Assert(engine.CheckCount == 1, "Network failure check count mismatch.");
-        Assert(Get(service) == null, "Network failure retried immediately.");
-        Assert(engine.CheckCount == 1, "Network failure was not throttled.");
+        Assert(store.SaveCount == 0, "Network failure wrote update state.");
+        Assert(store.State.LastCheckUtc == originalLastCheck
+            && store.State.DeferredVersion == "0.7.9"
+            && store.State.DeferredUntilUtc == originalDeferral,
+            "Network failure changed existing update state.");
+
+        Assert(Get(service) == null, "A repeated network failure escaped as an update.");
+        Assert(engine.CheckCount == 2, "Network failure was not immediately retryable.");
+        Assert(store.SaveCount == 0, "Repeated network failure wrote update state.");
+    }
+
+    private static void TestCancellationBoundary()
+    {
+        DateTime start = new DateTime(2026, 8, 15, 6, 30, 0, DateTimeKind.Utc);
+        DateTime originalLastCheck = start.AddDays(-2);
+        DateTime originalDeferral = start.AddHours(3);
+        var clock = new FakeClock(start);
+        var engine = new FakeEngine("0.7.2");
+        var store = new MemoryStateStore
+        {
+            State = new UpdateCheckState
+            {
+                LastCheckUtc = originalLastCheck,
+                DeferredVersion = "0.7.9",
+                DeferredUntilUtc = originalDeferral
+            }
+        };
+        var service = new GitHubUpdateService("0.7.1", engine, store, clock);
+        using (var source = new CancellationTokenSource())
+        {
+            source.Cancel();
+            AssertThrows<OperationCanceledException>(delegate
+            {
+                service.CheckForUpdateAsync(source.Token).GetAwaiter().GetResult();
+            });
+        }
+
+        Assert(engine.CheckCount == 1, "Cancelled check did not enter the engine once.");
+        Assert(store.SaveCount == 0, "Cancelled check wrote update state.");
+        Assert(store.State.LastCheckUtc == originalLastCheck
+            && store.State.DeferredVersion == "0.7.9"
+            && store.State.DeferredUntilUtc == originalDeferral,
+            "Cancelled check changed existing update state.");
+
+        Assert(Get(service) != null, "A cancelled check was not immediately retryable.");
+        Assert(engine.CheckCount == 2, "Retry after cancellation did not enter the engine.");
+        Assert(store.State.LastCheckUtc == start,
+            "Successful retry after cancellation did not record its timestamp.");
     }
 
     private static void TestUnavailableEngine()
@@ -337,6 +423,7 @@ internal static class GitHubUpdateTests
         public Task<ApplicationUpdate> CheckForUpdateAsync(CancellationToken cancellationToken)
         {
             CheckCount++;
+            cancellationToken.ThrowIfCancellationRequested();
             if (CheckException != null) throw CheckException;
             return Task.FromResult(string.IsNullOrEmpty(_candidate)
                 ? null

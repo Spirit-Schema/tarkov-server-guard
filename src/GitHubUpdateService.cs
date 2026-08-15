@@ -348,13 +348,11 @@ namespace TarkovServerReporter
                 UpdateCheckState state = SafeLoadState();
                 if (!IsCheckDue(state, nowUtc)) return null;
 
-                state.LastCheckUtc = nowUtc;
-                SafeSaveState(state);
-
                 ApplicationUpdate candidate;
                 try
                 {
                     candidate = await _engine.CheckForUpdateAsync(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException)
                 {
@@ -364,6 +362,9 @@ namespace TarkovServerReporter
                 {
                     return null;
                 }
+
+                state.LastCheckUtc = nowUtc;
+                SafeSaveState(state);
                 if (candidate == null) return null;
 
                 SemanticVersion candidateVersion;
