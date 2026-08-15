@@ -1,0 +1,9 @@
+/build/
+/dist/
+/release/
+/review/
+/preview*.png
+/.vs/
+*.suo
+*.user
+*.tmp

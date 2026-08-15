@@ -1,0 +1,2268 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Web.Script.Serialization;
+using Microsoft.Win32;
+
+namespace TarkovServerReporter
+{
+    public sealed class TarkovLogPaths
+    {
+        public string EftPath { get; set; }
+        public string ArenaPath { get; set; }
+
+        public string GetPath(TarkovGame game)
+        {
+            return game == TarkovGame.Arena ? ArenaPath : EftPath;
+        }
+
+        public void SetPath(TarkovGame game, string path)
+        {
+            if (game == TarkovGame.Arena)
+                ArenaPath = path;
+            else
+                EftPath = path;
+        }
+    }
+
+    public sealed class RaidLogScanQuery
+    {
+        public RaidLogScanQuery()
+        {
+            MaximumRecords = 100;
+        }
+
+        public int MaximumRecords { get; set; }
+        public DateTime? StartInclusive { get; set; }
+        public DateTime? EndExclusive { get; set; }
+        public TarkovGame? GameFilter { get; set; }
+    }
+
+    public sealed class RaidLogScanResult
+    {
+        public RaidLogScanResult()
+        {
+            Sessions = new List<ServerSession>();
+        }
+
+        public IList<ServerSession> Sessions { get; set; }
+        public int EftFoldersScanned { get; set; }
+        public int ArenaFoldersScanned { get; set; }
+        public int TotalMatchingSessions { get; set; }
+        public bool TotalMatchingSessionsIsExact { get; set; }
+
+        public bool HasMoreSessions
+        {
+            get
+            {
+                int returned = Sessions == null ? 0 : Sessions.Count;
+                return !TotalMatchingSessionsIsExact || TotalMatchingSessions > returned;
+            }
+        }
+    }
+
+    public sealed class LauncherSelectionInfo
+    {
+        public string EftSelection { get; set; }
+        public string ArenaSelection { get; set; }
+        public DateTime? EftUpdatedAt { get; set; }
+        public DateTime? ArenaUpdatedAt { get; set; }
+
+        public string GetDisplay(TarkovGame game)
+        {
+            string value = game == TarkovGame.Arena ? ArenaSelection : EftSelection;
+            return string.IsNullOrWhiteSpace(value) ? "선택 기록 없음" : value;
+        }
+    }
+
+    public sealed class TarkovLogSettingsStore
+    {
+        private readonly string _settingsPath;
+
+        public TarkovLogSettingsStore()
+        {
+            _settingsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "TarkovServerGuard",
+                "log-paths.txt");
+        }
+
+        public TarkovLogPaths Load()
+        {
+            var paths = new TarkovLogPaths();
+            try
+            {
+                if (File.Exists(_settingsPath))
+                {
+                    foreach (string line in File.ReadAllLines(_settingsPath, Encoding.UTF8))
+                    {
+                        int separator = line.IndexOf('=');
+                        if (separator <= 0) continue;
+                        string key = line.Substring(0, separator).Trim();
+                        string value = line.Substring(separator + 1).Trim();
+                        if (!Directory.Exists(value)) continue;
+                        if (string.Equals(key, "eft", StringComparison.OrdinalIgnoreCase))
+                            paths.EftPath = value;
+                        else if (string.Equals(key, "arena", StringComparison.OrdinalIgnoreCase))
+                            paths.ArenaPath = value;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(paths.EftPath))
+                    paths.EftPath = new SettingsStore().LoadLogPath();
+            }
+            catch
+            {
+                // Automatic discovery still works if settings cannot be read.
+            }
+            return paths;
+        }
+
+        public void Save(TarkovLogPaths paths)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(_settingsPath);
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+                string[] lines =
+                {
+                    "eft=" + (paths == null ? string.Empty : paths.EftPath ?? string.Empty),
+                    "arena=" + (paths == null ? string.Empty : paths.ArenaPath ?? string.Empty)
+                };
+                File.WriteAllLines(_settingsPath, lines, Encoding.UTF8);
+            }
+            catch
+            {
+                // The app remains usable without persisted paths.
+            }
+        }
+    }
+
+    public static class TarkovLogPathFinder
+    {
+        private const string EftSteamAppId = "3932890";
+        private static readonly Regex FullyQualifiedLocalPathRegex = new Regex(
+            @"^[A-Za-z]:[\\/]",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private sealed class PathCandidate
+        {
+            public string Path { get; set; }
+            public int Priority { get; set; }
+            public DateTime LatestLogWriteUtc { get; set; }
+        }
+
+        public static TarkovLogPaths Find(TarkovLogPaths savedPaths)
+        {
+            var result = new TarkovLogPaths();
+            result.EftPath = FindForGame(
+                TarkovGame.Eft,
+                savedPaths == null ? null : savedPaths.EftPath);
+            result.ArenaPath = FindForGame(
+                TarkovGame.Arena,
+                savedPaths == null ? null : savedPaths.ArenaPath);
+            return result;
+        }
+
+        public static string FindForGame(TarkovGame game, string savedPath)
+        {
+            var candidates = new List<PathCandidate>();
+
+            AddCandidate(candidates, FindFromProcess(
+                game == TarkovGame.Arena ? "EscapeFromTarkovArena" : "EscapeFromTarkov"), 500);
+
+            foreach (string path in FindFromUninstallRegistry(game))
+                AddCandidate(candidates, path, 450);
+
+            foreach (string steamRoot in FindSteamRoots())
+            {
+                foreach (string path in FindSteamPathsForGame(game, steamRoot))
+                    AddCandidate(candidates, path, 450);
+            }
+
+            // A manually selected path remains a candidate, but no longer prevents a newer
+            // official or Steam installation from repairing a stale saved selection.
+            AddCandidate(candidates, savedPath, 350);
+
+            if (game == TarkovGame.Eft)
+            {
+                AddCandidate(
+                    candidates,
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "Battlestate Games",
+                        "EFT",
+                        "Logs"),
+                    300);
+            }
+
+            foreach (string path in FindFromCommonLocations(game))
+                AddCandidate(candidates, path, 100);
+
+            PathCandidate selected = candidates
+                .OrderByDescending(item => item.LatestLogWriteUtc)
+                .ThenByDescending(item => item.Priority)
+                .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            return selected == null ? null : selected.Path;
+        }
+
+        internal static string FindSteamForGameFromRoot(TarkovGame game, string steamRoot)
+        {
+            var candidates = new List<PathCandidate>();
+            foreach (string path in FindSteamPathsForGame(game, steamRoot))
+                AddCandidate(candidates, path, 450);
+            PathCandidate selected = candidates
+                .OrderByDescending(item => item.LatestLogWriteUtc)
+                .ThenByDescending(item => item.Priority)
+                .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            return selected == null ? null : selected.Path;
+        }
+
+        private static void AddCandidate(ICollection<PathCandidate> candidates, string path, int priority)
+        {
+            string normalized = LogPathFinder.NormalizeSelectedFolder(path);
+            if (string.IsNullOrWhiteSpace(normalized)) return;
+
+            PathCandidate existing = candidates.FirstOrDefault(
+                item => string.Equals(item.Path, normalized, StringComparison.OrdinalIgnoreCase));
+            DateTime latest = GetLatestLogWriteUtc(normalized);
+            if (existing != null)
+            {
+                existing.Priority = Math.Max(existing.Priority, priority);
+                if (latest > existing.LatestLogWriteUtc) existing.LatestLogWriteUtc = latest;
+                return;
+            }
+
+            candidates.Add(new PathCandidate
+            {
+                Path = normalized,
+                Priority = priority,
+                LatestLogWriteUtc = latest
+            });
+        }
+
+        private static DateTime GetLatestLogWriteUtc(string logsPath)
+        {
+            DateTime latest = DateTime.MinValue;
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(logsPath, "*.log", SearchOption.TopDirectoryOnly).Take(64))
+                    UpdateLatestWriteTime(file, ref latest);
+            }
+            catch
+            {
+                // Continue with session directories when a top-level live log rotates.
+            }
+
+            string[] directories;
+            try
+            {
+                directories = Directory.EnumerateDirectories(logsPath)
+                    .OrderByDescending(GetDirectoryWriteTimeSafe)
+                    .Take(32)
+                    .ToArray();
+            }
+            catch
+            {
+                directories = new string[0];
+            }
+
+            foreach (string directory in directories)
+            {
+                try
+                {
+                    foreach (string file in Directory.EnumerateFiles(directory, "*.log", SearchOption.TopDirectoryOnly).Take(64))
+                        UpdateLatestWriteTime(file, ref latest);
+                }
+                catch
+                {
+                    // One rotating or inaccessible session must not hide all other sessions.
+                }
+            }
+            return latest;
+        }
+
+        private static void UpdateLatestWriteTime(string file, ref DateTime latest)
+        {
+            try
+            {
+                DateTime written = File.GetLastWriteTimeUtc(file);
+                if (written > latest) latest = written;
+            }
+            catch
+            {
+                // The file may be rotated between enumeration and metadata access.
+            }
+        }
+
+        private static DateTime GetDirectoryWriteTimeSafe(string directory)
+        {
+            try
+            {
+                return Directory.GetLastWriteTimeUtc(directory);
+            }
+            catch
+            {
+                return DateTime.MinValue;
+            }
+        }
+
+        private static IList<string> FindFromUninstallRegistry(TarkovGame game)
+        {
+            string baseName = game == TarkovGame.Arena ? "EscapeFromTarkovArena" : "EscapeFromTarkov";
+            string[] subKeys =
+            {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\" + baseName + "_live",
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\" + baseName
+            };
+            var results = new List<string>();
+
+            RegistryView[] views = { RegistryView.Registry64, RegistryView.Registry32 };
+            RegistryHive[] hives = { RegistryHive.LocalMachine, RegistryHive.CurrentUser };
+            foreach (RegistryHive hive in hives)
+            {
+                foreach (RegistryView view in views)
+                {
+                    try
+                    {
+                        using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, view))
+                        {
+                            foreach (string subKey in subKeys)
+                            {
+                                using (RegistryKey key = baseKey.OpenSubKey(subKey))
+                                {
+                                    string location = key == null
+                                        ? null
+                                        : Convert.ToString(key.GetValue("InstallLocation"));
+                                    string logs = LogPathFinder.NormalizeSelectedFolder(location);
+                                    AddUniquePath(results, logs);
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Continue with the next hive or registry view.
+                    }
+                }
+            }
+            return results;
+        }
+
+        private static string FindFromProcess(string processName)
+        {
+            try
+            {
+                foreach (Process process in Process.GetProcessesByName(processName))
+                {
+                    try
+                    {
+                        string executable = process.MainModule == null ? null : process.MainModule.FileName;
+                        string logs = LogPathFinder.NormalizeSelectedFolder(
+                            string.IsNullOrWhiteSpace(executable) ? null : Path.GetDirectoryName(executable));
+                        if (!string.IsNullOrWhiteSpace(logs)) return logs;
+                    }
+                    catch
+                    {
+                        // Access to MainModule can be denied.
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+            }
+            catch
+            {
+                return null;
+            }
+            return null;
+        }
+
+        private static IList<string> FindSteamRoots()
+        {
+            var roots = new List<string>();
+            AddSteamRootFromRegistry(roots, RegistryHive.CurrentUser, @"SOFTWARE\Valve\Steam", "SteamPath");
+            AddSteamRootFromRegistry(roots, RegistryHive.CurrentUser, @"SOFTWARE\Valve\Steam", "InstallPath");
+            AddSteamRootFromRegistry(roots, RegistryHive.LocalMachine, @"SOFTWARE\Valve\Steam", "InstallPath");
+
+            string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            if (!string.IsNullOrWhiteSpace(programFilesX86))
+                AddUniqueDirectory(roots, Path.Combine(programFilesX86, "Steam"));
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (!string.IsNullOrWhiteSpace(programFiles))
+                AddUniqueDirectory(roots, Path.Combine(programFiles, "Steam"));
+            return roots;
+        }
+
+        private static void AddSteamRootFromRegistry(
+            ICollection<string> roots,
+            RegistryHive hive,
+            string subKey,
+            string valueName)
+        {
+            foreach (RegistryView view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+            {
+                try
+                {
+                    using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, view))
+                    using (RegistryKey key = baseKey.OpenSubKey(subKey))
+                    {
+                        string value = key == null ? null : Convert.ToString(key.GetValue(valueName));
+                        AddUniqueDirectory(roots, value);
+                    }
+                }
+                catch
+                {
+                    // Steam is optional. A missing or inaccessible registry key is expected.
+                }
+            }
+        }
+
+        private static IList<string> FindSteamPathsForGame(TarkovGame game, string steamRoot)
+        {
+            var results = new List<string>();
+            foreach (string library in ReadSteamLibraries(steamRoot))
+            {
+                string steamApps = Path.Combine(library, "steamapps");
+                string common = Path.Combine(steamApps, "common");
+                if (!Directory.Exists(common)) continue;
+
+                if (game == TarkovGame.Eft)
+                {
+                    string manifest = Path.Combine(steamApps, "appmanifest_" + EftSteamAppId + ".acf");
+                    string installDirectory = ReadVdfValue(manifest, "installdir", 1024 * 1024);
+                    string installRoot = ResolveChildDirectory(common, installDirectory);
+                    foreach (string logs in FindLogsUnderInstallRoot(game, installRoot, true))
+                        AddUniquePath(results, logs);
+                }
+
+                // Arena does not currently have a confirmed standalone Steam AppID. Inspect only
+                // top-level Tarkov folders from confirmed Steam libraries and require Arena evidence.
+                IEnumerable<string> tarkovFolders;
+                try
+                {
+                    tarkovFolders = Directory.EnumerateDirectories(common)
+                        .Where(path => Path.GetFileName(path).IndexOf("Tarkov", StringComparison.OrdinalIgnoreCase) >= 0)
+                        .Take(32)
+                        .ToArray();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string installRoot in tarkovFolders)
+                {
+                    foreach (string logs in FindLogsUnderInstallRoot(game, installRoot, false))
+                        AddUniquePath(results, logs);
+                }
+            }
+            return results;
+        }
+
+        private static IList<string> ReadSteamLibraries(string steamRoot)
+        {
+            var libraries = new List<string>();
+            string root = NormalizeExistingRoot(steamRoot);
+            if (root == null) return libraries;
+            AddUniqueDirectory(libraries, root);
+
+            string vdfPath = Path.Combine(root, "steamapps", "libraryfolders.vdf");
+            string content = ReadLimitedText(vdfPath, 4 * 1024 * 1024);
+            if (string.IsNullOrWhiteSpace(content)) return libraries;
+
+            MatchCollection matches = Regex.Matches(
+                content,
+                "\"path\"\\s*\"(?<value>(?:\\\\.|[^\"])*)\"",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            foreach (Match match in matches)
+                AddUniqueDirectory(libraries, UnescapeVdfValue(match.Groups["value"].Value));
+            return libraries;
+        }
+
+        private static string ReadVdfValue(string path, string key, long maximumBytes)
+        {
+            string content = ReadLimitedText(path, maximumBytes);
+            if (string.IsNullOrWhiteSpace(content)) return null;
+            Match match = Regex.Match(
+                content,
+                "\"" + Regex.Escape(key) + "\"\\s*\"(?<value>(?:\\\\.|[^\"])*)\"",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return match.Success ? UnescapeVdfValue(match.Groups["value"].Value) : null;
+        }
+
+        private static string ReadLimitedText(string path, long maximumBytes)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || info.Length < 0 || info.Length > maximumBytes) return null;
+                using (var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    return reader.ReadToEnd();
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string UnescapeVdfValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 2048) return null;
+            var builder = new StringBuilder(value.Length);
+            for (int index = 0; index < value.Length; index++)
+            {
+                char current = value[index];
+                if (current == '\\' && index + 1 < value.Length
+                    && (value[index + 1] == '\\' || value[index + 1] == '"'))
+                {
+                    builder.Append(value[index + 1]);
+                    index++;
+                }
+                else
+                {
+                    builder.Append(current);
+                }
+            }
+            return builder.ToString();
+        }
+
+        private static string ResolveChildDirectory(string parent, string child)
+        {
+            if (string.IsNullOrWhiteSpace(parent) || string.IsNullOrWhiteSpace(child)
+                || child.Length > 512 || Path.IsPathRooted(child) || child.IndexOf('\0') >= 0)
+                return null;
+            try
+            {
+                string parentFull = Path.GetFullPath(parent)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string childFull = Path.GetFullPath(Path.Combine(parentFull, child));
+                string prefix = parentFull + Path.DirectorySeparatorChar;
+                if (!childFull.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    || !Directory.Exists(childFull))
+                    return null;
+                return childFull;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static IList<string> FindLogsUnderInstallRoot(
+            TarkovGame game,
+            string installRoot,
+            bool trustedRoot)
+        {
+            var results = new List<string>();
+            if (string.IsNullOrWhiteSpace(installRoot) || !Directory.Exists(installRoot)) return results;
+
+            if (trustedRoot || LooksLikeGameRoot(game, installRoot))
+                AddUniquePath(results, LogPathFinder.NormalizeSelectedFolder(installRoot));
+
+            try
+            {
+                foreach (string child in Directory.EnumerateDirectories(installRoot)
+                    .Where(path => LooksLikeGameRoot(game, path))
+                    .Take(24))
+                {
+                    AddUniquePath(results, LogPathFinder.NormalizeSelectedFolder(child));
+                }
+            }
+            catch
+            {
+                // Do not recurse through a Steam library. Direct candidates are sufficient.
+            }
+            return results;
+        }
+
+        private static bool LooksLikeGameRoot(TarkovGame game, string directory)
+        {
+            try
+            {
+                if (game == TarkovGame.Arena)
+                {
+                    return Directory.EnumerateFiles(
+                        directory,
+                        "EscapeFromTarkovArena*.exe",
+                        SearchOption.TopDirectoryOnly).Any();
+                }
+                return File.Exists(Path.Combine(directory, "EscapeFromTarkov.exe"));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static IList<string> FindFromCommonLocations(TarkovGame game)
+        {
+            string[] relativeCandidates = game == TarkovGame.Arena
+                ? new[]
+                {
+                    @"Battlestate Games\Escape from Tarkov Arena",
+                    @"Battlestate Games\EFT Arena",
+                    @"Games\Escape from Tarkov Arena",
+                    @"Escape from Tarkov Arena"
+                }
+                : new[]
+                {
+                    @"Battlestate Games\EFT",
+                    @"Battlestate Games\Escape From Tarkov",
+                    @"Games\Escape From Tarkov",
+                    @"Escape From Tarkov",
+                    @"EFT"
+                };
+            var results = new List<string>();
+            try
+            {
+                foreach (DriveInfo drive in DriveInfo.GetDrives())
+                {
+                    if (!drive.IsReady || drive.DriveType != DriveType.Fixed) continue;
+                    foreach (string relative in relativeCandidates)
+                    {
+                        string installRoot = Path.Combine(drive.RootDirectory.FullName, relative);
+                        if (!LooksLikeGameRoot(game, installRoot)) continue;
+                        string logs = LogPathFinder.NormalizeSelectedFolder(installRoot);
+                        AddUniquePath(results, logs);
+                    }
+                }
+            }
+            catch
+            {
+                // Fixed-drive fallbacks are optional.
+            }
+            return results;
+        }
+
+        private static string NormalizeExistingRoot(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || path.Length > 2048 || path.IndexOf('\0') >= 0)
+                return null;
+            try
+            {
+                string trimmed = path.Trim().Trim('"');
+                if (!IsFullyQualifiedLocalPath(trimmed))
+                    return null;
+                string full = Path.GetFullPath(trimmed);
+                return Path.IsPathRooted(full) && Directory.Exists(full) ? full : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        internal static bool IsFullyQualifiedLocalPath(string path)
+        {
+            return !string.IsNullOrWhiteSpace(path)
+                && FullyQualifiedLocalPathRegex.IsMatch(path);
+        }
+
+        private static void AddUniqueDirectory(ICollection<string> paths, string path)
+        {
+            string normalized = NormalizeExistingRoot(path);
+            if (normalized == null) return;
+            if (!paths.Contains(normalized, StringComparer.OrdinalIgnoreCase)) paths.Add(normalized);
+        }
+
+        private static void AddUniquePath(ICollection<string> paths, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+            if (!paths.Contains(path, StringComparer.OrdinalIgnoreCase)) paths.Add(path);
+        }
+    }
+
+    public static class RaidLogScanner
+    {
+        private sealed class CachedDirectory
+        {
+            public long Length { get; set; }
+            public DateTime LastWriteUtc { get; set; }
+            public int FileCount { get; set; }
+            public IList<ServerSession> Sessions { get; set; }
+        }
+
+        private sealed class MatchTiming
+        {
+            public DateTime Timestamp { get; set; }
+            public double Seconds { get; set; }
+            public bool IsExplicitZero { get; set; }
+            public string LogFilePath { get; set; }
+            public string ClientVersion { get; set; }
+        }
+
+        private sealed class SessionModeEvent
+        {
+            public DateTime Timestamp { get; set; }
+            public TarkovProgressionMode Mode { get; set; }
+        }
+
+        private sealed class MapPresetEvent
+        {
+            public DateTime Timestamp { get; set; }
+            public string MapName { get; set; }
+        }
+
+        private sealed class TimedLogEvent
+        {
+            public DateTime Timestamp { get; set; }
+        }
+
+        private sealed class UserReportRequest
+        {
+            public DateTime? RequestedAt { get; set; }
+            public DateTime? SuccessfulResponseAt { get; set; }
+            public string RequestId { get; set; }
+        }
+
+        private static readonly object CacheLock = new object();
+        private static readonly Dictionary<string, CachedDirectory> DirectoryCache =
+            new Dictionary<string, CachedDirectory>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Regex TimestampRegex = new Regex(
+            @"(?<date>\d{4}[-.]\d{2}[-.]\d{2})[ T](?<time>\d{2}:\d{2}:\d{2})(?<fraction>\.\d{1,7})?",
+            RegexOptions.Compiled);
+        private static readonly Regex VersionRegex = new Regex(
+            @"\|(?<version>\d+(?:\.\d+){2,})\|",
+            RegexOptions.Compiled);
+        private static readonly Regex MatchingRegex = new Regex(
+            @"\bMatchingCompleted:(?<reported>-?\d+(?:\.\d+)?)(?:\s+real:(?<real>-?\d+(?:\.\d+)?))?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex SessionModeRegex = new Regex(
+            @"\bSession mode:\s*(?<mode>Regular|Pve|PvpSeason)\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex GameCreatedRegex = new Regex(
+            @"\bGameCreated:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex GameStartedRegex = new Regex(
+            @"\bGameStarted:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex ArenaMatchingStartedRegex = new Regex(
+            @"MatchingProgressState:\s*MatchingStarted",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex EftServerRegex = new Regex(
+            @"RaidMode:\s*(?<raid>[^,]+),\s*Ip:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3})\s*,\s*Port:\s*(?<port>\d+)\s*,\s*Location:\s*(?<map>[^,]+),\s*Sid:\s*(?<sid>[^,]+),\s*GameMode:\s*(?<mode>[^,]+),\s*shortId:\s*(?<short>[^,'\s]+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex ArenaServerRegex = new Regex(
+            @"Server found\.\s*ip:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3})\s+port:\s*(?<port>\d+)\s+sid:\s*(?<sid>.+?)\s+shortId:\s*(?<short>\S+)\s+map:\s*(?<map>\S+)\s+mode:\s*(?<mode>\S+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex LegacyIpRegex = new Regex(
+            @"\bIp:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3})(?::(?<port>\d+))?\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex LegacyMapRegex = new Regex(
+            @"scene preset path:maps/(?<map>[^.\s]+)\.bundle",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex EndpointRegex = new Regex(
+            @"address:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3}):(?<port>\d+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex StatisticsRegex = new Regex(
+            @"Statistics \(address:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3}):(?<port>\d+),\s*rtt:\s*(?<rtt>[-+0-9.Ee]+),\s*lose:\s*(?<lose>[-+0-9.Ee]+),\s*sent:\s*(?<sent>\d+),\s*received:\s*(?<received>\d+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex DisconnectedReasonRegex = new Regex(
+            @"Enter to the 'Disconnected' state \(address:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3}):(?<port>\d+),\s*reason:\s*(?<reason>-?\d+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex DataCenterRegex = new Regex(
+            @"^(?<dc>[A-Z]{2}-[A-Z0-9]+?)G\d+$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex UserReportRouteRegex = new Regex(
+            @"/client/report/send(?:\?)?(?=$|[\s,]|\.(?:\s|$))",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex BackendRequestIdRegex = new Regex(
+            @"\bid\s+\[(?<id>[^\]\r\n]{1,64})\]\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static readonly Dictionary<string, string> EftMapNames =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "woods_preset", "Woods" },
+                { "customs_preset", "Customs" },
+                { "bigmap", "Customs" },
+                { "shoreline_preset", "Shoreline" },
+                { "shopping_mall", "Interchange" },
+                { "rezerv_base_preset", "Reserve" },
+                { "rezervbase", "Reserve" },
+                { "lighthouse_preset", "Lighthouse" },
+                { "city_preset", "Streets of Tarkov" },
+                { "tarkovstreets", "Streets of Tarkov" },
+                { "factory_day_preset", "Factory" },
+                { "factory_night_preset", "Factory" },
+                { "factory4_day", "Factory" },
+                { "factory4_night", "Factory" },
+                { "sandbox_preset", "Ground Zero" },
+                { "sandbox_high_preset", "Ground Zero" },
+                { "sandbox", "Ground Zero" },
+                { "sandbox_high", "Ground Zero" },
+                { "laboratory_preset", "The Lab" },
+                { "laboratory", "The Lab" },
+                { "labyrinth_preset", "Labyrinth" }
+            };
+
+        public static RaidLogScanResult Scan(TarkovLogPaths paths, int maximumRecords)
+        {
+            int max = maximumRecords <= 0 ? 100 : maximumRecords;
+            var result = new RaidLogScanResult();
+            int eftFolders;
+            int arenaFolders;
+            bool allEftFoldersScanned;
+            bool allArenaFoldersScanned;
+            IList<ServerSession> eft = ScanGameCore(
+                paths == null ? null : paths.EftPath,
+                TarkovGame.Eft,
+                max,
+                out eftFolders,
+                out allEftFoldersScanned);
+            IList<ServerSession> arena = ScanGameCore(
+                paths == null ? null : paths.ArenaPath,
+                TarkovGame.Arena,
+                max,
+                out arenaFolders,
+                out allArenaFoldersScanned);
+            result.EftFoldersScanned = eftFolders;
+            result.ArenaFoldersScanned = arenaFolders;
+            IList<ServerSession> matching = MergeDuplicateSessions(eft.Concat(arena))
+                .Where(session => session != null
+                    && (session.HasServerIp || session.HostingMode == TarkovHostingMode.Local))
+                .OrderByDescending(session => session.DisplayDetectedAt)
+                .ThenByDescending(session => session.LastUpdated)
+                .ToList();
+            result.TotalMatchingSessions = matching.Count;
+            result.TotalMatchingSessionsIsExact = allEftFoldersScanned && allArenaFoldersScanned;
+            result.Sessions = matching.Take(max).ToList();
+            return result;
+        }
+
+        public static RaidLogScanResult Scan(TarkovLogPaths paths, RaidLogScanQuery query)
+        {
+            RaidLogScanQuery effectiveQuery = query ?? new RaidLogScanQuery();
+            if (effectiveQuery.StartInclusive.HasValue
+                && effectiveQuery.EndExclusive.HasValue
+                && effectiveQuery.StartInclusive.Value >= effectiveQuery.EndExclusive.Value)
+            {
+                throw new ArgumentException(
+                    "StartInclusive must be earlier than EndExclusive.",
+                    "query");
+            }
+            if (effectiveQuery.GameFilter.HasValue
+                && effectiveQuery.GameFilter.Value != TarkovGame.Eft
+                && effectiveQuery.GameFilter.Value != TarkovGame.Arena)
+            {
+                throw new ArgumentOutOfRangeException(
+                    "query",
+                    "GameFilter must be EFT, Arena, or null.");
+            }
+
+            int max = effectiveQuery.MaximumRecords <= 0
+                ? 100
+                : effectiveQuery.MaximumRecords;
+            bool scanEft = !effectiveQuery.GameFilter.HasValue
+                || effectiveQuery.GameFilter.Value == TarkovGame.Eft;
+            bool scanArena = !effectiveQuery.GameFilter.HasValue
+                || effectiveQuery.GameFilter.Value == TarkovGame.Arena;
+            int eftFolders = 0;
+            int arenaFolders = 0;
+            bool allEftFoldersScanned = true;
+            bool allArenaFoldersScanned = true;
+            IList<ServerSession> eft = scanEft
+                ? ScanGameCore(
+                    paths == null ? null : paths.EftPath,
+                    TarkovGame.Eft,
+                    int.MaxValue,
+                    out eftFolders,
+                    out allEftFoldersScanned)
+                : new List<ServerSession>();
+            IList<ServerSession> arena = scanArena
+                ? ScanGameCore(
+                    paths == null ? null : paths.ArenaPath,
+                    TarkovGame.Arena,
+                    int.MaxValue,
+                    out arenaFolders,
+                    out allArenaFoldersScanned)
+                : new List<ServerSession>();
+
+            IEnumerable<ServerSession> matching = MergeDuplicateSessions(eft.Concat(arena))
+                .Where(session => session != null
+                    && (session.HasServerIp || session.HostingMode == TarkovHostingMode.Local));
+            if (effectiveQuery.GameFilter.HasValue)
+            {
+                TarkovGame game = effectiveQuery.GameFilter.Value;
+                matching = matching.Where(session => session.Game == game);
+            }
+            if (effectiveQuery.StartInclusive.HasValue)
+            {
+                DateTime startInclusive = effectiveQuery.StartInclusive.Value;
+                matching = matching.Where(session => session.DisplayDetectedAt >= startInclusive);
+            }
+            if (effectiveQuery.EndExclusive.HasValue)
+            {
+                DateTime endExclusive = effectiveQuery.EndExclusive.Value;
+                matching = matching.Where(session => session.DisplayDetectedAt < endExclusive);
+            }
+
+            IList<ServerSession> ordered = matching
+                .OrderByDescending(session => session.DisplayDetectedAt)
+                .ThenByDescending(session => session.LastUpdated)
+                .ToList();
+            return new RaidLogScanResult
+            {
+                Sessions = ordered.Take(max).ToList(),
+                EftFoldersScanned = eftFolders,
+                ArenaFoldersScanned = arenaFolders,
+                TotalMatchingSessions = ordered.Count,
+                TotalMatchingSessionsIsExact = allEftFoldersScanned && allArenaFoldersScanned
+            };
+        }
+
+        public static IList<ServerSession> ScanGame(
+            string logsPath,
+            TarkovGame game,
+            int maximumFolders,
+            out int foldersScanned)
+        {
+            bool allFoldersScanned;
+            return ScanGameCore(
+                logsPath,
+                game,
+                maximumFolders,
+                out foldersScanned,
+                out allFoldersScanned);
+        }
+
+        private static IList<ServerSession> ScanGameCore(
+            string logsPath,
+            TarkovGame game,
+            int maximumFolders,
+            out int foldersScanned,
+            out bool allFoldersScanned)
+        {
+            foldersScanned = 0;
+            allFoldersScanned = true;
+            var sessions = new List<ServerSession>();
+            if (string.IsNullOrWhiteSpace(logsPath) || !Directory.Exists(logsPath)) return sessions;
+
+            int max = maximumFolders <= 0 ? 100 : maximumFolders;
+            try
+            {
+                var root = new DirectoryInfo(logsPath);
+                var directories = new List<DirectoryInfo>();
+                if (GetRelevantFiles(root, game).Length > 0) directories.Add(root);
+                directories.AddRange(root.GetDirectories());
+                directories = directories
+                    .OrderByDescending(directory =>
+                        directory.CreationTime > directory.LastWriteTime
+                            ? directory.CreationTime
+                            : directory.LastWriteTime)
+                    .ToList();
+                allFoldersScanned = directories.Count <= max;
+                directories = directories.Take(max).ToList();
+
+                foreach (DirectoryInfo directory in directories)
+                {
+                    foldersScanned++;
+                    sessions.AddRange(ReadDirectory(directory, game));
+                }
+            }
+            catch
+            {
+                allFoldersScanned = false;
+                return sessions;
+            }
+
+            return sessions
+                .OrderByDescending(session => session.DisplayDetectedAt)
+                .ThenByDescending(session => session.LastUpdated)
+                .ToList();
+        }
+
+        private static IList<ServerSession> ReadDirectory(DirectoryInfo directory, TarkovGame game)
+        {
+            FileInfo[] relevantFiles = GetRelevantFiles(directory, game);
+            if (relevantFiles.Length == 0) return new List<ServerSession>();
+
+            long combinedLength = 0;
+            DateTime latestWriteUtc = DateTime.MinValue;
+            foreach (FileInfo file in relevantFiles)
+            {
+                combinedLength += file.Length;
+                if (file.LastWriteTimeUtc > latestWriteUtc) latestWriteUtc = file.LastWriteTimeUtc;
+            }
+
+            string cacheKey = game + "|" + directory.FullName;
+            lock (CacheLock)
+            {
+                CachedDirectory cached;
+                if (DirectoryCache.TryGetValue(cacheKey, out cached)
+                    && cached.Length == combinedLength
+                    && cached.LastWriteUtc == latestWriteUtc
+                    && cached.FileCount == relevantFiles.Length)
+                {
+                    return cached.Sessions.Select(CloneSession).ToList();
+                }
+            }
+
+            IList<ServerSession> scanned = ParseDirectory(directory, relevantFiles, game);
+            lock (CacheLock)
+            {
+                DirectoryCache[cacheKey] = new CachedDirectory
+                {
+                    Length = combinedLength,
+                    LastWriteUtc = latestWriteUtc,
+                    FileCount = relevantFiles.Length,
+                    Sessions = scanned.Select(CloneSession).ToList()
+                };
+            }
+            return scanned;
+        }
+
+        private static IList<ServerSession> ParseDirectory(
+            DirectoryInfo directory,
+            FileInfo[] relevantFiles,
+            TarkovGame game)
+        {
+            var timings = new List<MatchTiming>();
+            var sessionModes = new List<SessionModeEvent>();
+            var mapPresets = new List<MapPresetEvent>();
+            var gameCreatedEvents = new List<TimedLogEvent>();
+            var gameStartedEvents = new List<TimedLogEvent>();
+            FileInfo[] applicationFiles = relevantFiles
+                .Where(file => file.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(file => file.LastWriteTimeUtc)
+                .ThenBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (FileInfo file in applicationFiles)
+            {
+                foreach (string line in ReadLines(file.FullName))
+                {
+                    DateTime timestamp;
+                    if (!TryParseTimestamp(line, out timestamp)) continue;
+
+                    Match modeMatch = SessionModeRegex.Match(line);
+                    if (game == TarkovGame.Eft && modeMatch.Success)
+                    {
+                        sessionModes.Add(new SessionModeEvent
+                        {
+                            Timestamp = timestamp,
+                            Mode = ParseProgressionMode(modeMatch.Groups["mode"].Value)
+                        });
+                    }
+
+                    Match match = MatchingRegex.Match(line);
+                    double seconds;
+                    double reportedSeconds = 0;
+                    double realSeconds = 0;
+                    bool reportedParsed = match.Success && double.TryParse(
+                        match.Groups["reported"].Value,
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out reportedSeconds);
+                    bool realParsed = match.Success
+                        && match.Groups["real"].Success
+                        && double.TryParse(
+                            match.Groups["real"].Value,
+                            NumberStyles.Float,
+                            CultureInfo.InvariantCulture,
+                            out realSeconds);
+                    string secondsText = match.Groups["real"].Success
+                        ? match.Groups["real"].Value
+                        : match.Groups["reported"].Value;
+                    if (match.Success && double.TryParse(
+                        secondsText,
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out seconds))
+                    {
+                        timings.Add(new MatchTiming
+                        {
+                            Timestamp = timestamp,
+                            Seconds = seconds,
+                            IsExplicitZero = reportedParsed
+                                && realParsed
+                                && Math.Abs(reportedSeconds) < 0.0001
+                                && Math.Abs(realSeconds) < 0.0001,
+                            LogFilePath = file.FullName,
+                            ClientVersion = GetVersion(line)
+                        });
+                    }
+
+                    if (game == TarkovGame.Eft)
+                    {
+                        Match mapMatch = LegacyMapRegex.Match(line);
+                        if (mapMatch.Success)
+                        {
+                            mapPresets.Add(new MapPresetEvent
+                            {
+                                Timestamp = timestamp,
+                                MapName = NormalizeMap(TarkovGame.Eft, mapMatch.Groups["map"].Value)
+                            });
+                        }
+                        if (GameCreatedRegex.IsMatch(line))
+                            gameCreatedEvents.Add(new TimedLogEvent { Timestamp = timestamp });
+                        if (GameStartedRegex.IsMatch(line))
+                            gameStartedEvents.Add(new TimedLogEvent { Timestamp = timestamp });
+                    }
+                }
+            }
+
+            sessionModes.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
+            mapPresets.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
+            gameCreatedEvents.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
+            gameStartedEvents.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
+
+            var sessionsByKey = new Dictionary<string, ServerSession>(StringComparer.OrdinalIgnoreCase);
+            string legacyIp = null;
+            int legacyPort = 0;
+            string legacyMap = null;
+            DateTime? legacyTimestamp = null;
+            string legacyVersion = null;
+            string legacyFile = null;
+
+            FileInfo[] serverFiles = game == TarkovGame.Arena
+                ? relevantFiles.Where(file => file.Name.IndexOf("lifecycle", StringComparison.OrdinalIgnoreCase) >= 0).ToArray()
+                : applicationFiles;
+            DateTime? arenaMatchingStarted = null;
+            foreach (FileInfo file in serverFiles
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (string line in ReadLines(file.FullName))
+                {
+                    DateTime lineTimestamp;
+                    if (game == TarkovGame.Arena
+                        && ArenaMatchingStartedRegex.IsMatch(line)
+                        && TryParseTimestamp(line, out lineTimestamp))
+                    {
+                        arenaMatchingStarted = lineTimestamp;
+                    }
+
+                    Match richMatch = game == TarkovGame.Arena
+                        ? ArenaServerRegex.Match(line)
+                        : EftServerRegex.Match(line);
+                    DateTime timestamp;
+                    if (richMatch.Success
+                        && TryParseTimestamp(line, out timestamp)
+                        && IsValidIpv4(richMatch.Groups["ip"].Value))
+                    {
+                        ServerSession session = CreateRichSession(
+                            directory,
+                            file,
+                            game,
+                            richMatch,
+                            line,
+                            timestamp,
+                            timings);
+                        if (game == TarkovGame.Eft)
+                            ApplyEftRaidClassification(session, sessionModes, TarkovHostingMode.Server);
+                        if (game == TarkovGame.Arena && arenaMatchingStarted.HasValue)
+                        {
+                            double elapsed = (timestamp - arenaMatchingStarted.Value).TotalSeconds;
+                            if (elapsed >= 0 && elapsed <= 3600) session.MatchmakingSeconds = elapsed;
+                            arenaMatchingStarted = null;
+                        }
+                        ServerSession existing;
+                        if (sessionsByKey.TryGetValue(session.SessionKey, out existing))
+                        {
+                            if (timestamp > existing.LastUpdated) existing.LastUpdated = timestamp;
+                        }
+                        else
+                        {
+                            sessionsByKey[session.SessionKey] = session;
+                        }
+                    }
+
+                    if (game != TarkovGame.Eft) continue;
+                    Match ipMatch = LegacyIpRegex.Match(line);
+                    if (ipMatch.Success && IsValidIpv4(ipMatch.Groups["ip"].Value))
+                    {
+                        legacyIp = ipMatch.Groups["ip"].Value;
+                        int.TryParse(ipMatch.Groups["port"].Value, out legacyPort);
+                        DateTime parsed;
+                        legacyTimestamp = TryParseTimestamp(line, out parsed) ? parsed : (DateTime?)null;
+                        legacyVersion = GetVersion(line);
+                        legacyFile = file.FullName;
+                    }
+                    Match mapMatch = LegacyMapRegex.Match(line);
+                    if (mapMatch.Success) legacyMap = NormalizeMap(TarkovGame.Eft, mapMatch.Groups["map"].Value);
+                }
+            }
+
+            var sessions = sessionsByKey.Values.OrderBy(item => item.DisplayDetectedAt).ToList();
+            if (sessions.Count == 0 && !string.IsNullOrWhiteSpace(legacyIp))
+            {
+                DateTime started;
+                try { started = directory.CreationTime; }
+                catch { started = relevantFiles[0].CreationTime; }
+                sessions.Add(new ServerSession
+                {
+                    Game = game,
+                    SessionStarted = started,
+                    LastUpdated = legacyTimestamp ?? relevantFiles.Max(file => file.LastWriteTime),
+                    SessionFolderName = directory.Name,
+                    SessionKey = game + "|" + directory.FullName,
+                    LogFilePath = legacyFile,
+                    IpAddress = legacyIp,
+                    Port = legacyPort,
+                    MapName = legacyMap,
+                    ClientVersion = legacyVersion,
+                    ProgressionMode = FindProgressionMode(sessionModes, legacyTimestamp ?? started),
+                    HostingMode = TarkovHostingMode.Server,
+                    IpDetectedAt = legacyTimestamp
+                });
+                if (sessions[0].ProgressionMode != TarkovProgressionMode.Unknown)
+                    sessions[0].RaidPurpose = TarkovRaidPurpose.Progression;
+            }
+
+            if (game == TarkovGame.Eft)
+            {
+                sessions.AddRange(BuildConfirmedLocalSessions(
+                    directory,
+                    timings,
+                    sessionModes,
+                    mapPresets,
+                    gameCreatedEvents,
+                    gameStartedEvents,
+                    sessions,
+                    relevantFiles.Where(file => file.Name.IndexOf(
+                        "network-connection",
+                        StringComparison.OrdinalIgnoreCase) >= 0)));
+            }
+
+            ApplyNetworkEvents(
+                sessions,
+                relevantFiles.Where(file => file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0));
+            if (game == TarkovGame.Eft)
+            {
+                ApplyUserReportEvents(
+                    sessions,
+                    relevantFiles.Where(file => file.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0));
+            }
+            return sessions.OrderByDescending(item => item.DisplayDetectedAt).ToList();
+        }
+
+        private static ServerSession CreateRichSession(
+            DirectoryInfo directory,
+            FileInfo file,
+            TarkovGame game,
+            Match match,
+            string sourceLine,
+            DateTime timestamp,
+            IList<MatchTiming> timings)
+        {
+            int port;
+            int.TryParse(match.Groups["port"].Value, out port);
+            string serverId = match.Groups["sid"].Value.Trim().Trim('\'', '"');
+            string shortId = match.Groups["short"].Value.Trim().Trim('\'', '"');
+            string stableId = !string.IsNullOrWhiteSpace(serverId)
+                ? serverId
+                : (!string.IsNullOrWhiteSpace(shortId) ? shortId : timestamp.Ticks.ToString(CultureInfo.InvariantCulture));
+            MatchTiming timing = FindNearestTiming(timings, timestamp);
+            return new ServerSession
+            {
+                Game = game,
+                SessionStarted = timestamp,
+                LastUpdated = timestamp,
+                SessionFolderName = directory.Name,
+                SessionKey = BuildSessionKey(game, serverId, shortId, timestamp, stableId),
+                LogFilePath = file.FullName,
+                IpAddress = match.Groups["ip"].Value,
+                Port = port,
+                MapName = NormalizeMap(game, match.Groups["map"].Value),
+                GameMode = game == TarkovGame.Eft
+                    ? match.Groups["raid"].Value.Trim().Trim('\'', '"')
+                    : match.Groups["mode"].Value.Trim().Trim('\'', '"'),
+                ServerId = serverId,
+                ShortId = shortId,
+                DataCenterCode = ExtractDataCenter(serverId),
+                ClientVersion = GetVersion(sourceLine),
+                MatchmakingSeconds = timing == null ? (double?)null : timing.Seconds,
+                IpDetectedAt = timestamp
+            };
+        }
+
+        private static TarkovProgressionMode ParseProgressionMode(string value)
+        {
+            if (string.Equals(value, "Regular", StringComparison.OrdinalIgnoreCase))
+                return TarkovProgressionMode.Pvp;
+            if (string.Equals(value, "Pve", StringComparison.OrdinalIgnoreCase))
+                return TarkovProgressionMode.Pve;
+            if (string.Equals(value, "PvpSeason", StringComparison.OrdinalIgnoreCase))
+                return TarkovProgressionMode.PvpSeason;
+            return TarkovProgressionMode.Unknown;
+        }
+
+        private static TarkovProgressionMode FindProgressionMode(
+            IEnumerable<SessionModeEvent> sessionModes,
+            DateTime timestamp)
+        {
+            SessionModeEvent mode = sessionModes
+                .Where(item => item.Timestamp <= timestamp)
+                .OrderByDescending(item => item.Timestamp)
+                .FirstOrDefault();
+            return mode == null ? TarkovProgressionMode.Unknown : mode.Mode;
+        }
+
+        private static void ApplyEftRaidClassification(
+            ServerSession session,
+            IEnumerable<SessionModeEvent> sessionModes,
+            TarkovHostingMode hostingMode)
+        {
+            if (session == null) return;
+            session.ProgressionMode = FindProgressionMode(sessionModes, session.DisplayDetectedAt);
+            session.HostingMode = hostingMode;
+            session.RaidPurpose = session.ProgressionMode == TarkovProgressionMode.Unknown
+                ? TarkovRaidPurpose.Unknown
+                : TarkovRaidPurpose.Progression;
+        }
+
+        private static IList<ServerSession> BuildConfirmedLocalSessions(
+            DirectoryInfo directory,
+            IEnumerable<MatchTiming> timings,
+            IEnumerable<SessionModeEvent> sessionModes,
+            IEnumerable<MapPresetEvent> mapPresets,
+            IEnumerable<TimedLogEvent> gameCreatedEvents,
+            IEnumerable<TimedLogEvent> gameStartedEvents,
+            IEnumerable<ServerSession> serverSessions,
+            IEnumerable<FileInfo> networkFiles)
+        {
+            var sessions = new List<ServerSession>();
+            var usedGameCreated = new HashSet<long>();
+            var usedGameStarted = new HashSet<long>();
+            FileInfo[] orderedNetworkFiles = networkFiles
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (MatchTiming timing in timings
+                .Where(item => item.IsExplicitZero)
+                .OrderBy(item => item.Timestamp))
+            {
+                if (FindProgressionMode(sessionModes, timing.Timestamp) != TarkovProgressionMode.Pve)
+                    continue;
+
+                TimedLogEvent created = gameCreatedEvents
+                    .Where(item => !usedGameCreated.Contains(item.Timestamp.Ticks)
+                        && item.Timestamp >= timing.Timestamp
+                        && item.Timestamp <= timing.Timestamp.AddMinutes(2))
+                    .OrderBy(item => item.Timestamp)
+                    .FirstOrDefault();
+                if (created == null) continue;
+
+                TimedLogEvent started = gameStartedEvents
+                    .Where(item => !usedGameStarted.Contains(item.Timestamp.Ticks)
+                        && item.Timestamp >= created.Timestamp
+                        && item.Timestamp <= created.Timestamp.AddMinutes(3))
+                    .OrderBy(item => item.Timestamp)
+                    .FirstOrDefault();
+                if (started == null) continue;
+                if (FindProgressionMode(sessionModes, started.Timestamp) != TarkovProgressionMode.Pve)
+                    continue;
+
+                MapPresetEvent map = mapPresets
+                    .Where(item => item.Timestamp >= timing.Timestamp.AddSeconds(-3)
+                        && item.Timestamp <= created.Timestamp)
+                    .OrderByDescending(item => item.Timestamp)
+                    .FirstOrDefault();
+                if (map == null || string.IsNullOrWhiteSpace(map.MapName)) continue;
+
+                DateTime evidenceStart = timing.Timestamp.AddSeconds(-3);
+                DateTime evidenceEnd = started.Timestamp.AddSeconds(5);
+                bool hasServerAssignment = serverSessions.Any(session =>
+                    session.HasServerIp
+                    && session.DisplayDetectedAt >= evidenceStart
+                    && session.DisplayDetectedAt <= evidenceEnd);
+                if (hasServerAssignment
+                    || HasNetworkConnectionInWindow(orderedNetworkFiles, evidenceStart, evidenceEnd))
+                    continue;
+
+                usedGameCreated.Add(created.Timestamp.Ticks);
+                usedGameStarted.Add(started.Timestamp.Ticks);
+                sessions.Add(new ServerSession
+                {
+                    Game = TarkovGame.Eft,
+                    SessionStarted = timing.Timestamp,
+                    LastUpdated = started.Timestamp,
+                    SessionFolderName = directory.Name,
+                    SessionKey = TarkovGame.Eft + "|local|"
+                        + timing.Timestamp.Ticks.ToString(CultureInfo.InvariantCulture)
+                        + "|" + map.MapName,
+                    LogFilePath = timing.LogFilePath,
+                    MapName = map.MapName,
+                    ProgressionMode = TarkovProgressionMode.Pve,
+                    HostingMode = TarkovHostingMode.Local,
+                    RaidPurpose = TarkovRaidPurpose.Progression,
+                    ClientVersion = timing.ClientVersion,
+                    MatchmakingSeconds = timing.Seconds
+                });
+            }
+            return sessions;
+        }
+
+        private static bool HasNetworkConnectionInWindow(
+            IEnumerable<FileInfo> networkFiles,
+            DateTime start,
+            DateTime end)
+        {
+            foreach (FileInfo file in networkFiles)
+            {
+                try
+                {
+                    using (var stream = new FileStream(
+                        file.FullName,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete))
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    {
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            if (!Regex.IsMatch(line, @"(?:^|\|)Connect \(address:", RegexOptions.IgnoreCase)
+                                && line.IndexOf(
+                                    "Enter to the 'Connected' state",
+                                    StringComparison.OrdinalIgnoreCase) < 0)
+                                continue;
+                            DateTime timestamp;
+                            if (TryParseTimestamp(line, out timestamp)
+                                && timestamp >= start
+                                && timestamp <= end)
+                                return true;
+                        }
+                    }
+                }
+                catch
+                {
+                    // A live network log can rotate while evidence is checked.
+                }
+            }
+            return false;
+        }
+
+        private static void ApplyUserReportEvents(
+            IList<ServerSession> sessions,
+            IEnumerable<FileInfo> backendFiles)
+        {
+            if (sessions == null || sessions.Count == 0) return;
+            var requests = new Dictionary<string, UserReportRequest>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (FileInfo file in backendFiles
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using (var stream = new FileStream(
+                        file.FullName,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete))
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    {
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            if (!UserReportRouteRegex.IsMatch(line)) continue;
+                            Match idMatch = BackendRequestIdRegex.Match(line);
+                            DateTime timestamp;
+                            if (!idMatch.Success || !TryParseTimestamp(line, out timestamp)) continue;
+
+                            string requestId = idMatch.Groups["id"].Value.Trim();
+                            UserReportRequest request;
+                            if (!requests.TryGetValue(requestId, out request))
+                            {
+                                request = new UserReportRequest { RequestId = requestId };
+                                requests[requestId] = request;
+                            }
+
+                            if (line.IndexOf("---> Request HTTPS", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                if (!request.RequestedAt.HasValue || timestamp < request.RequestedAt.Value)
+                                    request.RequestedAt = timestamp;
+                            }
+                            else if (line.IndexOf("<--- Response HTTPS", StringComparison.OrdinalIgnoreCase) >= 0
+                                && IsSuccessfulUserReportResponse(line))
+                            {
+                                if (!request.SuccessfulResponseAt.HasValue
+                                    || timestamp < request.SuccessfulResponseAt.Value)
+                                    request.SuccessfulResponseAt = timestamp;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // A live backend log can rotate while report outcomes are read.
+                }
+            }
+
+            foreach (UserReportRequest request in requests.Values)
+            {
+                if (!request.RequestedAt.HasValue || !request.SuccessfulResponseAt.HasValue
+                    || request.SuccessfulResponseAt.Value < request.RequestedAt.Value)
+                    continue;
+
+                DateTime reportedAt = request.RequestedAt.Value;
+                ServerSession target = sessions
+                    .Where(session => session.DisplayDetectedAt <= reportedAt
+                        && reportedAt - session.DisplayDetectedAt <= TimeSpan.FromHours(6))
+                    .OrderByDescending(session => session.DisplayDetectedAt)
+                    .FirstOrDefault();
+                if (target == null) continue;
+                if (target.UserReportKeys == null)
+                    target.UserReportKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                string eventKey = reportedAt.Ticks.ToString(CultureInfo.InvariantCulture)
+                    + "|" + request.SuccessfulResponseAt.Value.Ticks.ToString(CultureInfo.InvariantCulture);
+                target.UserReportKeys.Add(eventKey);
+                target.UserReportCount = target.UserReportKeys.Count;
+            }
+        }
+
+        private static bool IsSuccessfulUserReportResponse(string line)
+        {
+            return line.IndexOf("|Info|backend|", StringComparison.OrdinalIgnoreCase) >= 0
+                && line.IndexOf("|Error|", StringComparison.OrdinalIgnoreCase) < 0
+                && line.IndexOf("Exception", StringComparison.OrdinalIgnoreCase) < 0
+                && line.IndexOf("BackendServerSideException", StringComparison.OrdinalIgnoreCase) < 0
+                && !Regex.IsMatch(line, @"\berror:\s*\d+", RegexOptions.IgnoreCase);
+        }
+
+        private static MatchTiming FindNearestTiming(IList<MatchTiming> timings, DateTime timestamp)
+        {
+            MatchTiming nearest = null;
+            double nearestSeconds = double.MaxValue;
+            foreach (MatchTiming timing in timings)
+            {
+                double signedDifference = (timestamp - timing.Timestamp).TotalSeconds;
+                double difference = Math.Abs(signedDifference);
+                if (signedDifference >= -3 && signedDifference <= 180 && difference < nearestSeconds)
+                {
+                    nearest = timing;
+                    nearestSeconds = difference;
+                }
+            }
+            return nearest;
+        }
+
+        private static void ApplyNetworkEvents(
+            IList<ServerSession> sessions,
+            IEnumerable<FileInfo> networkFiles)
+        {
+            foreach (FileInfo file in networkFiles
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (string line in ReadLines(file.FullName))
+                {
+                    DateTime timestamp;
+                    if (!TryParseTimestamp(line, out timestamp)) continue;
+
+                    Match stats = StatisticsRegex.Match(line);
+                    Match endpoint = stats.Success ? stats : EndpointRegex.Match(line);
+                    if (!endpoint.Success) continue;
+                    int port;
+                    if (!int.TryParse(endpoint.Groups["port"].Value, out port)) continue;
+                    bool isConnect = Regex.IsMatch(line, @"(?:^|\|)Connect \(address:", RegexOptions.IgnoreCase);
+                    ServerSession session = FindSessionForEvent(
+                        sessions,
+                        endpoint.Groups["ip"].Value,
+                        port,
+                        timestamp,
+                        isConnect);
+                    if (session == null) continue;
+                    if (timestamp > session.LastUpdated) session.LastUpdated = timestamp;
+
+                    if (isConnect)
+                    {
+                        if (session.ConnectionAttemptKeys == null)
+                            session.ConnectionAttemptKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        string eventKey = timestamp.Ticks.ToString(CultureInfo.InvariantCulture)
+                            + "|" + endpoint.Groups["ip"].Value + ":" + port;
+                        if (session.ConnectionAttemptKeys.Add(eventKey))
+                        {
+                            if (session.ConnectionAttempts > 0)
+                            {
+                                session.TimedOut = false;
+                                session.HasDisconnectRecord = false;
+                                session.DisconnectReason = null;
+                                session.ConnectionEndedAt = null;
+                            }
+                            session.CurrentAttemptConnected = false;
+                            session.ConnectionAttempts = session.ConnectionAttemptKeys.Count;
+                        }
+                    }
+                    if (line.IndexOf("Enter to the 'Connected' state", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        session.ConnectedOnce = true;
+                        session.CurrentAttemptConnected = true;
+                    }
+                    if (Regex.IsMatch(line, @"(?:^|\|)Disconnect \(address:", RegexOptions.IgnoreCase))
+                    {
+                        session.HasDisconnectRecord = true;
+                        session.ConnectionEndedAt = timestamp;
+                    }
+                    if (line.IndexOf("Receive disconnect (address:", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        session.HasDisconnectRecord = true;
+                        session.ConnectionEndedAt = timestamp;
+                    }
+                    if (line.IndexOf("Timeout:", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        session.TimedOut = true;
+                        session.ConnectionEndedAt = timestamp;
+                    }
+
+                    Match reason = DisconnectedReasonRegex.Match(line);
+                    int reasonValue;
+                    if (reason.Success && int.TryParse(reason.Groups["reason"].Value, out reasonValue))
+                    {
+                        session.HasDisconnectRecord = true;
+                        session.DisconnectReason = reasonValue;
+                        if (reasonValue == 2) session.TimedOut = true;
+                        session.ConnectionEndedAt = timestamp;
+                    }
+
+                    if (stats.Success)
+                    {
+                        double rtt;
+                        double loss;
+                        long sent;
+                        long received;
+                        long.TryParse(stats.Groups["received"].Value, out received);
+                        if (double.TryParse(stats.Groups["rtt"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rtt)
+                            && rtt > 0
+                            && received > 0)
+                            session.ActualRttMs = rtt;
+                        if (double.TryParse(stats.Groups["lose"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out loss))
+                            session.NetworkLoss = Math.Max(0, loss);
+                        if (long.TryParse(stats.Groups["sent"].Value, out sent)) session.NetworkSent = sent;
+                        session.NetworkReceived = received;
+                    }
+                }
+            }
+        }
+
+        private static ServerSession FindSessionForEvent(
+            IEnumerable<ServerSession> sessions,
+            string ipAddress,
+            int port,
+            DateTime timestamp,
+            bool allowShortFutureWindow)
+        {
+            DateTime latestAllowed = allowShortFutureWindow ? timestamp.AddSeconds(1) : timestamp;
+            return sessions
+                .Where(session => string.Equals(session.IpAddress, ipAddress, StringComparison.OrdinalIgnoreCase)
+                    && (session.Port <= 0 || session.Port == port)
+                    && session.DisplayDetectedAt <= latestAllowed)
+                .OrderByDescending(session => session.DisplayDetectedAt)
+                .FirstOrDefault();
+        }
+
+        private static FileInfo[] GetRelevantFiles(DirectoryInfo directory, TarkovGame game)
+        {
+            try
+            {
+                return directory.GetFiles("*.log", SearchOption.TopDirectoryOnly)
+                    .Where(file => file.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0
+                        || file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0
+                        || (game == TarkovGame.Eft
+                            && file.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0)
+                        || (game == TarkovGame.Arena
+                            && file.Name.IndexOf("lifecycle", StringComparison.OrdinalIgnoreCase) >= 0))
+                    .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            }
+            catch
+            {
+                return new FileInfo[0];
+            }
+        }
+
+        private static IEnumerable<string> ReadLines(string path)
+        {
+            var lines = new List<string>();
+            try
+            {
+                using (var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null) lines.Add(line);
+                }
+            }
+            catch
+            {
+                // A live log can rotate while it is being read.
+            }
+            return lines;
+        }
+
+        private static string GetVersion(string line)
+        {
+            Match match = VersionRegex.Match(line ?? string.Empty);
+            return match.Success ? match.Groups["version"].Value : null;
+        }
+
+        private static bool TryParseTimestamp(string line, out DateTime timestamp)
+        {
+            timestamp = DateTime.MinValue;
+            Match match = TimestampRegex.Match(line ?? string.Empty);
+            if (!match.Success) return false;
+            string normalized = match.Groups["date"].Value.Replace('.', '-')
+                + " " + match.Groups["time"].Value
+                + match.Groups["fraction"].Value;
+            return DateTime.TryParseExact(
+                normalized,
+                match.Groups["fraction"].Success
+                    ? "yyyy-MM-dd HH:mm:ss.FFFFFFF"
+                    : "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeLocal,
+                out timestamp);
+        }
+
+        private static bool IsValidIpv4(string value)
+        {
+            IPAddress address;
+            return IPAddress.TryParse(value, out address)
+                && address.AddressFamily == AddressFamily.InterNetwork;
+        }
+
+        private static string NormalizeMap(TarkovGame game, string rawValue)
+        {
+            string raw = (rawValue ?? string.Empty).Trim().Trim('\'', '"');
+            if (game == TarkovGame.Eft)
+            {
+                string mapped;
+                return EftMapNames.TryGetValue(raw, out mapped) ? mapped : raw.Replace('_', ' ');
+            }
+            if (raw.StartsWith("Arena_", StringComparison.OrdinalIgnoreCase)) raw = raw.Substring(6);
+            return raw.Replace('_', ' ');
+        }
+
+        private static string ExtractDataCenter(string serverId)
+        {
+            if (string.IsNullOrWhiteSpace(serverId)) return null;
+            string prefix = serverId.Split('_')[0];
+            Match match = DataCenterRegex.Match(prefix);
+            return match.Success ? match.Groups["dc"].Value.ToUpperInvariant() : prefix;
+        }
+
+        private static string BuildSessionKey(
+            TarkovGame game,
+            string serverId,
+            string shortId,
+            DateTime timestamp,
+            string fallback)
+        {
+            if (!string.IsNullOrWhiteSpace(serverId)) return game + "|sid|" + serverId.Trim();
+            if (!string.IsNullOrWhiteSpace(shortId))
+                return game + "|short|" + timestamp.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "|" + shortId.Trim();
+            return game + "|fallback|" + timestamp.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture) + "|" + fallback;
+        }
+
+        private static IEnumerable<ServerSession> MergeDuplicateSessions(IEnumerable<ServerSession> source)
+        {
+            var merged = new Dictionary<string, ServerSession>(StringComparer.OrdinalIgnoreCase);
+            foreach (ServerSession candidate in source.Where(item => item != null))
+            {
+                string key = string.IsNullOrWhiteSpace(candidate.SessionKey)
+                    ? candidate.Game + "|" + candidate.LogFilePath + "|" + candidate.DisplayDetectedAt.Ticks
+                    : candidate.SessionKey;
+                ServerSession existing;
+                if (!merged.TryGetValue(key, out existing))
+                {
+                    merged[key] = CloneSession(candidate);
+                    continue;
+                }
+
+                bool candidateIsLater = candidate.LastUpdated >= existing.LastUpdated;
+                if (candidate.DisplayDetectedAt < existing.DisplayDetectedAt)
+                {
+                    existing.SessionStarted = candidate.SessionStarted;
+                    existing.IpDetectedAt = candidate.IpDetectedAt;
+                }
+                if (candidate.LastUpdated > existing.LastUpdated) existing.LastUpdated = candidate.LastUpdated;
+                if (existing.ConnectionAttemptKeys != null || candidate.ConnectionAttemptKeys != null)
+                {
+                    if (existing.ConnectionAttemptKeys == null)
+                        existing.ConnectionAttemptKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    if (candidate.ConnectionAttemptKeys != null)
+                        existing.ConnectionAttemptKeys.UnionWith(candidate.ConnectionAttemptKeys);
+                    existing.ConnectionAttempts = existing.ConnectionAttemptKeys.Count;
+                }
+                else
+                {
+                    existing.ConnectionAttempts = Math.Max(existing.ConnectionAttempts, candidate.ConnectionAttempts);
+                }
+                existing.ConnectedOnce = existing.ConnectedOnce || candidate.ConnectedOnce;
+                if (existing.UserReportKeys != null || candidate.UserReportKeys != null)
+                {
+                    if (existing.UserReportKeys == null)
+                        existing.UserReportKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    if (candidate.UserReportKeys != null)
+                        existing.UserReportKeys.UnionWith(candidate.UserReportKeys);
+                    existing.UserReportCount = existing.UserReportKeys.Count;
+                }
+                else
+                {
+                    existing.UserReportCount = Math.Max(
+                        existing.UserReportCount,
+                        candidate.UserReportCount);
+                }
+                if (existing.ProgressionMode == TarkovProgressionMode.Unknown
+                    && candidate.ProgressionMode != TarkovProgressionMode.Unknown)
+                    existing.ProgressionMode = candidate.ProgressionMode;
+                if (existing.HostingMode == TarkovHostingMode.Unknown
+                    && candidate.HostingMode != TarkovHostingMode.Unknown)
+                    existing.HostingMode = candidate.HostingMode;
+                if (existing.RaidPurpose == TarkovRaidPurpose.Unknown
+                    && candidate.RaidPurpose != TarkovRaidPurpose.Unknown)
+                    existing.RaidPurpose = candidate.RaidPurpose;
+                if (!existing.MatchmakingSeconds.HasValue && candidate.MatchmakingSeconds.HasValue)
+                    existing.MatchmakingSeconds = candidate.MatchmakingSeconds;
+                if (candidate.ActualRttMs.HasValue && (!existing.ActualRttMs.HasValue || candidateIsLater))
+                    existing.ActualRttMs = candidate.ActualRttMs;
+                if (candidateIsLater)
+                {
+                    existing.HasDisconnectRecord = candidate.HasDisconnectRecord;
+                    existing.CurrentAttemptConnected = candidate.CurrentAttemptConnected;
+                    existing.TimedOut = candidate.TimedOut;
+                    existing.DisconnectReason = candidate.DisconnectReason;
+                    existing.ConnectionEndedAt = candidate.ConnectionEndedAt;
+                    existing.NetworkLoss = candidate.NetworkLoss;
+                    existing.NetworkSent = candidate.NetworkSent;
+                    existing.NetworkReceived = candidate.NetworkReceived;
+                    existing.LogFilePath = candidate.LogFilePath;
+                }
+            }
+            return merged.Values;
+        }
+
+        private static ServerSession CloneSession(ServerSession source)
+        {
+            return new ServerSession
+            {
+                Game = source.Game,
+                SessionStarted = source.SessionStarted,
+                LastUpdated = source.LastUpdated,
+                SessionFolderName = source.SessionFolderName,
+                SessionKey = source.SessionKey,
+                LogFilePath = source.LogFilePath,
+                IpAddress = source.IpAddress,
+                Port = source.Port,
+                MapName = source.MapName,
+                GameMode = source.GameMode,
+                ProgressionMode = source.ProgressionMode,
+                HostingMode = source.HostingMode,
+                RaidPurpose = source.RaidPurpose,
+                ServerId = source.ServerId,
+                ShortId = source.ShortId,
+                DataCenterCode = source.DataCenterCode,
+                ClientVersion = source.ClientVersion,
+                MatchmakingSeconds = source.MatchmakingSeconds,
+                ActualRttMs = source.ActualRttMs,
+                NetworkLoss = source.NetworkLoss,
+                NetworkSent = source.NetworkSent,
+                NetworkReceived = source.NetworkReceived,
+                ConnectionAttempts = source.ConnectionAttempts,
+                ConnectionAttemptKeys = source.ConnectionAttemptKeys == null
+                    ? null
+                    : new HashSet<string>(source.ConnectionAttemptKeys, StringComparer.OrdinalIgnoreCase),
+                UserReportCount = source.UserReportCount,
+                UserReportKeys = source.UserReportKeys == null
+                    ? null
+                    : new HashSet<string>(source.UserReportKeys, StringComparer.OrdinalIgnoreCase),
+                ConnectedOnce = source.ConnectedOnce,
+                CurrentAttemptConnected = source.CurrentAttemptConnected,
+                HasDisconnectRecord = source.HasDisconnectRecord,
+                TimedOut = source.TimedOut,
+                DisconnectReason = source.DisconnectReason,
+                ConnectionEndedAt = source.ConnectionEndedAt,
+                IpDetectedAt = source.IpDetectedAt
+            };
+        }
+    }
+
+    public static class LauncherSelectionReader
+    {
+        private const int MaximumLauncherPayloadLength = 8192;
+        private const int MaximumSettingsPayloadLength = 262144;
+        private const int MaximumArenaSettingsLength = 65536;
+        private const string SettingsLoadedMarker = "Settings loaded:";
+        private static readonly Regex ApplyCallRegex = new Regex(
+            @"MatchingConfigurationWindow\.Apply\((?<arg>.*)\)\s*$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex SelectGameRegex = new Regex(
+            "MainWindow\\.SelectGame\\(\\\"(?<game>eft|arena)\\\"\\)\\s*$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex SettingsSelectedGameRegex = new Regex(
+            "\\\"selectedGame\\\"\\s*:\\s*\\\"(?<game>eft|arena)\\\"",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex SafeDataCenterNameRegex = new Regex(
+            @"^[A-Za-z0-9 ._-]{1,80}$",
+            RegexOptions.Compiled);
+        private static readonly Regex TimestampRegex = new Regex(
+            @"^(?<date>\d{4}\.\d{2}\.\d{2})\s+(?<time>\d{2}:\d{2}:\d{2})",
+            RegexOptions.Compiled);
+
+        public static LauncherSelectionInfo ReadCurrent()
+        {
+            string logRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Battlestate Games",
+                "BsgLauncher",
+                "Logs");
+            string arenaRegionsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Battlestate Games",
+                "Escape from Tarkov Arena",
+                "Settings",
+                "Regions.ini");
+            return ReadFromSources(logRoot, arenaRegionsPath);
+        }
+
+        internal static LauncherSelectionInfo ReadFromDirectory(string logRoot)
+        {
+            return ReadFromSources(logRoot, null);
+        }
+
+        internal static LauncherSelectionInfo ReadFromSources(string logRoot, string arenaRegionsPath)
+        {
+            var result = new LauncherSelectionInfo();
+            ReadEftSelection(logRoot, result);
+            ReadArenaSelection(arenaRegionsPath, result);
+            return result;
+        }
+
+        private static void ReadEftSelection(string logRoot, LauncherSelectionInfo result)
+        {
+            if (result == null || string.IsNullOrWhiteSpace(logRoot) || !Directory.Exists(logRoot)) return;
+
+            string currentGame = null;
+            string configurationGame = null;
+            string pendingGame = null;
+            string pendingPreviousSelection = null;
+            DateTime? pendingPreviousUpdatedAt = null;
+            DateTime? pendingAppliedAt = null;
+            try
+            {
+                IEnumerable<FileInfo> files = new DirectoryInfo(logRoot)
+                    .GetFiles("BSG_Launcher_*.log", SearchOption.TopDirectoryOnly)
+                    .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(item => item.LastWriteTimeUtc);
+                foreach (FileInfo file in files)
+                {
+                    currentGame = null;
+                    configurationGame = null;
+                    pendingGame = null;
+                    pendingPreviousSelection = null;
+                    pendingPreviousUpdatedAt = null;
+                    pendingAppliedAt = null;
+                    foreach (string line in ReadLines(file.FullName))
+                    {
+                        DateTime lineTimestamp;
+                        bool hasLineTimestamp = TryParseTimestamp(line, out lineTimestamp);
+
+                        if (line.IndexOf("Starting launcher v.", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            currentGame = null;
+                            configurationGame = null;
+                            pendingGame = null;
+                            pendingPreviousSelection = null;
+                            pendingPreviousUpdatedAt = null;
+                            pendingAppliedAt = null;
+                            continue;
+                        }
+
+                        int settingsMarkerIndex = line.IndexOf(SettingsLoadedMarker, StringComparison.Ordinal);
+                        if (settingsMarkerIndex >= 0)
+                        {
+                            string selectedGame;
+                            currentGame = TryParseSettingsSelectedGame(line, settingsMarkerIndex, out selectedGame)
+                                ? selectedGame
+                                : null;
+                            configurationGame = null;
+                            pendingGame = null;
+                            pendingPreviousSelection = null;
+                            pendingPreviousUpdatedAt = null;
+                            pendingAppliedAt = null;
+                            continue;
+                        }
+
+                        if (pendingAppliedAt.HasValue && hasLineTimestamp)
+                        {
+                            double elapsed = (lineTimestamp - pendingAppliedAt.Value).TotalSeconds;
+                            if (elapsed >= 0 && elapsed <= 2
+                                && line.IndexOf("ErrorWindow initialized", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                if (string.Equals(pendingGame, "eft", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    result.EftSelection = pendingPreviousSelection;
+                                    result.EftUpdatedAt = pendingPreviousUpdatedAt;
+                                }
+                                pendingGame = null;
+                                pendingAppliedAt = null;
+                            }
+                            else if (elapsed > 2)
+                            {
+                                pendingGame = null;
+                                pendingAppliedAt = null;
+                            }
+                        }
+
+                        Match changed = SelectGameRegex.Match(line);
+                        if (changed.Success)
+                        {
+                            currentGame = changed.Groups["game"].Value.ToLowerInvariant();
+                            configurationGame = null;
+                        }
+
+                        if (line.IndexOf("MainWindow.ShowMatchingConfig()", StringComparison.OrdinalIgnoreCase) >= 0)
+                            configurationGame = string.Equals(currentGame, "eft", StringComparison.OrdinalIgnoreCase)
+                                ? "eft"
+                                : null;
+
+                        if (line.IndexOf("MatchingConfigurationWindow.Apply", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            Match applyCall = ApplyCallRegex.Match(line);
+                            string payload = applyCall.Success
+                                ? DecodeCallArgument(applyCall.Groups["arg"].Value)
+                                : line;
+                            if (payload.Length > MaximumLauncherPayloadLength) continue;
+                            List<string> names;
+                            if (TryParseDataCenters(payload, out names))
+                            {
+                                string display = names.Count == 0 ? "자동 선택" : string.Join(", ", names.ToArray());
+                                DateTime timestamp;
+                                TryParseTimestamp(line, out timestamp);
+                                if (string.Equals(configurationGame, "eft", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    pendingGame = "eft";
+                                    pendingPreviousSelection = result.EftSelection;
+                                    pendingPreviousUpdatedAt = result.EftUpdatedAt;
+                                    pendingAppliedAt = timestamp == DateTime.MinValue ? (DateTime?)null : timestamp;
+                                    result.EftSelection = display;
+                                    result.EftUpdatedAt = timestamp == DateTime.MinValue ? (DateTime?)null : timestamp;
+                                }
+                            }
+                        }
+
+                        if (line.IndexOf("MatchingConfigurationWindow closed", StringComparison.OrdinalIgnoreCase) >= 0)
+                            configurationGame = null;
+                    }
+                }
+            }
+            catch
+            {
+                // Launcher logs can rotate or disappear while being inspected.
+            }
+        }
+
+        private static bool TryParseSettingsSelectedGame(string line, int markerIndex, out string selectedGame)
+        {
+            selectedGame = null;
+            try
+            {
+                int payloadStart = markerIndex + SettingsLoadedMarker.Length;
+                if (markerIndex < 0 || payloadStart > line.Length) return false;
+                string payload = line.Substring(payloadStart).Trim();
+                if (payload.Length < 2
+                    || payload.Length > MaximumSettingsPayloadLength
+                    || payload[0] != '{'
+                    || payload[payload.Length - 1] != '}')
+                    return false;
+
+                MatchCollection matches = SettingsSelectedGameRegex.Matches(payload);
+                if (matches.Count != 1) return false;
+                selectedGame = matches[0].Groups["game"].Value.ToLowerInvariant();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void ReadArenaSelection(string arenaRegionsPath, LauncherSelectionInfo result)
+        {
+            if (result == null || string.IsNullOrWhiteSpace(arenaRegionsPath) || !File.Exists(arenaRegionsPath)) return;
+
+            try
+            {
+                var before = new FileInfo(arenaRegionsPath);
+                if (before.Length <= 0 || before.Length > MaximumArenaSettingsLength) return;
+                long originalLength = before.Length;
+                DateTime originalWriteTimeUtc = before.LastWriteTimeUtc;
+                string payload;
+                using (var stream = new FileStream(
+                    arenaRegionsPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    payload = reader.ReadToEnd();
+                }
+
+                var after = new FileInfo(arenaRegionsPath);
+                if (after.Length != originalLength || after.LastWriteTimeUtc != originalWriteTimeUtc) return;
+
+                string selection;
+                if (!TryParseArenaRegions(payload, out selection)) return;
+                result.ArenaSelection = selection;
+                result.ArenaUpdatedAt = after.LastWriteTime;
+            }
+            catch
+            {
+                // Arena can rewrite Regions.ini while it is being read; the next refresh retries it.
+            }
+        }
+
+        private static bool TryParseArenaRegions(string payload, out string selection)
+        {
+            selection = null;
+            try
+            {
+                string json = (payload ?? string.Empty).Trim();
+                if (json.Length < 2
+                    || json.Length > MaximumArenaSettingsLength
+                    || json[0] != '{'
+                    || json[json.Length - 1] != '}')
+                    return false;
+
+                var serializer = new JavaScriptSerializer { MaxJsonLength = MaximumArenaSettingsLength };
+                var root = serializer.DeserializeObject(json) as Dictionary<string, object>;
+                if (root == null) return false;
+
+                object rawAutoSelect;
+                if (root.TryGetValue("AutoSelectRegionsEnabled", out rawAutoSelect))
+                {
+                    if (!(rawAutoSelect is bool)) return false;
+                    if ((bool)rawAutoSelect)
+                    {
+                        selection = "자동 선택";
+                        return true;
+                    }
+                }
+
+                object rawRegionSettings;
+                if (!root.TryGetValue("RegionSettings", out rawRegionSettings)) return false;
+                var regionSettings = rawRegionSettings as object[];
+                if (regionSettings == null || regionSettings.Length > 100) return false;
+
+                var selectedNames = new List<string>();
+                var uniqueNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (object rawRegion in regionSettings)
+                {
+                    var region = rawRegion as Dictionary<string, object>;
+                    object rawName;
+                    object rawState;
+                    if (region == null
+                        || !region.TryGetValue("DataCenter", out rawName)
+                        || !region.TryGetValue("State", out rawState))
+                        return false;
+                    string name = rawName as string;
+                    if (name == null
+                        || !SafeDataCenterNameRegex.IsMatch(name)
+                        || !(rawState is bool))
+                        return false;
+                    if ((bool)rawState && uniqueNames.Add(name)) selectedNames.Add(name);
+                }
+
+                selection = string.Join(", ", selectedNames.ToArray());
+                return true;
+            }
+            catch
+            {
+                selection = null;
+                return false;
+            }
+        }
+
+        private static string DecodeCallArgument(string value)
+        {
+            string text = (value ?? string.Empty).Trim();
+            if (text.Length >= 2 && text[0] == '"' && text[text.Length - 1] == '"')
+                text = text.Substring(1, text.Length - 2);
+            try { return Regex.Unescape(text); }
+            catch { return text; }
+        }
+
+        private static bool TryParseDataCenters(string payload, out List<string> names)
+        {
+            names = new List<string>();
+            try
+            {
+                var serializer = new JavaScriptSerializer { MaxJsonLength = MaximumLauncherPayloadLength };
+                var root = serializer.DeserializeObject(payload) as Dictionary<string, object>;
+                object rawCenters;
+                if (root == null || !root.TryGetValue("dataCenters", out rawCenters)) return false;
+                var values = rawCenters as object[];
+                if (values == null || values.Length > 50) return false;
+                foreach (object rawValue in values)
+                {
+                    string value = rawValue as string;
+                    if (value == null || !SafeDataCenterNameRegex.IsMatch(value)) return false;
+                    names.Add(value);
+                }
+                return true;
+            }
+            catch
+            {
+                names.Clear();
+                return false;
+            }
+        }
+
+        private static IEnumerable<string> ReadLines(string path)
+        {
+            var lines = new List<string>();
+            try
+            {
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null) lines.Add(line);
+                }
+            }
+            catch
+            {
+                // Launcher logs can rotate while being read.
+            }
+            return lines;
+        }
+
+        private static bool TryParseTimestamp(string line, out DateTime timestamp)
+        {
+            timestamp = DateTime.MinValue;
+            Match match = TimestampRegex.Match(line ?? string.Empty);
+            if (!match.Success) return false;
+            return DateTime.TryParseExact(
+                match.Groups["date"].Value + " " + match.Groups["time"].Value,
+                "yyyy.MM.dd HH:mm:ss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeLocal,
+                out timestamp);
+        }
+    }
+}
