@@ -706,9 +706,8 @@ namespace TarkovServerReporter
             var updateRow = CreateRightAlignedHeaderRow();
             var version = CreateHeaderTextLabel(
                 "v" + GetApplicationSemanticVersion(),
-                new Font("Segoe UI", 11F, FontStyle.Bold),
+                new Font("Segoe UI", 9F, FontStyle.Bold),
                 TextMuted);
-            version.Margin = new Padding(2, 0, 2, 0);
             var versionSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
@@ -1756,53 +1755,7 @@ namespace TarkovServerReporter
                 e.Graphics.SetClip(clip);
                 if (e.RowIndex < 0)
                 {
-                    Rectangle headerPaintBounds = e.CellBounds;
-                    if (e.ColumnIndex == 0 && headerPaintBounds.Left > 0)
-                    {
-                        headerPaintBounds.Width += headerPaintBounds.Left;
-                        headerPaintBounds.X = 0;
-                        e.Graphics.SetClip(
-                            Rectangle.Intersect(headerPaintBounds, grid.ClientRectangle),
-                            CombineMode.Replace);
-                    }
-                    using (var background = new SolidBrush(SurfaceAlt))
-                        e.Graphics.FillRectangle(background, headerPaintBounds);
-                    using (var border = new Pen(Border))
-                    {
-                        e.Graphics.DrawLine(
-                            border,
-                            headerPaintBounds.Left,
-                            e.CellBounds.Bottom - 1,
-                            e.CellBounds.Right - 1,
-                            e.CellBounds.Bottom - 1);
-                        if (e.ColumnIndex > 0)
-                            e.Graphics.DrawLine(
-                                border,
-                                e.CellBounds.Left,
-                                e.CellBounds.Top,
-                                e.CellBounds.Left,
-                                e.CellBounds.Bottom - 1);
-                    }
-                    if (e.ColumnIndex == 0)
-                    {
-                        using (var leftBorder = new Pen(Color.FromArgb(82, 94, 108), 1F))
-                            e.Graphics.DrawLine(
-                                leftBorder,
-                                headerPaintBounds.Left,
-                                e.CellBounds.Top,
-                                headerPaintBounds.Left,
-                                e.CellBounds.Bottom - 1);
-                    }
-                    TextRenderer.DrawText(
-                        e.Graphics,
-                        Convert.ToString(e.FormattedValue) ?? string.Empty,
-                        e.CellStyle.Font,
-                        e.CellBounds,
-                        e.CellStyle.ForeColor,
-                        TextFormatFlags.HorizontalCenter
-                        | TextFormatFlags.VerticalCenter
-                        | TextFormatFlags.SingleLine
-                        | TextFormatFlags.NoPrefix);
+                    e.Paint(e.ClipBounds, e.PaintParts);
                     return;
                 }
 
