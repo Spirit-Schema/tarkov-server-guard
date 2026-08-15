@@ -53,6 +53,7 @@ namespace TarkovServerReporter
         public RaidLogScanResult()
         {
             Sessions = new List<ServerSession>();
+            ScanCompletedWithoutErrors = true;
         }
 
         public IList<ServerSession> Sessions { get; set; }
@@ -60,6 +61,7 @@ namespace TarkovServerReporter
         public int ArenaFoldersScanned { get; set; }
         public int TotalMatchingSessions { get; set; }
         public bool TotalMatchingSessionsIsExact { get; set; }
+        public bool ScanCompletedWithoutErrors { get; set; }
 
         public bool HasMoreSessions
         {
@@ -826,18 +828,22 @@ namespace TarkovServerReporter
             int arenaFolders;
             bool allEftFoldersScanned;
             bool allArenaFoldersScanned;
+            bool eftReadSucceeded;
+            bool arenaReadSucceeded;
             IList<ServerSession> eft = ScanGameCore(
                 paths == null ? null : paths.EftPath,
                 TarkovGame.Eft,
                 max,
                 out eftFolders,
-                out allEftFoldersScanned);
+                out allEftFoldersScanned,
+                out eftReadSucceeded);
             IList<ServerSession> arena = ScanGameCore(
                 paths == null ? null : paths.ArenaPath,
                 TarkovGame.Arena,
                 max,
                 out arenaFolders,
-                out allArenaFoldersScanned);
+                out allArenaFoldersScanned,
+                out arenaReadSucceeded);
             result.EftFoldersScanned = eftFolders;
             result.ArenaFoldersScanned = arenaFolders;
             IList<ServerSession> matching = MergeDuplicateSessions(eft.Concat(arena))
@@ -847,7 +853,10 @@ namespace TarkovServerReporter
                 .ThenByDescending(session => session.LastUpdated)
                 .ToList();
             result.TotalMatchingSessions = matching.Count;
-            result.TotalMatchingSessionsIsExact = allEftFoldersScanned && allArenaFoldersScanned;
+            result.ScanCompletedWithoutErrors = eftReadSucceeded && arenaReadSucceeded;
+            result.TotalMatchingSessionsIsExact = allEftFoldersScanned
+                && allArenaFoldersScanned
+                && result.ScanCompletedWithoutErrors;
             result.Sessions = matching.Take(max).ToList();
             return result;
         }
@@ -883,13 +892,16 @@ namespace TarkovServerReporter
             int arenaFolders = 0;
             bool allEftFoldersScanned = true;
             bool allArenaFoldersScanned = true;
+            bool eftReadSucceeded = true;
+            bool arenaReadSucceeded = true;
             IList<ServerSession> eft = scanEft
                 ? ScanGameCore(
                     paths == null ? null : paths.EftPath,
                     TarkovGame.Eft,
                     int.MaxValue,
                     out eftFolders,
-                    out allEftFoldersScanned)
+                    out allEftFoldersScanned,
+                    out eftReadSucceeded)
                 : new List<ServerSession>();
             IList<ServerSession> arena = scanArena
                 ? ScanGameCore(
@@ -897,7 +909,8 @@ namespace TarkovServerReporter
                     TarkovGame.Arena,
                     int.MaxValue,
                     out arenaFolders,
-                    out allArenaFoldersScanned)
+                    out allArenaFoldersScanned,
+                    out arenaReadSucceeded)
                 : new List<ServerSession>();
 
             IEnumerable<ServerSession> matching = MergeDuplicateSessions(eft.Concat(arena))
@@ -929,7 +942,11 @@ namespace TarkovServerReporter
                 EftFoldersScanned = eftFolders,
                 ArenaFoldersScanned = arenaFolders,
                 TotalMatchingSessions = ordered.Count,
-                TotalMatchingSessionsIsExact = allEftFoldersScanned && allArenaFoldersScanned
+                TotalMatchingSessionsIsExact = allEftFoldersScanned
+                    && allArenaFoldersScanned
+                    && eftReadSucceeded
+                    && arenaReadSucceeded,
+                ScanCompletedWithoutErrors = eftReadSucceeded && arenaReadSucceeded
             };
         }
 
@@ -940,12 +957,14 @@ namespace TarkovServerReporter
             out int foldersScanned)
         {
             bool allFoldersScanned;
+            bool readSucceeded;
             return ScanGameCore(
                 logsPath,
                 game,
                 maximumFolders,
                 out foldersScanned,
-                out allFoldersScanned);
+                out allFoldersScanned,
+                out readSucceeded);
         }
 
         private static IList<ServerSession> ScanGameCore(
@@ -953,12 +972,20 @@ namespace TarkovServerReporter
             TarkovGame game,
             int maximumFolders,
             out int foldersScanned,
-            out bool allFoldersScanned)
+            out bool allFoldersScanned,
+            out bool readSucceeded)
         {
             foldersScanned = 0;
             allFoldersScanned = true;
+            readSucceeded = true;
             var sessions = new List<ServerSession>();
-            if (string.IsNullOrWhiteSpace(logsPath) || !Directory.Exists(logsPath)) return sessions;
+            if (string.IsNullOrWhiteSpace(logsPath)) return sessions;
+            if (!Directory.Exists(logsPath))
+            {
+                allFoldersScanned = false;
+                readSucceeded = false;
+                return sessions;
+            }
 
             int max = maximumFolders <= 0 ? 100 : maximumFolders;
             try
@@ -985,6 +1012,7 @@ namespace TarkovServerReporter
             catch
             {
                 allFoldersScanned = false;
+                readSucceeded = false;
                 return sessions;
             }
 
@@ -1423,34 +1451,18 @@ namespace TarkovServerReporter
         {
             foreach (FileInfo file in networkFiles)
             {
-                try
+                foreach (string line in ReadLines(file.FullName))
                 {
-                    using (var stream = new FileStream(
-                        file.FullName,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete))
-                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
-                    {
-                        string line;
-                        while ((line = reader.ReadLine()) != null)
-                        {
-                            if (!Regex.IsMatch(line, @"(?:^|\|)Connect \(address:", RegexOptions.IgnoreCase)
-                                && line.IndexOf(
-                                    "Enter to the 'Connected' state",
-                                    StringComparison.OrdinalIgnoreCase) < 0)
-                                continue;
-                            DateTime timestamp;
-                            if (TryParseTimestamp(line, out timestamp)
-                                && timestamp >= start
-                                && timestamp <= end)
-                                return true;
-                        }
-                    }
-                }
-                catch
-                {
-                    // A live network log can rotate while evidence is checked.
+                    if (!Regex.IsMatch(line, @"(?:^|\|)Connect \(address:", RegexOptions.IgnoreCase)
+                        && line.IndexOf(
+                            "Enter to the 'Connected' state",
+                            StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    DateTime timestamp;
+                    if (TryParseTimestamp(line, out timestamp)
+                        && timestamp >= start
+                        && timestamp <= end)
+                        return true;
                 }
             }
             return false;
@@ -1467,49 +1479,33 @@ namespace TarkovServerReporter
                 .OrderBy(item => item.LastWriteTimeUtc)
                 .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
             {
-                try
+                foreach (string line in ReadLines(file.FullName))
                 {
-                    using (var stream = new FileStream(
-                        file.FullName,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete))
-                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    if (!UserReportRouteRegex.IsMatch(line)) continue;
+                    Match idMatch = BackendRequestIdRegex.Match(line);
+                    DateTime timestamp;
+                    if (!idMatch.Success || !TryParseTimestamp(line, out timestamp)) continue;
+
+                    string requestId = idMatch.Groups["id"].Value.Trim();
+                    UserReportRequest request;
+                    if (!requests.TryGetValue(requestId, out request))
                     {
-                        string line;
-                        while ((line = reader.ReadLine()) != null)
-                        {
-                            if (!UserReportRouteRegex.IsMatch(line)) continue;
-                            Match idMatch = BackendRequestIdRegex.Match(line);
-                            DateTime timestamp;
-                            if (!idMatch.Success || !TryParseTimestamp(line, out timestamp)) continue;
-
-                            string requestId = idMatch.Groups["id"].Value.Trim();
-                            UserReportRequest request;
-                            if (!requests.TryGetValue(requestId, out request))
-                            {
-                                request = new UserReportRequest { RequestId = requestId };
-                                requests[requestId] = request;
-                            }
-
-                            if (line.IndexOf("---> Request HTTPS", StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                if (!request.RequestedAt.HasValue || timestamp < request.RequestedAt.Value)
-                                    request.RequestedAt = timestamp;
-                            }
-                            else if (line.IndexOf("<--- Response HTTPS", StringComparison.OrdinalIgnoreCase) >= 0
-                                && IsSuccessfulUserReportResponse(line))
-                            {
-                                if (!request.SuccessfulResponseAt.HasValue
-                                    || timestamp < request.SuccessfulResponseAt.Value)
-                                    request.SuccessfulResponseAt = timestamp;
-                            }
-                        }
+                        request = new UserReportRequest { RequestId = requestId };
+                        requests[requestId] = request;
                     }
-                }
-                catch
-                {
-                    // A live backend log can rotate while report outcomes are read.
+
+                    if (line.IndexOf("---> Request HTTPS", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        if (!request.RequestedAt.HasValue || timestamp < request.RequestedAt.Value)
+                            request.RequestedAt = timestamp;
+                    }
+                    else if (line.IndexOf("<--- Response HTTPS", StringComparison.OrdinalIgnoreCase) >= 0
+                        && IsSuccessfulUserReportResponse(line))
+                    {
+                        if (!request.SuccessfulResponseAt.HasValue
+                            || timestamp < request.SuccessfulResponseAt.Value)
+                            request.SuccessfulResponseAt = timestamp;
+                    }
                 }
             }
 
@@ -1677,45 +1673,55 @@ namespace TarkovServerReporter
 
         private static FileInfo[] GetRelevantFiles(DirectoryInfo directory, TarkovGame game)
         {
-            try
+            Exception lastException = null;
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                return directory.GetFiles("*.log", SearchOption.TopDirectoryOnly)
-                    .Where(file => file.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0
-                        || file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0
-                        || (game == TarkovGame.Eft
-                            && file.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0)
-                        || (game == TarkovGame.Arena
-                            && file.Name.IndexOf("lifecycle", StringComparison.OrdinalIgnoreCase) >= 0))
-                    .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
+                try
+                {
+                    return directory.GetFiles("*.log", SearchOption.TopDirectoryOnly)
+                        .Where(file => file.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0
+                            || file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0
+                            || (game == TarkovGame.Eft
+                                && file.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0)
+                            || (game == TarkovGame.Arena
+                                && file.Name.IndexOf("lifecycle", StringComparison.OrdinalIgnoreCase) >= 0))
+                        .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex;
+                }
             }
-            catch
-            {
-                return new FileInfo[0];
-            }
+            throw new IOException("로그 파일 목록을 읽지 못했습니다.", lastException);
         }
 
         private static IEnumerable<string> ReadLines(string path)
         {
-            var lines = new List<string>();
-            try
+            Exception lastException = null;
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                using (var stream = new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                var lines = new List<string>();
+                try
                 {
-                    string line;
-                    while ((line = reader.ReadLine()) != null) lines.Add(line);
+                    using (var stream = new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete))
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    {
+                        string line;
+                        while ((line = reader.ReadLine()) != null) lines.Add(line);
+                    }
+                    return lines;
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex;
                 }
             }
-            catch
-            {
-                // A live log can rotate while it is being read.
-            }
-            return lines;
+            throw new IOException("로그 파일을 읽지 못했습니다.", lastException);
         }
 
         private static string GetVersion(string line)

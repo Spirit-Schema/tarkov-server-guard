@@ -83,6 +83,7 @@ namespace TarkovServerReporter
         private int _periodMatchCount;
         private bool _periodResultsTruncated;
         private bool _dateRangeScanIncomplete;
+        private bool _logScanIncomplete;
         private string _historySortColumn;
         private SortOrder _historySortOrder = SortOrder.None;
         private bool _isRefreshing;
@@ -876,7 +877,9 @@ namespace TarkovServerReporter
                 }
                 await QueryVisibleServersAsync();
             };
-            _toolTip.SetToolTip(_queryButton, "현재 목록에 보이는 고유 IP의 방화벽 상태·핑·지역을 조회합니다.");
+            _toolTip.SetToolTip(
+                _queryButton,
+                "최신 로그를 다시 읽은 뒤 현재 목록의 고유 IP에 대해 방화벽 상태·핑·지역을 조회합니다.");
             actionButtons.Controls.Add(_queryButton, 0, 0);
 
             _copyIpButton = CreateButton("IP 복사", false);
@@ -1945,24 +1948,25 @@ namespace TarkovServerReporter
                     requestedPeriod,
                     requestedStart,
                     requestedEnd));
+                _logScanIncomplete = !scan.ScanCompletedWithoutErrors;
                 _dateRangeScanIncomplete = requestedPeriod != SessionPeriodPreset.Recent100
-                    && !scan.TotalMatchingSessionsIsExact;
+                    && (!scan.TotalMatchingSessionsIsExact || _logScanIncomplete);
                 _allSessions = scan.Sessions.ToList();
                 RefreshVisibleSessions();
                 await RefreshLauncherSelectionAsync();
 
                 if (_allSessions.Count == 0)
                 {
-                    ShowNoServer(requestedPeriod == SessionPeriodPreset.Recent100
-                        ? "선택한 로그에서 접속 서버 IP 기록을 찾지 못했습니다."
-                        : AddIncompleteRangeWarning(
-                            GetSessionPeriodLabel() + " 범위에서 표시할 접속 기록을 찾지 못했습니다."));
+                    ShowNoServer(AddLogScanWarning(
+                        requestedPeriod == SessionPeriodPreset.Recent100
+                            ? "선택한 로그에서 접속 서버 IP 기록을 찾지 못했습니다."
+                            : GetSessionPeriodLabel() + " 범위에서 표시할 접속 기록을 찾지 못했습니다."));
                     return;
                 }
 
                 if (_visibleSessions.Count == 0)
                 {
-                    ShowNoServer(AddIncompleteRangeWarning(
+                    ShowNoServer(AddLogScanWarning(
                         GetSessionPeriodLabel() + " 범위에서 표시할 접속 기록을 찾지 못했습니다."));
                     return;
                 }
@@ -2002,6 +2006,55 @@ namespace TarkovServerReporter
                 EndExclusive = endExclusive,
                 GameFilter = null
             });
+        }
+
+        private sealed class SessionRefreshScanResult
+        {
+            public RaidLogScanResult Scan { get; set; }
+            public bool AllConfiguredPathsAvailable { get; set; }
+        }
+
+        private static SessionRefreshScanResult ScanSessionsForRefresh(
+            TarkovLogPaths paths,
+            SessionPeriodPreset period,
+            DateTime? customStart,
+            DateTime? customEnd)
+        {
+            bool eftAvailable = string.IsNullOrWhiteSpace(paths.EftPath)
+                || Directory.Exists(paths.EftPath);
+            bool arenaAvailable = string.IsNullOrWhiteSpace(paths.ArenaPath)
+                || Directory.Exists(paths.ArenaPath);
+            return new SessionRefreshScanResult
+            {
+                Scan = ScanSessionsForPeriod(paths, period, customStart, customEnd),
+                AllConfiguredPathsAvailable = eftAvailable && arenaAvailable
+            };
+        }
+
+        private static IList<ServerSession> MergeRefreshedSessions(
+            IEnumerable<ServerSession> refreshed,
+            IEnumerable<ServerSession> existing)
+        {
+            var merged = new List<ServerSession>();
+            var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (IEnumerable<ServerSession> source in new[] { refreshed, existing })
+            {
+                if (source == null) continue;
+                foreach (ServerSession session in source.Where(item => item != null))
+                {
+                    string identity = GetSessionRefreshIdentity(session);
+                    if (identities.Add(identity)) merged.Add(session);
+                }
+            }
+            return merged;
+        }
+
+        private static string GetSessionRefreshIdentity(ServerSession session)
+        {
+            if (!string.IsNullOrWhiteSpace(session.SessionKey)) return session.SessionKey;
+            return session.Game
+                + "|" + (session.LogFilePath ?? string.Empty)
+                + "|" + session.DisplayDetectedAt.Ticks;
         }
 
         private async Task RefreshLauncherSelectionAsync()
@@ -2302,6 +2355,7 @@ namespace TarkovServerReporter
             if (_demoMode)
             {
                 _dateRangeScanIncomplete = false;
+                _logScanIncomplete = false;
                 RefreshVisibleSessions();
                 if (_visibleSessions.Count > 0) SetHistorySummaryStatus(TextMuted, false);
                 return;
@@ -2575,6 +2629,12 @@ namespace TarkovServerReporter
                     ? string.Format("{0}개 표시 · 조건에 맞는 {1}개 중 최근 100개", _visibleSessions.Count, _periodMatchCount)
                     : string.Format("{0}개 표시", _visibleSessions.Count);
             }
+            bool hasScanWarning = _dateRangeScanIncomplete || _logScanIncomplete;
+            string scanWarning = _dateRangeScanIncomplete
+                ? " · 일부 로그를 읽지 못해 결과가 누락될 수 있음"
+                : (_logScanIncomplete
+                    ? " · 일부 로그를 읽지 못해 최신 기록이 누락될 수 있음"
+                    : string.Empty);
             SetStatus(
                 string.Format(
                     "{0} · {1} 접속 기록 {2}{3}{4}",
@@ -2582,17 +2642,17 @@ namespace TarkovServerReporter
                     game,
                     count,
                     includeQueryState ? " · 조회 대기" : string.Empty,
-                    _dateRangeScanIncomplete
-                        ? " · 일부 로그를 읽지 못해 결과가 누락될 수 있음"
-                        : string.Empty),
-                _dateRangeScanIncomplete ? Warning : color);
+                    scanWarning),
+                hasScanWarning ? Warning : color);
         }
 
-        private string AddIncompleteRangeWarning(string message)
+        private string AddLogScanWarning(string message)
         {
-            return _dateRangeScanIncomplete
-                ? message + " · 일부 로그를 읽지 못해 결과가 누락될 수 있음"
-                : message;
+            if (_dateRangeScanIncomplete)
+                return message + " · 일부 로그를 읽지 못해 결과가 누락될 수 있음";
+            if (_logScanIncomplete)
+                return message + " · 일부 로그를 읽지 못해 최신 기록이 누락될 수 있음";
+            return message;
         }
 
         private void SetGameFilter(TarkovGame? game)
@@ -2639,7 +2699,7 @@ namespace TarkovServerReporter
                 && string.Equals(item.SessionKey, selectedKey, StringComparison.OrdinalIgnoreCase));
             if (desired == null) desired = _visibleSessions.FirstOrDefault();
             if (desired == null)
-                ShowNoServer(AddIncompleteRangeWarning("현재 필터에 표시할 접속 기록이 없습니다."));
+                ShowNoServer(AddLogScanWarning("현재 필터에 표시할 접속 기록이 없습니다."));
             else
             {
                 SelectGridRow(desired);
@@ -3011,21 +3071,13 @@ namespace TarkovServerReporter
         private async Task QueryVisibleServersAsync()
         {
             if (_isMeasuring || _isRefreshing || _isFirewallChanging) return;
-            IList<string> ipAddresses = PingBatchPlanner.GetUniqueServerIps(_visibleSessions);
-            if (ipAddresses.Count == 0)
-            {
-                SetStatus("조회할 서버 IP가 없습니다.", Warning);
-                return;
-            }
 
             var queryCancellation = new CancellationTokenSource();
             _queryCancellation = queryCancellation;
             CancellationToken cancellationToken = queryCancellation.Token;
             _isMeasuring = true;
             UpdateActionButtons();
-            _measuringIpAddresses.Clear();
-            foreach (string ipAddress in ipAddresses) _measuringIpAddresses.Add(ipAddress);
-            MarkRowsChecking(ipAddresses);
+            IList<string> ipAddresses = new List<string>();
             int completed = 0;
             int answered = 0;
             int located = 0;
@@ -3034,6 +3086,73 @@ namespace TarkovServerReporter
             bool geoDatabaseReady = NetworkServices.HasUsableGeoDatabase;
             try
             {
+                if (!_demoMode)
+                {
+                    TarkovLogPaths paths = new TarkovLogPaths
+                    {
+                        EftPath = _appliedEftPath,
+                        ArenaPath = _appliedArenaPath
+                    };
+                    if (!string.IsNullOrWhiteSpace(paths.EftPath)
+                        || !string.IsNullOrWhiteSpace(paths.ArenaPath))
+                    {
+                        SessionPeriodPreset requestedPeriod = _sessionPeriod;
+                        DateTime? requestedStart = _customPeriodStart;
+                        DateTime? requestedEnd = _customPeriodEnd;
+                        SetStatus("최신 레이드 로그를 확인하는 중…", Accent);
+                        SessionRefreshScanResult refreshScan = await Task.Run(
+                            () => ScanSessionsForRefresh(
+                                paths,
+                                requestedPeriod,
+                                requestedStart,
+                                requestedEnd),
+                            cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        RaidLogScanResult scan = refreshScan.Scan;
+                        bool scanReadSucceeded = scan.ScanCompletedWithoutErrors
+                            && refreshScan.AllConfiguredPathsAvailable;
+                        bool scanResultsAreComplete = scan.TotalMatchingSessionsIsExact
+                            && scanReadSucceeded;
+
+                        // RaidLogScanner reuses unchanged directory results, so a warm
+                        // refresh only reparses new or modified raid folders. Refreshed
+                        // records win by stable identity; retaining unmatched existing rows
+                        // only for an explicitly incomplete scan prevents a transient read
+                        // failure from erasing the current list without keeping stale rows
+                        // after a complete scan.
+                        _logScanIncomplete = !scanReadSucceeded;
+                        _dateRangeScanIncomplete = requestedPeriod != SessionPeriodPreset.Recent100
+                            && !scanResultsAreComplete;
+                        IList<ServerSession> refreshedSessions = scanReadSucceeded
+                            ? scan.Sessions.ToList()
+                            : MergeRefreshedSessions(scan.Sessions, _allSessions);
+                        if (requestedPeriod == SessionPeriodPreset.Recent100)
+                        {
+                            refreshedSessions = refreshedSessions
+                                .OrderByDescending(session => session.DisplayDetectedAt)
+                                .ThenByDescending(session => session.LastUpdated)
+                                .Take(100)
+                                .ToList();
+                        }
+                        _allSessions = refreshedSessions;
+                        RefreshVisibleSessions();
+                    }
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                ipAddresses = PingBatchPlanner.GetUniqueServerIps(_visibleSessions);
+                if (ipAddresses.Count == 0)
+                {
+                    SetStatus(
+                        AddLogScanWarning("최신 로그에서 조회할 서버 IP를 찾지 못했습니다."),
+                        Warning);
+                    return;
+                }
+
+                _measuringIpAddresses.Clear();
+                foreach (string ipAddress in ipAddresses) _measuringIpAddresses.Add(ipAddress);
+                MarkRowsChecking(ipAddresses);
+
                 if (!geoDatabaseReady)
                 {
                     SetStatus("지역 DB 최초 준비 중… 약 60~70MB, 네트워크에 따라 잠시 걸릴 수 있습니다.", Accent);
@@ -3124,9 +3243,15 @@ namespace TarkovServerReporter
                     blocked,
                     located);
                 if (!geoDatabaseReady) summary += " · 지역 DB 준비 실패";
+                summary = AddLogScanWarning(summary);
                 SetStatus(
                     summary,
-                    firewallKnown == ipAddresses.Count && geoDatabaseReady ? Success : Warning);
+                    !_dateRangeScanIncomplete
+                        && !_logScanIncomplete
+                        && firewallKnown == ipAddresses.Count
+                        && geoDatabaseReady
+                            ? Success
+                            : Warning);
             }
             catch (OperationCanceledException)
             {
@@ -3136,6 +3261,7 @@ namespace TarkovServerReporter
             catch (Exception ex)
             {
                 SetStatus("조회 중 오류가 발생했습니다: " + ex.Message, Danger);
+                RestoreRowsAfterCancelledQuery(ipAddresses);
             }
             finally
             {
@@ -3755,12 +3881,15 @@ namespace TarkovServerReporter
                 else
                 {
                     _queryButton.Text = "조회";
+                    bool canRefreshLogs = !_demoMode
+                        && (!string.IsNullOrWhiteSpace(_appliedEftPath)
+                            || !string.IsNullOrWhiteSpace(_appliedArenaPath));
                     _queryButton.Enabled = controlsAvailable
-                        && _visibleSessions.Any(session => session.HasServerIp);
+                        && (canRefreshLogs || _visibleSessions.Any(session => session.HasServerIp));
                     StyleButton(_queryButton, true);
                     _toolTip.SetToolTip(
                         _queryButton,
-                        "현재 목록에 보이는 고유 IP의 방화벽 상태·핑·지역을 조회합니다.");
+                        "최신 로그를 다시 읽은 뒤 현재 목록의 고유 IP에 대해 방화벽 상태·핑·지역을 조회합니다.");
                 }
             }
             if (_applyPathButton != null)

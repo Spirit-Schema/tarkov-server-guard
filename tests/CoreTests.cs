@@ -606,7 +606,8 @@ namespace TarkovServerReporter.Tests
             Assert(legacy.EftFoldersScanned == 2
                 && legacy.ArenaFoldersScanned == 1
                 && legacy.Sessions.Count <= 2
-                && !legacy.TotalMatchingSessionsIsExact,
+                && !legacy.TotalMatchingSessionsIsExact
+                && legacy.ScanCompletedWithoutErrors,
                 "legacy Scan(paths, maximumRecords) retains its per-game folder cap and row cap");
 
             bool reversedRangeRejected = false;
@@ -673,6 +674,58 @@ namespace TarkovServerReporter.Tests
                 && overOneHundred.TotalMatchingSessionsIsExact
                 && overOneHundred.HasMoreSessions,
                 "range query exposes an exact total above the 100-row display limit");
+
+            string unavailableLogs = Path.Combine(tempRoot, "ConfiguredButUnavailableLogs");
+            RaidLogScanResult unavailable = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = unavailableLogs },
+                new RaidLogScanQuery
+                {
+                    MaximumRecords = 100,
+                    StartInclusive = start,
+                    EndExclusive = end
+                });
+            Assert(unavailable.Sessions.Count == 0
+                && !unavailable.TotalMatchingSessionsIsExact
+                && !unavailable.ScanCompletedWithoutErrors,
+                "a configured but unavailable log path is reported as an incomplete scan");
+
+            RaidLogScanResult unconfigured = RaidLogScanner.Scan(
+                new TarkovLogPaths(),
+                new RaidLogScanQuery
+                {
+                    MaximumRecords = 100,
+                    StartInclusive = start,
+                    EndExclusive = end
+                });
+            Assert(unconfigured.Sessions.Count == 0
+                && unconfigured.TotalMatchingSessionsIsExact
+                && unconfigured.ScanCompletedWithoutErrors,
+                "an unconfigured game path remains an exact empty scan");
+
+            string lockedLogs = Path.Combine(tempRoot, "LockedLogReadFailure");
+            string lockedFolder = Path.Combine(lockedLogs, "log_locked");
+            string lockedFile = Path.Combine(lockedFolder, "application.log");
+            Directory.CreateDirectory(lockedFolder);
+            File.WriteAllText(
+                lockedFile,
+                "2026.08.10 12:00:00|1.1.0.1.46777|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 198.51.100.240, Port: 17300, Location: Woods, Sid: JP-TK02G005_locked, GameMode: deathmatch, shortId: LOCKED'\r\n",
+                Encoding.UTF8);
+            RaidLogScanResult locked;
+            using (new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                locked = RaidLogScanner.Scan(
+                    new TarkovLogPaths { EftPath = lockedLogs },
+                    new RaidLogScanQuery
+                    {
+                        MaximumRecords = 100,
+                        StartInclusive = start,
+                        EndExclusive = end
+                    });
+            }
+            Assert(locked.Sessions.Count == 0
+                && !locked.TotalMatchingSessionsIsExact
+                && !locked.ScanCompletedWithoutErrors,
+                "a log that still fails after one immediate retry is reported as an incomplete scan");
         }
 
         private static string WriteQueryEftRaid(
@@ -1000,8 +1053,8 @@ namespace TarkovServerReporter.Tests
 
         private static void TestProductUserAgent()
         {
-            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.7.2",
-                "network requests use the v0.7.2 product user agent");
+            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.7.3",
+                "network requests use the v0.7.3 product user agent");
         }
 
         private static void TestGeoFormatting()

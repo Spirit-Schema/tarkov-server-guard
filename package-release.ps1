@@ -2,7 +2,7 @@
 # Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 param(
-    [string]$Version = '0.7.2',
+    [string]$Version = '0.7.3',
     [switch]$SkipTests
 )
 

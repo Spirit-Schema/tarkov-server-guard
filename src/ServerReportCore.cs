@@ -802,7 +802,7 @@ namespace TarkovServerReporter
 
     public static class NetworkServices
     {
-        internal const string ProductUserAgent = "TarkovServerGuard/0.7.2";
+        internal const string ProductUserAgent = "TarkovServerGuard/0.7.3";
         private static readonly DbIpLiteGeoService GeoService = CreateGeoService();
 
         private static DbIpLiteGeoService CreateGeoService()
