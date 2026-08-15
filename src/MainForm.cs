@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MPL-2.0
-// Copyright 2026 Spirit-Schema
+// Copyright © 2026 Spirit-Schema. All rights reserved.
+// Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
 using System.Collections.Generic;
@@ -568,23 +568,74 @@ namespace TarkovServerReporter
             panel.Resize += delegate { version.Left = panel.ClientSize.Width - version.Width - 4; };
             panel.Controls.Add(version);
 
-            var developer = new Label
+            var attributionRow = new FlowLayoutPanel
             {
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                Text = "Developer · Spirit-Schema",
+                BackColor = Background,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+                Location = new Point(1000, 32)
+            };
+            var copyright = new Label
+            {
+                AutoSize = true,
+                Text = "© 2026 Spirit-Schema ·",
                 Font = new Font("Segoe UI", 8.5F),
                 ForeColor = TextMuted,
-                Location = new Point(1000, 38)
+                BackColor = Background,
+                Margin = new Padding(0, 6, 2, 0),
+                Padding = new Padding(0)
             };
-            panel.Resize += delegate { developer.Left = panel.ClientSize.Width - developer.Width - 4; };
-            panel.Controls.Add(developer);
+            attributionRow.Controls.Add(copyright);
+
+            var licenseButton = new Button
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Text = "라이선스",
+                Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
+                ForeColor = Accent,
+                BackColor = Background,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                TabStop = true,
+                UseVisualStyleBackColor = false,
+                Margin = new Padding(0),
+                Padding = new Padding(3, 1, 3, 1),
+                AccessibleName = "라이선스",
+                AccessibleDescription = "라이선스 및 저작권 안내를 엽니다."
+            };
+            licenseButton.FlatAppearance.BorderSize = 0;
+            licenseButton.FlatAppearance.MouseOverBackColor = SurfaceAlt;
+            licenseButton.FlatAppearance.MouseDownBackColor = Surface;
+            licenseButton.Click += delegate { ShowLicenseDialog(); };
+            _toolTip.SetToolTip(licenseButton, "라이선스 전문과 서드파티 고지를 확인합니다.");
+            attributionRow.Controls.Add(licenseButton);
+
+            EventHandler positionAttribution = delegate
+            {
+                attributionRow.Left = panel.ClientSize.Width - attributionRow.Width - 4;
+            };
+            panel.Resize += positionAttribution;
+            attributionRow.SizeChanged += positionAttribution;
+            panel.Controls.Add(attributionRow);
+            positionAttribution(null, EventArgs.Empty);
             return panel;
         }
 
         private void ShowUsageNoticeDialog()
         {
             using (var dialog = new UsageNoticeForm())
+                dialog.ShowDialog(this);
+        }
+
+        private void ShowLicenseDialog()
+        {
+            using (var dialog = new LicenseForm())
                 dialog.ShowDialog(this);
         }
 

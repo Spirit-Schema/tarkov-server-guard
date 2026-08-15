@@ -53,4 +53,6 @@ GitHub Releases에는 Setup과 Portable만이 아니라 같은 실행에서 생�
 - 추정 지역 데이터: [DB-IP Lite City](https://db-ip.com/db/download/ip-to-city-lite) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - 설치·자동 업데이트: [Velopack](https://github.com/velopack/velopack) · MIT
 
-프로젝트 자체 소스와 자산은 [MPL-2.0](LICENSE)을 따릅니다. 적용 범위는 [라이선스 안내](LICENSING.md), 전체 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.
+프로젝트 자체 소스와 자산은 [Tarkov Server Guard Source-Available Freeware License 1.0](LICENSE)을 따릅니다. 이는 OSI 오픈소스 라이선스가 아닙니다. 적용 범위는 [라이선스 안내](LICENSING.md), 전체 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.
+
+외부 코드 기여는 사전 협의 후 검토합니다. 새 의존성을 추가할 때에는 저작권·재배포 조건을 먼저 확인하며, GPL·AGPL 계열처럼 프로젝트의 배포 조건과 충돌할 수 있는 의존성은 포함하지 않습니다.

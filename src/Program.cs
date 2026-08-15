@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MPL-2.0
-// Copyright 2026 Spirit-Schema
+// Copyright © 2026 Spirit-Schema. All rights reserved.
+// Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
 using System.IO;
@@ -10,7 +10,7 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Escape from Tarkov server history, diagnostics, notes, and selective firewall guard")]
 [assembly: AssemblyCompany("Spirit-Schema")]
 [assembly: AssemblyProduct("Tarkov Server Guard")]
-[assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema")]
+[assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema. All rights reserved.")]
 [assembly: AssemblyVersion("0.7.1.0")]
 [assembly: AssemblyFileVersion("0.7.1.0")]
 

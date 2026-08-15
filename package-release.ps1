@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: MPL-2.0
-# Copyright 2026 Spirit-Schema
+# Copyright © 2026 Spirit-Schema. All rights reserved.
+# Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 param(
     [string]$Version = '0.7.1',
@@ -75,12 +75,18 @@ foreach ($document in @(
     'TROUBLESHOOTING.md',
     'LICENSING.md',
     'PUBLICATION_SCOPE.md',
+    'CONTRIBUTING.md',
     'DEVELOPMENT.md',
     'LICENSE',
     'THIRD_PARTY_NOTICES.md')) {
     Copy-Item -Force -LiteralPath (Join-Path $projectRoot $document) `
         -Destination (Join-Path $publishRoot $document)
 }
+Copy-Item -Force -LiteralPath (Join-Path $projectRoot 'LICENSE') `
+    -Destination (Join-Path $publishRoot 'LICENSE.txt')
+$installerLicense = Join-Path $buildRoot 'TarkovServerGuard-Installer-License.md'
+Copy-Item -Force -LiteralPath (Join-Path $projectRoot 'LICENSE') `
+    -Destination $installerLicense
 $publishBrandingRoot = Join-Path $publishRoot 'assets\branding'
 New-Item -ItemType Directory -Force -Path $publishBrandingRoot | Out-Null
 Copy-Item -Force `
@@ -112,6 +118,7 @@ $vpkArguments = @(
     '--packTitle', 'Tarkov Server Guard',
     '--packAuthors', 'Spirit-Schema',
     '--icon', $appIcon,
+    '--instLicense', $installerLicense,
     '--outputDir', $releasesStageRoot,
     '--instLocation', 'PerUser',
     # The bootstrap call is intentionally reflection-based so raw developer
@@ -159,6 +166,22 @@ foreach ($sourceFile in @(
     Copy-Item -Force -LiteralPath (Join-Path $projectRoot $sourceFile) `
         -Destination (Join-Path $sourceReviewRoot $sourceFile)
 }
+foreach ($sourceDocument in @(
+    'README.md',
+    'PRIVACY.md',
+    'TROUBLESHOOTING.md',
+    'LICENSING.md',
+    'PUBLICATION_SCOPE.md',
+    'CONTRIBUTING.md',
+    'DEVELOPMENT.md',
+    'THIRD_PARTY_NOTICES.md')) {
+    Copy-Item -Force -LiteralPath (Join-Path $projectRoot $sourceDocument) `
+        -Destination (Join-Path $sourceReviewRoot $sourceDocument)
+}
+Copy-Item -Force -LiteralPath (Join-Path $projectRoot 'LICENSE') `
+    -Destination (Join-Path $sourceReviewRoot 'LICENSE')
+Copy-Item -Force -LiteralPath (Join-Path $projectRoot 'LICENSE') `
+    -Destination (Join-Path $sourceReviewRoot 'LICENSE.txt')
 if (Test-Path -LiteralPath $releaseNotes) {
     Copy-Item -Force -LiteralPath $releaseNotes `
         -Destination (Join-Path $sourceReviewRoot (Split-Path -Leaf $releaseNotes))

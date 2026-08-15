@@ -1,6 +1,6 @@
 # Third-party notices
 
-Tarkov Server Guard 자체 소스와 자산의 MPL-2.0 조건은 `LICENSE`와 `LICENSING.md`를 따릅니다. 아래 고지는 프로젝트에 사용되거나 참고된 외부 구성요소의 별도 권리를 보존합니다.
+Tarkov Server Guard 자체 소스와 자산에는 `Tarkov Server Guard Source-Available Freeware License 1.0`이 적용됩니다. 아래 고지는 프로젝트에 사용되거나 참고된 외부 구성요소의 별도 권리를 보존하며, 프로젝트 자체 라이선스와 구분됩니다. 제3자 구성요소에는 아래의 MIT, CC BY 4.0 및 각 원저작자가 정한 라이선스가 그대로 적용됩니다.
 
 ## EFT: Where Am I
 

@@ -51,6 +51,13 @@ Get-FileHash -Algorithm SHA256 .\SpiritSchema.TarkovServerGuard-win-Setup.exe
 
 ## 라이선스
 
-현재 자체 소스와 자산은 MPL-2.0으로 공개됩니다. 자세한 내용은 저장소의 `LICENSE`와 `LICENSING.md`에서 확인할 수 있습니다.
+- 모든 기능을 무료로 사용할 수 있는 프리웨어입니다.
+- 소스는 안전성과 투명성 확인을 위해 공개하지만, OSI 오픈소스가 아닌 Source-Available 소프트웨어입니다.
+- 무단 수정 배포·재배포·판매·상업적 이용을 금지합니다.
+- 공식 배포처는 Spirit-Schema GitHub Releases입니다.
+- 비공식 배포본은 안전성과 정상 작동을 보증하거나 지원하지 않습니다.
+- 제3자 구성요소는 각각의 기존 라이선스를 따릅니다.
+
+정확한 조건은 저장소의 `LICENSE`와 `LICENSING.md`에서 확인할 수 있습니다.
 
 자세한 사용법과 개인정보 안내는 [README](https://github.com/Spirit-Schema/tarkov-server-guard#readme)에서 확인할 수 있습니다.

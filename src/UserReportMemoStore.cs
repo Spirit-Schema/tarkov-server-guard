@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MPL-2.0
-// Copyright 2026 Spirit-Schema
+// Copyright © 2026 Spirit-Schema. All rights reserved.
+// Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
 using System.Diagnostics;

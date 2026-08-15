@@ -1,6 +1,6 @@
-# 공개 및 제외 범위
+# 소스 공개 및 제외 범위
 
-Tarkov Server Guard는 동작을 검토할 수 있는 소스와 재현 가능한 빌드 자료를 공개하되, 실제 사용자 데이터와 인증 자료는 저장소에 포함하지 않습니다.
+Tarkov Server Guard는 사용자가 동작의 안전성과 투명성을 검토할 수 있도록 소스와 재현 가능한 빌드 자료를 공개합니다. 이는 OSI 오픈소스 배포가 아니며, 사용·수정·배포 범위는 [Tarkov Server Guard Source-Available Freeware License 1.0](LICENSE)을 따릅니다.
 
 ## 공개하는 항목
 
@@ -9,8 +9,10 @@ Tarkov Server Guard는 동작을 검토할 수 있는 소스와 재현 가능한
 - 빌드 및 패키징 스크립트
 - 앱 아이콘과 UI 자산
 - 개인정보 처리 및 네트워크 동작 설명
-- 라이선스와 제3자 구성요소 고지
+- 프로젝트 라이선스와 제3자 구성요소 고지
 - 공개 릴리스 파일의 SHA-256 해시
+
+소스가 공개되어 있어도 원본이나 수정본을 임의로 공유·재배포할 수 있다는 의미는 아닙니다. 공식 배포본은 [Spirit-Schema GitHub Releases](https://github.com/Spirit-Schema/tarkov-server-guard/releases)에서만 제공합니다. 해당 공식 링크 자체를 공유하는 것은 허용됩니다.
 
 ## 공개하지 않으며 Git에서 제외하는 항목
 

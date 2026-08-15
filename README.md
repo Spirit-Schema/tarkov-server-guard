@@ -22,6 +22,8 @@ Escape from Tarkov와 Escape from Tarkov: Arena의 최근 접속 서버를 한�
 
 [최신 릴리스](https://github.com/Spirit-Schema/tarkov-server-guard/releases/latest)에서 사용 방식에 맞는 파일을 받으세요.
 
+모든 기능을 개인적·비상업적 목적으로 무료로 사용할 수 있는 프리웨어입니다. 공식 배포처는 Spirit-Schema GitHub Releases이며, 비공식 배포본은 안전성과 정상 작동을 보증하거나 지원하지 않습니다.
+
 | 파일 | 용도 |
 | --- | --- |
 | `SpiritSchema.TarkovServerGuard-win-Setup.exe` | 일반 사용자 권장. 설치·시작 메뉴·자동 업데이트 지원 |
@@ -64,17 +66,22 @@ Escape from Tarkov와 Escape from Tarkov: Arena의 최근 접속 서버를 한�
 - 최초 지역 DB 준비와 자동 업데이트 확인을 위한 인터넷 연결
 - 지역 DB 갱신 중 임시 파일을 포함해 최대 약 500MB의 여유 공간 권장
 
+## 라이선스
+
+소스는 사용자가 안전성과 투명성을 확인할 수 있도록 공개합니다. Tarkov Server Guard는 OSI 오픈소스가 아닌 **소스 공개형(Source-Available) 독점 프리웨어**이며, 무단 수정본 배포·재배포·판매·상업적 이용을 금지합니다.
+
+정확한 사용 조건은 [Tarkov Server Guard Source-Available Freeware License 1.0](LICENSE)을 확인하세요. 제3자 구성요소는 각각의 기존 라이선스를 따르며 [서드파티 고지](THIRD_PARTY_NOTICES.md)에 별도로 정리되어 있습니다.
+
 ## 자세한 문서
 
 - [문제 해결](TROUBLESHOOTING.md)
 - [개인정보 및 네트워크](PRIVACY.md)
 - [라이선스 안내](LICENSING.md)
-- [공개 및 제외 범위](PUBLICATION_SCOPE.md)
+- [소스 공개 및 제외 범위](PUBLICATION_SCOPE.md)
+- [기여 안내](CONTRIBUTING.md)
 - [개발·빌드 안내](DEVELOPMENT.md)
 - [서드파티 고지](THIRD_PARTY_NOTICES.md)
-- [MPL-2.0 원문](LICENSE)
-
-현재 자체 소스와 자산은 MPL-2.0으로 공개되며 자세한 적용 범위는 [라이선스 안내](LICENSING.md)를 따릅니다.
+- [라이선스 전문](LICENSE)
 
 이 프로그램은 Battlestate Games 또는 Escape from Tarkov의 공식 도구가 아닙니다.
 

@@ -1,30 +1,27 @@
 # 라이선스 안내
 
-Copyright 2026 Spirit-Schema
+Copyright © 2026 Spirit-Schema. All rights reserved.
 
-Tarkov Server Guard의 현재 소스 코드는 **Mozilla Public License 2.0 (MPL-2.0)**으로 배포됩니다. 저장소의 [`LICENSE`](LICENSE)가 Mozilla가 공개한 공식 라이선스 원문이며, 이 문서는 이해를 돕기 위한 요약일 뿐 라이선스 원문을 대체하지 않습니다.
+Tarkov Server Guard는 모든 기능을 개인적·비상업적 목적으로 무료로 사용할 수 있는 프리웨어입니다. 소스는 사용자가 안전성과 투명성을 확인할 수 있도록 공개하지만, OSI 오픈소스가 아닌 **소스 공개형(Source-Available) 독점 소프트웨어**입니다.
 
-## MPL-2.0 적용 방식
+## 허용되는 범위
 
-- MPL-2.0은 파일 단위 카피레프트 라이선스입니다.
-- MPL이 적용된 파일을 수정하여 배포하면 그 파일의 소스와 수정 내용도 MPL-2.0 조건으로 제공해야 합니다.
-- MPL 적용 파일의 코드를 포함하는 새 파일도 라이선스에서 정의하는 `Modifications`가 될 수 있습니다.
-- MPL 적용 파일과 결합했다는 이유만으로, MPL 코드를 포함하지 않는 별도의 파일까지 자동으로 MPL이 되는 것은 아닙니다.
-- 실행 파일을 배포할 때에는 해당 MPL 적용 소스 코드를 합리적인 방법으로 함께 제공하거나 취득 방법을 안내해야 합니다.
-- 별도 표기가 없는 이 저장소의 자체 소스 및 자산에는 MPL-2.0이 적용됩니다. 외부 구성요소의 권리와 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 따릅니다.
+- 공식 원본 프로그램의 개인적·비상업적 사용
+- 안전성 확인, 보안 감사 및 학습 목적의 소스 열람
+- 개인적·비상업적 범위에서 본인만 사용하는 비공개 수정
+- [Spirit-Schema 공식 GitHub Releases](https://github.com/Spirit-Schema/tarkov-server-guard/releases) 링크 공유
 
-공식 배포 실행 파일에 대응하는 소스는 [GitHub의 동일 버전 태그](https://github.com/Spirit-Schema/tarkov-server-guard/tree/v0.7.1)에서 받을 수 있습니다.
+## 허용되지 않는 범위
 
-각 적용 대상 소스 파일에는 다음 식별자를 사용하는 것을 원칙으로 합니다.
+- 원본 또는 수정된 소스와 바이너리의 무단 공유·재배포
+- 수정본 배포, 판매, 상업적 이용, 서비스 제공 및 재라이선스
+- 저작권·라이선스·제작자 표시 제거
+- 비공식 패키지를 공식 프로그램으로 오인하게 만드는 명칭·아이콘·패키지 사용
 
-```text
-SPDX-License-Identifier: MPL-2.0
-```
+정확한 조건은 한국어판과 영어판을 함께 수록한 [`LICENSE`](LICENSE)의 **Tarkov Server Guard Source-Available Freeware License 1.0** 전문을 따릅니다. 이 안내는 이해를 돕기 위한 요약이며 라이선스 전문을 대체하지 않습니다.
 
-정확한 의무와 권리는 반드시 [`LICENSE`](LICENSE) 원문과 [Mozilla MPL 2.0 안내](https://www.mozilla.org/MPL/2.0/)를 우선하여 확인해 주세요.
+Velopack, Newtonsoft.Json, DB-IP Lite 등 제3자 구성요소에는 각각의 기존 라이선스가 별도로 적용됩니다. 자세한 저작권과 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)에서 확인할 수 있습니다.
 
-## 기여와 권리 확인
-
-외부 기여를 병합하기 전에는 기여자가 해당 코드를 제공할 권리를 보유하는지와 제3자 라이선스가 호환되는지를 확인합니다. 병합된 기여에는 명시적으로 달리 합의하지 않는 한 MPL-2.0이 적용됩니다.
+비공식 배포본은 안전성과 정상 작동을 보증하거나 지원하지 않습니다. 공식 배포처는 [Spirit-Schema의 Tarkov Server Guard GitHub Releases](https://github.com/Spirit-Schema/tarkov-server-guard/releases)입니다.
 
 이 문서는 일반적인 프로젝트 안내이며 법률 자문이 아닙니다.

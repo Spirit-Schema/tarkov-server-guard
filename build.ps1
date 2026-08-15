@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: MPL-2.0
-# Copyright 2026 Spirit-Schema
+# Copyright © 2026 Spirit-Schema. All rights reserved.
+# Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 param(
     [switch]$SkipTests,
@@ -54,6 +54,8 @@ $appArguments = @(
     ('/out:' + $appOutput),
     ('/win32manifest:' + (Join-Path $projectRoot 'app.manifest')),
     ('/win32icon:' + $appIcon),
+    ('/resource:' + (Join-Path $projectRoot 'LICENSE') + ',TarkovServerReporter.LICENSE.txt'),
+    ('/resource:' + (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') + ',TarkovServerReporter.THIRD_PARTY_NOTICES.md'),
     '/reference:System.Drawing.dll',
     '/reference:System.Windows.Forms.dll'
 ) + $commonReferences + @(
@@ -63,6 +65,7 @@ $appArguments = @(
     (Join-Path $sourceRoot 'GitHubUpdateService.cs'),
     (Join-Path $sourceRoot 'UpdatePromptForm.cs'),
     (Join-Path $sourceRoot 'UsageNoticeForm.cs'),
+    (Join-Path $sourceRoot 'LicenseForm.cs'),
     (Join-Path $sourceRoot 'ArenaBlockWarningForm.cs'),
     (Join-Path $sourceRoot 'FirewallRuleManager.cs'),
     (Join-Path $sourceRoot 'BlockedServerMetadataStore.cs'),

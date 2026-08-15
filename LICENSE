@@ -1,373 +1,184 @@
-Mozilla Public License Version 2.0
-==================================
-
-1. Definitions
---------------
-
-1.1. "Contributor"
-    means each individual or legal entity that creates, contributes to
-    the creation of, or owns Covered Software.
-
-1.2. "Contributor Version"
-    means the combination of the Contributions of others (if any) used
-    by a Contributor and that particular Contributor's Contribution.
-
-1.3. "Contribution"
-    means Covered Software of a particular Contributor.
-
-1.4. "Covered Software"
-    means Source Code Form to which the initial Contributor has attached
-    the notice in Exhibit A, the Executable Form of such Source Code
-    Form, and Modifications of such Source Code Form, in each case
-    including portions thereof.
-
-1.5. "Incompatible With Secondary Licenses"
-    means
-
-    (a) that the initial Contributor has attached the notice described
-        in Exhibit B to the Covered Software; or
+Tarkov Server Guard Source-Available Freeware License 1.0
+=========================================================
 
-    (b) that the Covered Software was made available under the terms of
-        version 1.1 or earlier of the License, but not also under the
-        terms of a Secondary License.
+Copyright © 2026 Spirit-Schema. All rights reserved.
 
-1.6. "Executable Form"
-    means any form of the work other than Source Code Form.
+Official project and distribution page:
+https://github.com/Spirit-Schema/tarkov-server-guard
 
-1.7. "Larger Work"
-    means a work that combines Covered Software with other material, in
-    a separate file or files, that is not Covered Software.
+한국어판
+--------
 
-1.8. "License"
-    means this document.
+본 라이선스는 Spirit-Schema가 본 라이선스와 함께 배포하는 Tarkov Server Guard 및
+관련 프로그램의 소스 코드, 실행 파일, 문서 및 자산(이하 "프로그램")에 적용됩니다.
+제3자 구성요소에는 각 구성요소의 기존 라이선스가 별도로 적용됩니다.
 
-1.9. "Licensable"
-    means having the right to grant, to the maximum extent possible,
-    whether at the time of the initial grant or subsequently, any and
-    all of the rights conveyed by this License.
+1. 저작권 및 권리 보유
 
-1.10. "Modifications"
-    means any of the following:
+   프로그램의 저작권은 Spirit-Schema에 있으며, 본 라이선스에서 명시적으로
+   허용하지 않은 모든 권리는 제작자가 보유합니다.
 
-    (a) any file in Source Code Form that results from an addition to,
-        deletion from, or modification of the contents of Covered
-        Software; or
+2. 무료 사용 허가
 
-    (b) any new file in Source Code Form that contains any Covered
-        Software.
+   공식 원본 프로그램은 개인적·비상업적 목적으로 무료로 사용할 수 있습니다.
 
-1.11. "Patent Claims" of a Contributor
-    means any patent claim(s), including without limitation, method,
-    process, and apparatus claims, in any patent Licensable by such
-    Contributor that would be infringed, but for the grant of the
-    License, by the making, using, selling, offering for sale, having
-    made, import, or transfer of either its Contributions or its
-    Contributor Version.
+3. 소스코드 열람
 
-1.12. "Secondary License"
-    means either the GNU General Public License, Version 2.0, the GNU
-    Lesser General Public License, Version 2.1, the GNU Affero General
-    Public License, Version 3.0, or any later versions of those
-    licenses.
+   소스코드는 안전성 확인, 보안 감사 및 학습 목적으로 열람할 수 있습니다.
 
-1.13. "Source Code Form"
-    means the form of the work preferred for making modifications.
+4. 비공개 수정
 
-1.14. "You" (or "Your")
-    means an individual or a legal entity exercising rights under this
-    License. For legal entities, "You" includes any entity that
-    controls, is controlled by, or is under common control with You. For
-    purposes of this definition, "control" means (a) the power, direct
-    or indirect, to cause the direction or management of such entity,
-    whether by contract or otherwise, or (b) ownership of more than
-    fifty percent (50%) of the outstanding shares or beneficial
-    ownership of such entity.
+   개인적·비상업적 범위에서만 프로그램을 비공개로 수정할 수 있습니다. 수정된
+   프로그램은 본인만 사용해야 하며 다른 사람이나 단체에 제공해서는 안 됩니다.
 
-2. License Grants and Conditions
---------------------------------
+5. 공유 및 재배포 금지
 
-2.1. Grants
+   제작자의 명시적 서면 허가 없이 원본 또는 수정된 소스 코드와 바이너리를
+   복제하여 공유, 게시, 배포 또는 재배포할 수 없습니다.
 
-Each Contributor hereby grants You a world-wide, royalty-free,
-non-exclusive license:
+6. 수정본 배포 및 상업적 이용 금지
 
-(a) under intellectual property rights (other than patent or trademark)
-    Licensable by such Contributor to use, reproduce, make available,
-    modify, display, perform, distribute, and otherwise exploit its
-    Contributions, either on an unmodified basis, with Modifications, or
-    as part of a Larger Work; and
+   제작자의 명시적 서면 허가 없이 수정본을 배포하거나, 프로그램을 판매하거나,
+   프로그램을 이용한 유료 서비스 제공, 상업적 이용 또는 재라이선스를 할 수
+   없습니다.
 
-(b) under Patent Claims of such Contributor to make, use, sell, offer
-    for sale, have made, import, and otherwise transfer either its
-    Contributions or its Contributor Version.
+7. 표시 보존
 
-2.2. Effective Date
+   프로그램에 포함된 저작권, 라이선스 및 제작자 표시를 제거, 은폐 또는 변경할 수
+   없습니다.
 
-The licenses granted in Section 2.1 with respect to any Contribution
-become effective for each Contribution on the date the Contributor first
-distributes such Contribution.
+8. 공식 프로그램 사칭 금지
 
-2.3. Limitations on Grant Scope
+   수정본이나 비공식 패키지를 공식 프로그램으로 오인하게 만드는 명칭, 아이콘,
+   상표 또는 패키지 구성을 사용할 수 없습니다.
 
-The licenses granted in this Section 2 are the only rights granted under
-this License. No additional rights or licenses will be implied from the
-distribution or licensing of Covered Software under this License.
-Notwithstanding Section 2.1(b) above, no patent license is granted by a
-Contributor:
+9. 공식 링크 공유
 
-(a) for any code that a Contributor has removed from Covered Software;
-    or
+   다음 Spirit-Schema 공식 GitHub Releases 링크를 그대로 공유하는 것은 허용됩니다.
+   https://github.com/Spirit-Schema/tarkov-server-guard/releases
 
-(b) for infringements caused by: (i) Your and any other third party's
-    modifications of Covered Software, or (ii) the combination of its
-    Contributions with other software (except as part of its Contributor
-    Version); or
+10. 별도 허가
 
-(c) under Patent Claims infringed by Covered Software in the absence of
-    its Contributions.
-
-This License does not grant any rights in the trademarks, service marks,
-or logos of any Contributor (except as may be necessary to comply with
-the notice requirements in Section 3.4).
-
-2.4. Subsequent Licenses
-
-No Contributor makes additional grants as a result of Your choice to
-distribute the Covered Software under a subsequent version of this
-License (see Section 10.2) or under the terms of a Secondary License (if
-permitted under the terms of Section 3.3).
-
-2.5. Representation
-
-Each Contributor represents that the Contributor believes its
-Contributions are its original creation(s) or it has sufficient rights
-to grant the rights to its Contributions conveyed by this License.
-
-2.6. Fair Use
-
-This License is not intended to limit any rights You have under
-applicable copyright doctrines of fair use, fair dealing, or other
-equivalents.
-
-2.7. Conditions
-
-Sections 3.1, 3.2, 3.3, and 3.4 are conditions of the licenses granted
-in Section 2.1.
-
-3. Responsibilities
--------------------
-
-3.1. Distribution of Source Form
-
-All distribution of Covered Software in Source Code Form, including any
-Modifications that You create or to which You contribute, must be under
-the terms of this License. You must inform recipients that the Source
-Code Form of the Covered Software is governed by the terms of this
-License, and how they can obtain a copy of this License. You may not
-attempt to alter or restrict the recipients' rights in the Source Code
-Form.
-
-3.2. Distribution of Executable Form
-
-If You distribute Covered Software in Executable Form then:
-
-(a) such Covered Software must also be made available in Source Code
-    Form, as described in Section 3.1, and You must inform recipients of
-    the Executable Form how they can obtain a copy of such Source Code
-    Form by reasonable means in a timely manner, at a charge no more
-    than the cost of distribution to the recipient; and
-
-(b) You may distribute such Executable Form under the terms of this
-    License, or sublicense it under different terms, provided that the
-    license for the Executable Form does not attempt to limit or alter
-    the recipients' rights in the Source Code Form under this License.
-
-3.3. Distribution of a Larger Work
-
-You may create and distribute a Larger Work under terms of Your choice,
-provided that You also comply with the requirements of this License for
-the Covered Software. If the Larger Work is a combination of Covered
-Software with a work governed by one or more Secondary Licenses, and the
-Covered Software is not Incompatible With Secondary Licenses, this
-License permits You to additionally distribute such Covered Software
-under the terms of such Secondary License(s), so that the recipient of
-the Larger Work may, at their option, further distribute the Covered
-Software under the terms of either this License or such Secondary
-License(s).
-
-3.4. Notices
-
-You may not remove or alter the substance of any license notices
-(including copyright notices, patent notices, disclaimers of warranty,
-or limitations of liability) contained within the Source Code Form of
-the Covered Software, except that You may alter any license notices to
-the extent required to remedy known factual inaccuracies.
-
-3.5. Application of Additional Terms
-
-You may choose to offer, and to charge a fee for, warranty, support,
-indemnity or liability obligations to one or more recipients of Covered
-Software. However, You may do so only on Your own behalf, and not on
-behalf of any Contributor. You must make it absolutely clear that any
-such warranty, support, indemnity, or liability obligation is offered by
-You alone, and You hereby agree to indemnify every Contributor for any
-liability incurred by such Contributor as a result of warranty, support,
-indemnity or liability terms You offer. You may include additional
-disclaimers of warranty and limitations of liability specific to any
-jurisdiction.
-
-4. Inability to Comply Due to Statute or Regulation
----------------------------------------------------
-
-If it is impossible for You to comply with any of the terms of this
-License with respect to some or all of the Covered Software due to
-statute, judicial order, or regulation then You must: (a) comply with
-the terms of this License to the maximum extent possible; and (b)
-describe the limitations and the code they affect. Such description must
-be placed in a text file included with all distributions of the Covered
-Software under this License. Except to the extent prohibited by statute
-or regulation, such description must be sufficiently detailed for a
-recipient of ordinary skill to be able to understand it.
-
-5. Termination
---------------
-
-5.1. The rights granted under this License will terminate automatically
-if You fail to comply with any of its terms. However, if You become
-compliant, then the rights granted under this License from a particular
-Contributor are reinstated (a) provisionally, unless and until such
-Contributor explicitly and finally terminates Your grants, and (b) on an
-ongoing basis, if such Contributor fails to notify You of the
-non-compliance by some reasonable means prior to 60 days after You have
-come back into compliance. Moreover, Your grants from a particular
-Contributor are reinstated on an ongoing basis if such Contributor
-notifies You of the non-compliance by some reasonable means, this is the
-first time You have received notice of non-compliance with this License
-from such Contributor, and You become compliant prior to 30 days after
-Your receipt of the notice.
-
-5.2. If You initiate litigation against any entity by asserting a patent
-infringement claim (excluding declaratory judgment actions,
-counter-claims, and cross-claims) alleging that a Contributor Version
-directly or indirectly infringes any patent, then the rights granted to
-You by any and all Contributors for the Covered Software under Section
-2.1 of this License shall terminate.
-
-5.3. In the event of termination under Sections 5.1 or 5.2 above, all
-end user license agreements (excluding distributors and resellers) which
-have been validly granted by You or Your distributors under this License
-prior to termination shall survive termination.
-
-************************************************************************
-*                                                                      *
-*  6. Disclaimer of Warranty                                           *
-*  -------------------------                                           *
-*                                                                      *
-*  Covered Software is provided under this License on an "as is"       *
-*  basis, without warranty of any kind, either expressed, implied, or  *
-*  statutory, including, without limitation, warranties that the       *
-*  Covered Software is free of defects, merchantable, fit for a        *
-*  particular purpose or non-infringing. The entire risk as to the     *
-*  quality and performance of the Covered Software is with You.        *
-*  Should any Covered Software prove defective in any respect, You     *
-*  (not any Contributor) assume the cost of any necessary servicing,   *
-*  repair, or correction. This disclaimer of warranty constitutes an   *
-*  essential part of this License. No use of any Covered Software is   *
-*  authorized under this License except under this disclaimer.         *
-*                                                                      *
-************************************************************************
-
-************************************************************************
-*                                                                      *
-*  7. Limitation of Liability                                          *
-*  --------------------------                                          *
-*                                                                      *
-*  Under no circumstances and under no legal theory, whether tort      *
-*  (including negligence), contract, or otherwise, shall any           *
-*  Contributor, or anyone who distributes Covered Software as          *
-*  permitted above, be liable to You for any direct, indirect,         *
-*  special, incidental, or consequential damages of any character      *
-*  including, without limitation, damages for lost profits, loss of    *
-*  goodwill, work stoppage, computer failure or malfunction, or any    *
-*  and all other commercial damages or losses, even if such party      *
-*  shall have been informed of the possibility of such damages. This   *
-*  limitation of liability shall not apply to liability for death or   *
-*  personal injury resulting from such party's negligence to the       *
-*  extent applicable law prohibits such limitation. Some               *
-*  jurisdictions do not allow the exclusion or limitation of           *
-*  incidental or consequential damages, so this exclusion and          *
-*  limitation may not apply to You.                                    *
-*                                                                      *
-************************************************************************
-
-8. Litigation
--------------
-
-Any litigation relating to this License may be brought only in the
-courts of a jurisdiction where the defendant maintains its principal
-place of business and such litigation shall be governed by laws of that
-jurisdiction, without reference to its conflict-of-law provisions.
-Nothing in this Section shall prevent a party's ability to bring
-cross-claims or counter-claims.
-
-9. Miscellaneous
-----------------
-
-This License represents the complete agreement concerning the subject
-matter hereof. If any provision of this License is held to be
-unenforceable, such provision shall be reformed only to the extent
-necessary to make it enforceable. Any law or regulation which provides
-that the language of a contract shall be construed against the drafter
-shall not be used to construe this License against a Contributor.
-
-10. Versions of the License
----------------------------
-
-10.1. New Versions
-
-Mozilla Foundation is the license steward. Except as provided in Section
-10.3, no one other than the license steward has the right to modify or
-publish new versions of this License. Each version will be given a
-distinguishing version number.
-
-10.2. Effect of New Versions
-
-You may distribute the Covered Software under the terms of the version
-of the License under which You originally received the Covered Software,
-or under the terms of any subsequent version published by the license
-steward.
-
-10.3. Modified Versions
-
-If you create software not governed by this License, and you want to
-create a new license for such software, you may create and use a
-modified version of this License if you rename the license and remove
-any references to the name of the license steward (except to note that
-such modified license differs from this License).
-
-10.4. Distributing Source Code Form that is Incompatible With Secondary
-Licenses
-
-If You choose to distribute Source Code Form that is Incompatible With
-Secondary Licenses under the terms of this version of the License, the
-notice described in Exhibit B of this License must be attached.
-
-Exhibit A - Source Code Form License Notice
--------------------------------------------
-
-  This Source Code Form is subject to the terms of the Mozilla Public
-  License, v. 2.0. If a copy of the MPL was not distributed with this
-  file, You can obtain one at https://mozilla.org/MPL/2.0/.
-
-If it is not possible or desirable to put the notice in a particular
-file, then You may include the notice in a location (such as a LICENSE
-file in a relevant directory) where a recipient would be likely to look
-for such a notice.
-
-You may add additional accurate notices of copyright ownership.
-
-Exhibit B - "Incompatible With Secondary Licenses" Notice
----------------------------------------------------------
-
-  This Source Code Form is "Incompatible With Secondary Licenses", as
-  defined by the Mozilla Public License, v. 2.0.
+    본 라이선스에서 허용하지 않은 사용에는 Spirit-Schema의 명시적 서면 허가가
+    필요합니다.
+
+11. 무보증 및 책임 제한
+
+    프로그램은 상품성, 특정 목적 적합성, 비침해성 및 정상 작동에 대한 명시적 또는
+    묵시적 보증 없이 "있는 그대로" 제공됩니다. 관련 법률이 허용하는 최대 범위에서
+    제작자는 프로그램의 사용 또는 사용 불능으로 발생한 직접적·간접적·우발적·특별
+    또는 결과적 손해와 데이터 손실에 책임을 지지 않습니다. 프로그램의 사용과 그
+    결과에 대한 위험은 사용자에게 있습니다.
+
+12. 제3자 구성요소
+
+    프로그램에 포함되거나 프로그램이 사용하는 제3자 구성요소는 각각의 기존
+    저작권과 라이선스를 따릅니다. 해당 고지는 THIRD_PARTY_NOTICES.md에서 확인할 수
+    있으며, 본 라이선스는 그 권리를 제한하거나 대체하지 않습니다.
+
+13. 라이선스의 성격
+
+    본 라이선스는 OSI가 승인한 오픈소스 라이선스가 아닙니다. 프로그램은 소스
+    공개형(Source-Available) 독점 프리웨어로 제공됩니다.
+
+향후 버전 및 별도 제공 항목
+
+향후 버전, 추가 기능 및 관련 서비스는 별도의 조건과 라이선스로 제공될 수
+있습니다. 현재 버전에 부여된 사용 허가는 향후 버전이나 별도 제공 항목에 대한
+권리를 부여하지 않으며, 제작자가 향후 버전을 현재와 동일한 조건으로 제공할
+의무를 의미하지 않습니다.
+
+
+English Version
+---------------
+
+This License applies to Tarkov Server Guard and related programs that
+Spirit-Schema (the "Licensor") distributes with this License, including their
+source code, executable files, documentation, and assets (collectively, the
+"Program").
+Third-party components remain subject to their respective licenses.
+
+1. Copyright and Reservation of Rights
+
+   Copyright in the Program is owned by Spirit-Schema. The Licensor reserves
+   all rights not expressly granted under this License.
+
+2. Permission for Free Use
+
+   The official, unmodified Program may be used free of charge for personal,
+   non-commercial purposes.
+
+3. Source Code Inspection
+
+   The source code may be inspected for safety verification, security audits,
+   and learning purposes.
+
+4. Private Modifications
+
+   You may privately modify the Program solely for personal, non-commercial
+   purposes. A modified Program must remain for your own use and must not be
+   provided to any other person or entity.
+
+5. No Sharing or Redistribution
+
+   Without the express written permission of the Licensor, you may not copy
+   for the purpose of sharing, publish, distribute, or redistribute original
+   or modified source code or binaries.
+
+6. No Distribution of Modifications or Commercial Use
+
+   Without the express written permission of the Licensor, you may not
+   distribute modifications, sell the Program, provide paid services using
+   the Program, use the Program commercially, or relicense the Program.
+
+7. Preservation of Notices
+
+   You may not remove, conceal, or alter any copyright, license, or creator
+   notice included with the Program.
+
+8. No Impersonation of the Official Program
+
+   You may not use names, icons, trademarks, or package configurations that
+   are likely to cause a modified or unofficial package to be mistaken for
+   the official Program.
+
+9. Sharing the Official Link
+
+   You may share the following official Spirit-Schema GitHub Releases link
+   without modification:
+   https://github.com/Spirit-Schema/tarkov-server-guard/releases
+
+10. Separate Permission
+
+    Any use not permitted by this License requires the express written
+    permission of Spirit-Schema.
+
+11. Disclaimer of Warranty and Limitation of Liability
+
+    THE PROGRAM IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+    PURPOSE, NON-INFRINGEMENT, OR CORRECT OPERATION. TO THE MAXIMUM EXTENT
+    PERMITTED BY APPLICABLE LAW, THE LICENSOR SHALL NOT BE LIABLE FOR ANY
+    DIRECT, INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS OF
+    DATA ARISING FROM THE USE OF, OR INABILITY TO USE, THE PROGRAM. YOU ASSUME
+    ALL RISK ARISING FROM USE OF THE PROGRAM AND ITS RESULTS.
+
+12. Third-Party Components
+
+    Third-party components included in or used by the Program remain subject
+    to their respective copyrights and licenses. Their notices are available
+    in THIRD_PARTY_NOTICES.md. This License does not restrict or replace those
+    rights.
+
+13. Nature of This License
+
+    This License is not an OSI-approved open-source license. The Program is
+    provided as source-available proprietary freeware.
+
+Future Versions and Separate Offerings
+
+Future versions, additional features, and related services may be offered
+under separate terms and licenses. The permission granted for the current
+version does not grant any rights to future versions or separately offered
+items, nor does it require the Licensor to provide future versions under the
+same terms.
