@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -351,6 +352,7 @@ namespace TarkovServerReporter
                 ApplicationUpdate candidate;
                 try
                 {
+                    EnsureTls12ForUpdateCheck();
                     candidate = await _engine.CheckForUpdateAsync(cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                 }
@@ -480,6 +482,12 @@ namespace TarkovServerReporter
         {
             try { _stateStore.Save(state); }
             catch { }
+        }
+
+        private static void EnsureTls12ForUpdateCheck()
+        {
+            ServicePointManager.SecurityProtocol =
+                ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12;
         }
 
         private static DateTime EnsureUtc(DateTime value)
