@@ -706,8 +706,9 @@ namespace TarkovServerReporter
             var updateRow = CreateRightAlignedHeaderRow();
             var version = CreateHeaderTextLabel(
                 "v" + GetApplicationSemanticVersion(),
-                new Font("Segoe UI", 9F, FontStyle.Bold),
+                new Font("Segoe UI", 11F, FontStyle.Bold),
                 TextMuted);
+            version.Margin = new Padding(2, 0, 2, 0);
             var versionSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
@@ -1048,7 +1049,7 @@ namespace TarkovServerReporter
             _mapValueLabel = AddDetailLine(details, "게임 · 맵/유형", "-", 72, 126);
             _timeValueLabel = AddDetailLine(details, "접속 시각", "-", 96, 126);
             _locationValueLabel = AddDetailLine(details, "데이터센터/지역", "조회 전", 120, 126);
-            _pingValueLabel = AddDetailLine(details, "현재 핑", "측정 안 함", 144, 126);
+            _pingValueLabel = AddDetailLine(details, "현재 핑", "조회 전", 144, 126);
             _actualRttValueLabel = AddDetailLine(details, "실게임 RTT", "-", 168, 126);
             _packetLossValueLabel = AddDetailLine(details, "실게임 패킷손실", "-", 192, 126);
 
@@ -1780,6 +1781,16 @@ namespace TarkovServerReporter
                                 e.CellBounds.Left,
                                 e.CellBounds.Top,
                                 e.CellBounds.Left,
+                                e.CellBounds.Bottom - 1);
+                    }
+                    if (e.ColumnIndex == 0)
+                    {
+                        using (var leftBorder = new Pen(Color.FromArgb(82, 94, 108), 1F))
+                            e.Graphics.DrawLine(
+                                leftBorder,
+                                headerPaintBounds.Left,
+                                e.CellBounds.Top,
+                                headerPaintBounds.Left,
                                 e.CellBounds.Bottom - 1);
                     }
                     TextRenderer.DrawText(
@@ -4717,7 +4728,7 @@ namespace TarkovServerReporter
         {
             if (session == null || !session.HasServerIp) return "-";
             if (firewall != null && firewall.Success && firewall.IsBlocked) return "차단 중";
-            if (ping == null) return "측정 안 함";
+            if (ping == null) return "조회 전";
             return ping.IsAvailable ? ping.AverageMs + " ms" : "응답 없음";
         }
 
@@ -4805,7 +4816,7 @@ namespace TarkovServerReporter
             }
             if (ping == null)
             {
-                _pingValueLabel.Text = "측정 안 함";
+                _pingValueLabel.Text = "조회 전";
                 _pingValueLabel.ForeColor = TextMuted;
                 return;
             }
