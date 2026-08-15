@@ -282,6 +282,97 @@ namespace TarkovServerReporter
         }
     }
 
+    public static class DataCenterRegionClassifier
+    {
+        public const string UnknownCode = "??";
+
+        private static readonly IDictionary<string, string> DisplayNames =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                { "KR", "한국" },
+                { "JP", "일본" },
+                { "CN", "중국" },
+                { "SG", "싱가포르" },
+                { "HK", "홍콩" },
+                { "TW", "대만" },
+                { "US", "미국" },
+                { "CA", "캐나다" },
+                { "BR", "브라질" },
+                { "CL", "칠레" },
+                { "CO", "콜롬비아" },
+                { "AU", "호주" },
+                { "AE", "아랍에미리트" },
+                { "RU", "러시아" },
+                { "TR", "튀르키예" },
+                { "GB", "영국" },
+                { "DE", "독일" },
+                { "FR", "프랑스" },
+                { "NL", "네덜란드" },
+                { "PL", "폴란드" },
+                { "FI", "핀란드" },
+                { "ZA", "남아프리카" }
+            };
+
+        public static string GetRegionCode(string dataCenterCode)
+        {
+            if (string.IsNullOrWhiteSpace(dataCenterCode)) return UnknownCode;
+            string value = dataCenterCode.Trim().ToUpperInvariant();
+            if (value.Length < 4 || value[2] != '-' || !IsAsciiLetter(value[0])
+                || !IsAsciiLetter(value[1]))
+                return UnknownCode;
+            return value.Substring(0, 2);
+        }
+
+        public static string GetDisplayName(string regionCode)
+        {
+            string normalized = NormalizeRegionCode(regionCode);
+            if (normalized == UnknownCode) return "기타/미확인";
+            string displayName;
+            return DisplayNames.TryGetValue(normalized, out displayName)
+                ? displayName
+                : normalized;
+        }
+
+        public static string GetDisplayLabel(string regionCode)
+        {
+            string normalized = NormalizeRegionCode(regionCode);
+            if (normalized == UnknownCode) return "기타/미확인";
+            string name = GetDisplayName(normalized);
+            return string.Equals(name, normalized, StringComparison.Ordinal)
+                ? normalized
+                : name + " (" + normalized + ")";
+        }
+
+        public static int GetSortOrder(string regionCode)
+        {
+            switch (NormalizeRegionCode(regionCode))
+            {
+                case "KR": return 0;
+                case "JP": return 1;
+                case "CN": return 2;
+                case "SG": return 3;
+                case "HK": return 4;
+                case "TW": return 5;
+                case UnknownCode: return int.MaxValue;
+                default: return 100;
+            }
+        }
+
+        private static string NormalizeRegionCode(string regionCode)
+        {
+            if (string.IsNullOrWhiteSpace(regionCode)) return UnknownCode;
+            string value = regionCode.Trim().ToUpperInvariant();
+            return value.Length == 2 && IsAsciiLetter(value[0]) && IsAsciiLetter(value[1])
+                ? value
+                : UnknownCode;
+        }
+
+        private static bool IsAsciiLetter(char value)
+        {
+            return value >= 'A' && value <= 'Z';
+        }
+    }
+
     public static class PingBatchPlanner
     {
         public static IList<string> GetUniqueServerIps(IEnumerable<ServerSession> sessions)
@@ -802,7 +893,7 @@ namespace TarkovServerReporter
 
     public static class NetworkServices
     {
-        internal const string ProductUserAgent = "TarkovServerGuard/0.7.3";
+        internal const string ProductUserAgent = "TarkovServerGuard/0.7.4";
         private static readonly DbIpLiteGeoService GeoService = CreateGeoService();
 
         private static DbIpLiteGeoService CreateGeoService()

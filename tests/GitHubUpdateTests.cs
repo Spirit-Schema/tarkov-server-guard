@@ -20,14 +20,17 @@ internal static class GitHubUpdateTests
         Run("semantic versions are strict and ordered", TestSemanticVersions);
         Run("production repository is fixed and token-free", TestFixedRepository);
         Run("GitHub checks add TLS 1.2 without replacing other protocols", TestTls12Boundary);
-        Run("update checks run at most once per day", TestDailyCheckCadence);
-        Run("a successful no-update check records the daily cadence", TestNoUpdateCadence);
+        Run("automatic update checks use a six-hour cadence", TestSixHourCheckCadence);
+        Run("a successful no-update check records the six-hour cadence", TestNoUpdateCadence);
         Run("future clock state cannot suppress checks", TestFutureClockRecovery);
         Run("only newer stable releases are accepted", TestStableUpgradeBoundary);
         Run("later defers the same release for 24 hours", TestDeferral);
         Run("network failures preserve state and remain retryable", TestFailureBoundary);
         Run("cancelled checks preserve state and remain retryable", TestCancellationBoundary);
         Run("missing Velopack performs no persistent check", TestUnavailableEngine);
+        Run("manual checks bypass cadence and same-version deferral", TestManualCheckBypassesSuppression);
+        Run("manual checks report current and failure outcomes", TestManualCheckOutcomes);
+        Run("manual and automatic checks share one single-flight gate", TestManualCheckSingleFlight);
         Run("update state is atomic and recovers from backup", TestStateBackupRecovery);
         Run("oversized update state is ignored safely", TestOversizedStateBoundary);
         Run("Velopack 1.2 runtime binding is compatible when present", TestVelopackRuntimeBinding);
@@ -78,7 +81,7 @@ internal static class GitHubUpdateTests
         });
     }
 
-    private static void TestDailyCheckCadence()
+    private static void TestSixHourCheckCadence()
     {
         var clock = new FakeClock(new DateTime(2026, 8, 15, 0, 0, 0, DateTimeKind.Utc));
         var engine = new FakeEngine("0.7.2");
@@ -87,12 +90,12 @@ internal static class GitHubUpdateTests
 
         Assert(Get(service) != null, "First update check did not return the candidate.");
         Assert(engine.CheckCount == 1, "First update check count mismatch.");
-        clock.UtcNowValue = clock.UtcNowValue.AddHours(23).AddMinutes(59);
-        Assert(Get(service) == null, "A second check ran before 24 hours.");
-        Assert(engine.CheckCount == 1, "Network boundary was entered before 24 hours.");
+        clock.UtcNowValue = clock.UtcNowValue.AddHours(5).AddMinutes(59);
+        Assert(Get(service) == null, "A second check ran before six hours.");
+        Assert(engine.CheckCount == 1, "Network boundary was entered before six hours.");
         clock.UtcNowValue = clock.UtcNowValue.AddMinutes(1);
-        Assert(Get(service) != null, "The 24-hour check did not run.");
-        Assert(engine.CheckCount == 2, "Daily update check count mismatch.");
+        Assert(Get(service) != null, "The six-hour check did not run.");
+        Assert(engine.CheckCount == 2, "Six-hour update check count mismatch.");
     }
 
     private static void TestTls12Boundary()
@@ -166,7 +169,7 @@ internal static class GitHubUpdateTests
             && store.State.DeferredUntilUtc == now.AddHours(6),
             "The successful no-update check changed deferral state.");
 
-        Assert(Get(service) == null, "A no-update result was checked again before 24 hours.");
+        Assert(Get(service) == null, "A no-update result was checked again before six hours.");
         Assert(engine.CheckCount == 1, "The successful no-update check was not throttled.");
     }
 
@@ -202,7 +205,7 @@ internal static class GitHubUpdateTests
         Assert(store.State.DeferredVersion == "0.7.2", "Deferred version was not stored.");
         Assert(store.State.DeferredUntilUtc == start.AddHours(24), "Deferral duration is not 24 hours.");
 
-        clock.UtcNowValue = start.AddHours(23).AddMinutes(59);
+        clock.UtcNowValue = start.AddHours(5).AddMinutes(59);
         Assert(Get(service) == null, "Deferred release was shown too soon.");
         Assert(engine.CheckCount == 1, "A deferred release caused an unnecessary check.");
         clock.UtcNowValue = start.AddHours(24);
@@ -290,6 +293,125 @@ internal static class GitHubUpdateTests
         Assert(Get(service) == null, "Unavailable update engine returned an update.");
         Assert(engine.CheckCount == 0, "Unavailable update engine entered its network boundary.");
         Assert(store.SaveCount == 0, "Portable mode wrote a misleading check timestamp.");
+    }
+
+    private static void TestManualCheckBypassesSuppression()
+    {
+        DateTime now = new DateTime(2026, 8, 15, 7, 30, 0, DateTimeKind.Utc);
+        var engine = new FakeEngine("0.7.2");
+        var store = new MemoryStateStore
+        {
+            State = new UpdateCheckState
+            {
+                LastCheckUtc = now,
+                DeferredVersion = "0.7.2",
+                DeferredUntilUtc = now.AddHours(24)
+            }
+        };
+        var service = new GitHubUpdateService(
+            "0.7.1",
+            engine,
+            store,
+            new FakeClock(now));
+
+        Assert(Get(service) == null, "Automatic cadence suppression did not apply.");
+        Assert(engine.CheckCount == 0, "Automatic suppressed check entered the engine.");
+
+        ManualUpdateCheckResult result = GetManual(service);
+        Assert(result.Status == ManualUpdateCheckStatus.UpdateAvailable,
+            "Manual check did not report the deferred update.");
+        Assert(result.Update != null && result.Update.VersionText == "0.7.2",
+            "Manual update result did not carry normalized update data.");
+        Assert(engine.CheckCount == 1, "Manual check did not enter the engine exactly once.");
+        Assert(store.State.LastCheckUtc == now,
+            "Successful manual check did not record its timestamp.");
+        Assert(store.State.DeferredVersion == "0.7.2"
+            && store.State.DeferredUntilUtc == now.AddHours(24),
+            "Manual check changed the existing later deferral.");
+    }
+
+    private static void TestManualCheckOutcomes()
+    {
+        DateTime now = new DateTime(2026, 8, 15, 7, 45, 0, DateTimeKind.Utc);
+
+        var currentStore = new MemoryStateStore();
+        var current = new GitHubUpdateService(
+            "0.7.1",
+            new FakeEngine("0.7.1"),
+            currentStore,
+            new FakeClock(now));
+        ManualUpdateCheckResult currentResult = GetManual(current);
+        Assert(currentResult.Status == ManualUpdateCheckStatus.UpToDate
+            && currentResult.Update == null,
+            "Current release did not produce the up-to-date outcome.");
+        Assert(currentStore.State.LastCheckUtc == now,
+            "Successful current-version check did not record its timestamp.");
+
+        var failureStore = new MemoryStateStore();
+        var failed = new GitHubUpdateService(
+            "0.7.1",
+            new FakeEngine(null) { CheckException = new IOException("offline") },
+            failureStore,
+            new FakeClock(now));
+        Assert(GetManual(failed).Status == ManualUpdateCheckStatus.Failed,
+            "Network failure did not produce the failed outcome.");
+        Assert(failureStore.SaveCount == 0,
+            "Failed manual check wrote a successful-check timestamp.");
+
+        var unavailableEngine = new FakeEngine("0.7.2") { Available = false };
+        var unavailable = new GitHubUpdateService(
+            "0.7.1",
+            unavailableEngine,
+            new MemoryStateStore(),
+            new FakeClock(now));
+        Assert(GetManual(unavailable).Status == ManualUpdateCheckStatus.Failed,
+            "Unavailable update engine did not produce the failed outcome.");
+        Assert(unavailableEngine.CheckCount == 0,
+            "Unavailable update engine entered its network boundary.");
+
+        var malformedStore = new MemoryStateStore();
+        var malformed = new GitHubUpdateService(
+            "0.7.1",
+            new FakeEngine("invalid-version"),
+            malformedStore,
+            new FakeClock(now));
+        Assert(GetManual(malformed).Status == ManualUpdateCheckStatus.Failed,
+            "Malformed engine result did not produce the failed outcome.");
+        Assert(malformedStore.SaveCount == 0,
+            "Malformed engine result wrote a successful-check timestamp.");
+    }
+
+    private static void TestManualCheckSingleFlight()
+    {
+        DateTime now = new DateTime(2026, 8, 15, 7, 50, 0, DateTimeKind.Utc);
+        var pending = new TaskCompletionSource<ApplicationUpdate>();
+        var engine = new FakeEngine(null) { PendingCheck = pending.Task };
+        var service = new GitHubUpdateService(
+            "0.7.1",
+            engine,
+            new MemoryStateStore(),
+            new FakeClock(now));
+
+        Task<ManualUpdateCheckResult> first = service.CheckForUpdateManuallyAsync(
+            CancellationToken.None);
+        Assert(engine.CheckCount == 1, "First manual check did not acquire the gate.");
+
+        ManualUpdateCheckResult second = GetManual(service);
+        Assert(second.Status == ManualUpdateCheckStatus.AlreadyRunning,
+            "Concurrent manual check did not report already-running.");
+        Assert(Get(service) == null,
+            "Concurrent automatic check escaped the shared single-flight gate.");
+        Assert(engine.CheckCount == 1,
+            "A concurrent check entered the engine more than once.");
+
+        pending.SetResult(new ApplicationUpdate("0.7.2", new object()));
+        ManualUpdateCheckResult completed = first.GetAwaiter().GetResult();
+        Assert(completed.Status == ManualUpdateCheckStatus.UpdateAvailable,
+            "First manual check did not complete after the gate was released.");
+        Assert(GetManual(service).Status == ManualUpdateCheckStatus.UpdateAvailable,
+            "Single-flight gate was not released after completion.");
+        Assert(engine.CheckCount == 2,
+            "A later manual check did not reacquire the released gate.");
     }
 
     private static void TestStateBackupRecovery()
@@ -396,6 +518,11 @@ internal static class GitHubUpdateTests
         return service.CheckForUpdateAsync(CancellationToken.None).GetAwaiter().GetResult();
     }
 
+    private static ManualUpdateCheckResult GetManual(GitHubUpdateService service)
+    {
+        return service.CheckForUpdateManuallyAsync(CancellationToken.None).GetAwaiter().GetResult();
+    }
+
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
@@ -448,6 +575,7 @@ internal static class GitHubUpdateTests
         public bool IsAvailable { get { return Available; } }
         public int CheckCount { get; private set; }
         public Exception CheckException { get; set; }
+        public Task<ApplicationUpdate> PendingCheck { get; set; }
         public SecurityProtocolType SecurityProtocolAtLastCheck { get; private set; }
 
         public FakeEngine(string candidate)
@@ -462,6 +590,7 @@ internal static class GitHubUpdateTests
             SecurityProtocolAtLastCheck = ServicePointManager.SecurityProtocol;
             cancellationToken.ThrowIfCancellationRequested();
             if (CheckException != null) throw CheckException;
+            if (PendingCheck != null) return PendingCheck;
             return Task.FromResult(string.IsNullOrEmpty(_candidate)
                 ? null
                 : new ApplicationUpdate(_candidate, new object()));

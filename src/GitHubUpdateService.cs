@@ -26,6 +26,43 @@ namespace TarkovServerReporter
         }
     }
 
+    internal enum ManualUpdateCheckStatus
+    {
+        UpdateAvailable,
+        UpToDate,
+        Failed,
+        AlreadyRunning
+    }
+
+    internal sealed class ManualUpdateCheckResult
+    {
+        public ManualUpdateCheckStatus Status { get; private set; }
+        public ApplicationUpdate Update { get; private set; }
+
+        private ManualUpdateCheckResult(
+            ManualUpdateCheckStatus status,
+            ApplicationUpdate update)
+        {
+            Status = status;
+            Update = update;
+        }
+
+        internal static ManualUpdateCheckResult Available(ApplicationUpdate update)
+        {
+            if (update == null) throw new ArgumentNullException("update");
+            return new ManualUpdateCheckResult(
+                ManualUpdateCheckStatus.UpdateAvailable,
+                update);
+        }
+
+        internal static ManualUpdateCheckResult FromStatus(ManualUpdateCheckStatus status)
+        {
+            if (status == ManualUpdateCheckStatus.UpdateAvailable)
+                throw new ArgumentException("An available result requires update data.", "status");
+            return new ManualUpdateCheckResult(status, null);
+        }
+    }
+
     internal interface IApplicationUpdateEngine
     {
         bool IsAvailable { get; }
@@ -294,7 +331,7 @@ namespace TarkovServerReporter
     internal sealed class GitHubUpdateService
     {
         internal const string RepositoryUrl = "https://github.com/Spirit-Schema/tarkov-server-guard";
-        internal static readonly TimeSpan CheckInterval = TimeSpan.FromHours(24);
+        internal static readonly TimeSpan CheckInterval = TimeSpan.FromHours(6);
         internal static readonly TimeSpan DeferInterval = TimeSpan.FromHours(24);
         private static readonly TimeSpan FutureClockTolerance = TimeSpan.FromMinutes(5);
 
@@ -341,7 +378,7 @@ namespace TarkovServerReporter
 
         internal async Task<ApplicationUpdate> CheckForUpdateAsync(CancellationToken cancellationToken)
         {
-            if (!_engine.IsAvailable) return null;
+            if (!IsEngineAvailable()) return null;
             if (Interlocked.CompareExchange(ref _checkInProgress, 1, 0) != 0) return null;
             try
             {
@@ -386,6 +423,61 @@ namespace TarkovServerReporter
             }
         }
 
+        internal async Task<ManualUpdateCheckResult> CheckForUpdateManuallyAsync(
+            CancellationToken cancellationToken)
+        {
+            if (!IsEngineAvailable())
+                return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.Failed);
+            if (Interlocked.CompareExchange(ref _checkInProgress, 1, 0) != 0)
+                return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.AlreadyRunning);
+
+            try
+            {
+                DateTime nowUtc = EnsureUtc(_clock.UtcNow);
+                ApplicationUpdate candidate;
+                try
+                {
+                    EnsureTls12ForUpdateCheck();
+                    candidate = await _engine.CheckForUpdateAsync(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.Failed);
+                }
+
+                if (candidate != null && string.IsNullOrWhiteSpace(candidate.VersionText))
+                    return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.Failed);
+
+                SemanticVersion candidateVersion = null;
+                if (candidate != null
+                    && !SemanticVersion.TryParse(candidate.VersionText, out candidateVersion))
+                    return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.Failed);
+
+                UpdateCheckState state = SafeLoadState();
+                state.LastCheckUtc = nowUtc;
+                SafeSaveState(state);
+
+                if (candidate == null
+                    || candidateVersion.IsPrerelease
+                    || candidateVersion.CompareTo(_currentVersion) <= 0)
+                {
+                    return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.UpToDate);
+                }
+
+                return ManualUpdateCheckResult.Available(
+                    new ApplicationUpdate(candidateVersion.ToString(), candidate.NativeUpdate));
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _checkInProgress, 0);
+            }
+        }
+
         internal async Task CheckAfterUiShownAsync(
             IWin32Window owner,
             CancellationToken cancellationToken)
@@ -400,6 +492,17 @@ namespace TarkovServerReporter
                 return;
             }
             if (update == null || cancellationToken.IsCancellationRequested) return;
+
+            await ShowUpdatePromptAsync(owner, update, cancellationToken);
+        }
+
+        internal Task ShowUpdatePromptAsync(
+            IWin32Window owner,
+            ApplicationUpdate update,
+            CancellationToken cancellationToken)
+        {
+            if (update == null || cancellationToken.IsCancellationRequested)
+                return Task.FromResult(0);
 
             using (var prompt = new UpdatePromptForm(update.VersionText))
             {
@@ -438,11 +541,12 @@ namespace TarkovServerReporter
                 }
                 catch
                 {
-                    return;
+                    return Task.FromResult(0);
                 }
                 if (result == DialogResult.Cancel)
                     Defer(update.VersionText);
             }
+            return Task.FromResult(0);
         }
 
         internal void Defer(string versionText)
@@ -482,6 +586,12 @@ namespace TarkovServerReporter
         {
             try { _stateStore.Save(state); }
             catch { }
+        }
+
+        private bool IsEngineAvailable()
+        {
+            try { return _engine.IsAvailable; }
+            catch { return false; }
         }
 
         private static void EnsureTls12ForUpdateCheck()

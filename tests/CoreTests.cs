@@ -39,6 +39,7 @@ namespace TarkovServerReporter.Tests
                 TestProductUserAgent();
                 TestConnectionResultFormatting();
                 TestGeoFormatting();
+                TestDataCenterRegionClassification();
                 TestFirewallCommandValidation();
             }
             finally
@@ -1053,14 +1054,39 @@ namespace TarkovServerReporter.Tests
 
         private static void TestProductUserAgent()
         {
-            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.7.3",
-                "network requests use the v0.7.3 product user agent");
+            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.7.4",
+                "network requests use the v0.7.4 product user agent");
         }
 
         private static void TestGeoFormatting()
         {
             var geo = new GeoInfo { Success = true, City = "Singapore", CountryCode = "SG" };
             Assert(geo.ToDisplayText() == "Singapore, SG", "geo display combines city and country code");
+        }
+
+        private static void TestDataCenterRegionClassification()
+        {
+            Assert(DataCenterRegionClassifier.GetRegionCode("KR-SEL01") == "KR"
+                && DataCenterRegionClassifier.GetRegionCode("jp-tk02") == "JP"
+                && DataCenterRegionClassifier.GetRegionCode(" SG-SIN01 ") == "SG",
+                "data center filter derives an invariant country prefix");
+            Assert(DataCenterRegionClassifier.GetRegionCode(null) == DataCenterRegionClassifier.UnknownCode
+                && DataCenterRegionClassifier.GetRegionCode("-") == DataCenterRegionClassifier.UnknownCode
+                && DataCenterRegionClassifier.GetRegionCode("K1-SEL01") == DataCenterRegionClassifier.UnknownCode
+                && DataCenterRegionClassifier.GetRegionCode("KOR-SEL01") == DataCenterRegionClassifier.UnknownCode,
+                "data center filter classifies malformed and missing values as unknown");
+            Assert(DataCenterRegionClassifier.GetDisplayName("kr") == "한국"
+                && DataCenterRegionClassifier.GetDisplayLabel("JP") == "일본 (JP)"
+                && DataCenterRegionClassifier.GetDisplayLabel("ZZ") == "ZZ"
+                && DataCenterRegionClassifier.GetDisplayLabel(null) == "기타/미확인",
+                "data center filter provides stable Korean labels with a safe fallback");
+            Assert(DataCenterRegionClassifier.GetSortOrder("KR")
+                    < DataCenterRegionClassifier.GetSortOrder("JP")
+                && DataCenterRegionClassifier.GetSortOrder("JP")
+                    < DataCenterRegionClassifier.GetSortOrder("CN")
+                && DataCenterRegionClassifier.GetSortOrder(DataCenterRegionClassifier.UnknownCode)
+                    == int.MaxValue,
+                "data center filter ordering is deterministic and keeps unknown last");
         }
 
         private static void TestConnectionResultFormatting()

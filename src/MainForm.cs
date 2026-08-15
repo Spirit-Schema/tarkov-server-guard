@@ -67,6 +67,8 @@ namespace TarkovServerReporter
         private Button _allFilterButton;
         private Button _eftFilterButton;
         private Button _arenaFilterButton;
+        private Button _regionFilterButton;
+        private Button _manualUpdateButton;
         private Button _recentPeriodButton;
         private Button _todayPeriodButton;
         private Button _sevenDaysPeriodButton;
@@ -77,6 +79,9 @@ namespace TarkovServerReporter
         private IList<ServerSession> _visibleSessions = new List<ServerSession>();
         private ServerSession _selectedSession;
         private TarkovGame? _gameFilter;
+        private readonly HashSet<string> _selectedRegionCodes =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private int _regionSourceCount;
         private SessionPeriodPreset _sessionPeriod = SessionPeriodPreset.Recent100;
         private DateTime? _customPeriodStart;
         private DateTime? _customPeriodEnd;
@@ -91,6 +96,8 @@ namespace TarkovServerReporter
         private bool _isFirewallChanging;
         private CancellationTokenSource _queryCancellation;
         private CancellationTokenSource _updateCheckCancellation;
+        private TableLayoutPanel _advancedDetailsLayout;
+        private ContextMenuStrip _regionFilterMenu;
         private string _appliedEftPath;
         private string _appliedArenaPath;
         private readonly object _launcherSelectionRefreshSync = new object();
@@ -119,6 +126,18 @@ namespace TarkovServerReporter
         {
             Note,
             Shield
+        }
+
+        private sealed class RegionMenuColorTable : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground { get { return SurfaceAlt; } }
+            public override Color MenuItemSelected { get { return Color.FromArgb(47, 56, 67); } }
+            public override Color MenuItemBorder { get { return Border; } }
+            public override Color ImageMarginGradientBegin { get { return SurfaceAlt; } }
+            public override Color ImageMarginGradientMiddle { get { return SurfaceAlt; } }
+            public override Color ImageMarginGradientEnd { get { return SurfaceAlt; } }
+            public override Color SeparatorDark { get { return Border; } }
+            public override Color SeparatorLight { get { return Border; } }
         }
 
         private sealed class ToolIconButton : Button
@@ -356,6 +375,11 @@ namespace TarkovServerReporter
                     updateCancellation.Dispose();
                     _updateCheckCancellation = null;
                 }
+                if (_regionFilterMenu != null)
+                {
+                    _regionFilterMenu.Dispose();
+                    _regionFilterMenu = null;
+                }
             }
             base.Dispose(disposing);
         }
@@ -393,10 +417,10 @@ namespace TarkovServerReporter
         {
             Text = "Tarkov Server Guard";
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(1180, 740);
+            MinimumSize = new Size(980, 740);
             Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
             ClientSize = new Size(
-                Math.Min(1540, Math.Max(1160, workingArea.Width - 40)),
+                Math.Min(1540, Math.Max(960, workingArea.Width - 40)),
                 Math.Min(950, Math.Max(700, workingArea.Height - 40)));
             BackColor = Background;
             ForeColor = TextPrimary;
@@ -557,75 +581,123 @@ namespace TarkovServerReporter
             };
             panel.Controls.Add(subtitle);
 
-            var version = new Label
+            var rightHeader = new TableLayoutPanel
             {
-                AutoSize = true,
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                Text = "v" + GetApplicationSemanticVersion(),
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                ForeColor = Accent,
-                Location = new Point(1000, 10)
-            };
-            panel.Resize += delegate { version.Left = panel.ClientSize.Width - version.Width - 4; };
-            panel.Controls.Add(version);
-
-            var attributionRow = new FlowLayoutPanel
-            {
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Dock = DockStyle.Right,
                 BackColor = Background,
-                FlowDirection = FlowDirection.LeftToRight,
+                ColumnCount = 1,
+                RowCount = 2,
+                Width = 310,
+                Margin = new Padding(0),
+                Padding = new Padding(0, 1, 4, 1)
+            };
+            rightHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            rightHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            rightHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+
+            var updateRow = CreateRightAlignedHeaderRow();
+            var version = CreateHeaderTextLabel(
+                "v" + GetApplicationSemanticVersion(),
+                new Font("Segoe UI", 9F, FontStyle.Bold),
+                Accent);
+            var updateSeparator = CreateHeaderTextLabel(
+                "·",
+                new Font("Segoe UI", 9F),
+                TextMuted);
+            _manualUpdateButton = CreateHeaderLinkButton(
+                "업데이트 확인",
+                "새 버전이 있는지 지금 확인합니다.");
+            _manualUpdateButton.AccessibleName = "업데이트 확인";
+            _manualUpdateButton.AccessibleDescription = "GitHub Releases에서 새 버전을 수동으로 확인합니다.";
+            _manualUpdateButton.Click += async delegate { await CheckForUpdatesManuallyAsync(); };
+            updateRow.Controls.Add(_manualUpdateButton);
+            updateRow.Controls.Add(updateSeparator);
+            updateRow.Controls.Add(version);
+            rightHeader.Controls.Add(updateRow, 0, 0);
+
+            var attributionRow = CreateRightAlignedHeaderRow();
+            var copyright = CreateHeaderTextLabel(
+                "© 2026 Spirit-Schema",
+                new Font("Segoe UI", 8.5F),
+                TextMuted);
+            var licenseSeparator = CreateHeaderTextLabel(
+                "·",
+                new Font("Segoe UI", 8.5F),
+                TextMuted);
+            Button licenseButton = CreateHeaderLinkButton(
+                "라이선스",
+                "라이선스 전문과 서드파티 고지를 확인합니다.");
+            licenseButton.AccessibleName = "라이선스";
+            licenseButton.AccessibleDescription = "라이선스 및 저작권 안내를 엽니다.";
+            licenseButton.Click += delegate { ShowLicenseDialog(); };
+            attributionRow.Controls.Add(licenseButton);
+            attributionRow.Controls.Add(licenseSeparator);
+            attributionRow.Controls.Add(copyright);
+            rightHeader.Controls.Add(attributionRow, 0, 1);
+
+            panel.Controls.Add(rightHeader);
+            return panel;
+        }
+
+        private static FlowLayoutPanel CreateRightAlignedHeaderRow()
+        {
+            return new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Background,
+                FlowDirection = FlowDirection.RightToLeft,
                 WrapContents = false,
                 Margin = new Padding(0),
-                Padding = new Padding(0, 0, 0, 2),
-                Location = new Point(1000, 32)
-            };
-            var copyright = new Label
-            {
-                AutoSize = true,
-                Text = "© 2026 Spirit-Schema ·",
-                Font = new Font("Segoe UI", 8.5F),
-                ForeColor = TextMuted,
-                BackColor = Background,
-                Margin = new Padding(0, 6, 2, 0),
                 Padding = new Padding(0)
             };
-            attributionRow.Controls.Add(copyright);
+        }
 
-            var licenseButton = new Button
+        private static Label CreateHeaderTextLabel(string text, Font font, Color color)
+        {
+            return new Label
             {
                 AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Text = "라이선스",
-                Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
-                ForeColor = Accent,
+                Text = text,
+                Font = font,
+                ForeColor = color,
+                BackColor = Background,
+                Margin = new Padding(2, 4, 2, 0),
+                Padding = new Padding(0)
+            };
+        }
+
+        private Button CreateHeaderLinkButton(string text, string toolTip)
+        {
+            var buttonFont = new Font("Malgun Gothic", 8.5F, FontStyle.Bold);
+            Size measured = TextRenderer.MeasureText(
+                text,
+                buttonFont,
+                Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            var button = new Button
+            {
+                AutoSize = false,
+                Size = new Size(measured.Width + 20, 24),
+                Text = text,
+                Font = buttonFont,
+                ForeColor = TextMuted,
                 BackColor = Background,
                 FlatStyle = FlatStyle.Flat,
                 Cursor = Cursors.Hand,
                 TabStop = true,
                 UseVisualStyleBackColor = false,
-                Margin = new Padding(0),
-                Padding = new Padding(3, 1, 3, 1),
-                AccessibleName = "라이선스",
-                AccessibleDescription = "라이선스 및 저작권 안내를 엽니다."
+                Margin = new Padding(0, 1, 0, 1),
+                Padding = new Padding(2, 0, 2, 0)
             };
-            licenseButton.FlatAppearance.BorderSize = 0;
-            licenseButton.FlatAppearance.MouseOverBackColor = SurfaceAlt;
-            licenseButton.FlatAppearance.MouseDownBackColor = Surface;
-            licenseButton.Click += delegate { ShowLicenseDialog(); };
-            _toolTip.SetToolTip(licenseButton, "라이선스 전문과 서드파티 고지를 확인합니다.");
-            attributionRow.Controls.Add(licenseButton);
-
-            EventHandler positionAttribution = delegate
-            {
-                attributionRow.Left = panel.ClientSize.Width - attributionRow.Width - 4;
-            };
-            panel.Resize += positionAttribution;
-            attributionRow.SizeChanged += positionAttribution;
-            panel.Controls.Add(attributionRow);
-            positionAttribution(null, EventArgs.Empty);
-            return panel;
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = SurfaceAlt;
+            button.FlatAppearance.MouseDownBackColor = Surface;
+            button.MouseEnter += delegate { button.ForeColor = AccentHover; };
+            button.MouseLeave += delegate { button.ForeColor = TextMuted; };
+            button.GotFocus += delegate { button.ForeColor = Accent; };
+            button.LostFocus += delegate { button.ForeColor = TextMuted; };
+            _toolTip.SetToolTip(button, toolTip);
+            return button;
         }
 
         private void ShowUsageNoticeDialog()
@@ -638,6 +710,71 @@ namespace TarkovServerReporter
         {
             using (var dialog = new LicenseForm())
                 dialog.ShowDialog(this);
+        }
+
+        private async Task CheckForUpdatesManuallyAsync()
+        {
+            if (_demoMode || IsDisposed || Disposing) return;
+            if (_updateCheckCancellation != null)
+            {
+                SetStatus("업데이트 확인이 이미 진행 중입니다.", Warning);
+                return;
+            }
+
+            var cancellation = new CancellationTokenSource();
+            _updateCheckCancellation = cancellation;
+            if (_manualUpdateButton != null)
+            {
+                _manualUpdateButton.Text = "확인 중…";
+                _manualUpdateButton.Enabled = false;
+            }
+            SetStatus("새 버전을 확인하는 중…", Accent);
+            try
+            {
+                GitHubUpdateService service = GitHubUpdateService.CreateProduction(
+                    GetApplicationSemanticVersion());
+                ManualUpdateCheckResult result = await service.CheckForUpdateManuallyAsync(
+                    cancellation.Token);
+                if (IsDisposed || Disposing || cancellation.IsCancellationRequested) return;
+
+                switch (result.Status)
+                {
+                    case ManualUpdateCheckStatus.UpdateAvailable:
+                        SetStatus("새 버전 v" + result.Update.VersionText + "을 찾았습니다.", Accent);
+                        await service.ShowUpdatePromptAsync(this, result.Update, cancellation.Token);
+                        break;
+                    case ManualUpdateCheckStatus.UpToDate:
+                        SetStatus("현재 v" + GetApplicationSemanticVersion() + "이 최신 버전입니다.", Success);
+                        break;
+                    case ManualUpdateCheckStatus.AlreadyRunning:
+                        SetStatus("업데이트 확인이 이미 진행 중입니다.", Warning);
+                        break;
+                    default:
+                        SetStatus("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", Warning);
+                        break;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (!IsDisposed && !Disposing)
+                    SetStatus("업데이트 확인을 취소했습니다.", Warning);
+            }
+            catch
+            {
+                if (!IsDisposed && !Disposing)
+                    SetStatus("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", Warning);
+            }
+            finally
+            {
+                if (ReferenceEquals(_updateCheckCancellation, cancellation))
+                    _updateCheckCancellation = null;
+                cancellation.Dispose();
+                if (_manualUpdateButton != null && !_manualUpdateButton.IsDisposed)
+                {
+                    _manualUpdateButton.Text = "업데이트 확인";
+                    _manualUpdateButton.Enabled = true;
+                }
+            }
         }
 
         private void ShowUsageNoticeOnce()
@@ -817,10 +954,11 @@ namespace TarkovServerReporter
             _actualRttValueLabel = AddDetailLine(details, "실게임 RTT", "-", 168, 126);
             _packetLossValueLabel = AddDetailLine(details, "실게임 패킷손실", "-", 192, 126);
 
-            var detailInfo = CreateDetailInfoLayout(out _detailInfoValueLabels);
-            detailInfo.Location = new Point(478, 40);
-            detailInfo.Size = new Size(500, 154);
-            detailInfo.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            _advancedDetailsLayout = CreateDetailInfoLayout(out _detailInfoValueLabels);
+            _advancedDetailsLayout.Location = new Point(478, 40);
+            _advancedDetailsLayout.Size = new Size(500, 154);
+            _advancedDetailsLayout.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+
             details.Resize += delegate
             {
                 int dpi = details.DeviceDpi <= 0 ? 96 : details.DeviceDpi;
@@ -828,15 +966,16 @@ namespace TarkovServerReporter
                 int minimumLeft = ScaleLogical(405, dpi);
                 int rightInset = ScaleLogical(8, dpi);
                 int bottomInset = ScaleLogical(4, dpi);
-                detailInfo.Left = Math.Min(preferredLeft, Math.Max(minimumLeft, details.ClientSize.Width / 2));
-                detailInfo.Width = Math.Max(
+                _advancedDetailsLayout.Left = Math.Min(preferredLeft, Math.Max(minimumLeft, details.ClientSize.Width / 2));
+                _advancedDetailsLayout.Width = Math.Max(
                     ScaleLogical(180, dpi),
-                    details.ClientSize.Width - detailInfo.Left - rightInset);
-                detailInfo.Height = ScaleLogical(154, dpi);
-                detailInfo.Top = Math.Max(0, details.ClientSize.Height - detailInfo.Height - bottomInset);
-                detailInfo.ColumnStyles[0].Width = ScaleLogical(132, dpi);
+                    details.ClientSize.Width - _advancedDetailsLayout.Left - rightInset);
+                _advancedDetailsLayout.Height = ScaleLogical(154, dpi);
+                _advancedDetailsLayout.Top = Math.Max(0, details.ClientSize.Height - _advancedDetailsLayout.Height - bottomInset);
+                _advancedDetailsLayout.ColumnStyles[0].Width = ScaleLogical(132, dpi);
+                UpdateCurrentServerResponsiveLayout(details);
             };
-            details.Controls.Add(detailInfo);
+            details.Controls.Add(_advancedDetailsLayout);
 
             var actions = new TableLayoutPanel
             {
@@ -1016,13 +1155,14 @@ namespace TarkovServerReporter
                 Dock = DockStyle.Fill,
                 BackColor = Surface,
                 ColumnCount = 2,
-                RowCount = 1,
+                RowCount = 2,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
             titleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             titleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             titleLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            titleLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0F));
             titleBar.Controls.Add(titleLayout);
 
             var periodAndTools = new FlowLayoutPanel
@@ -1085,8 +1225,10 @@ namespace TarkovServerReporter
             titleLayout.Controls.Add(periodAndTools, 0, 0);
             var filters = new FlowLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.None,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = false,
                 BackColor = Surface,
@@ -1096,14 +1238,54 @@ namespace TarkovServerReporter
             _allFilterButton = CreateFilterButton("전체");
             _eftFilterButton = CreateFilterButton("EFT");
             _arenaFilterButton = CreateFilterButton("Arena");
+            _regionFilterButton = CreateFilterButton("지역: 전체 ▾");
+            _regionFilterButton.Size = new Size(116, 28);
+            _regionFilterButton.TabStop = true;
+            _regionFilterButton.AccessibleName = "데이터센터 지역 필터";
+            _regionFilterButton.AccessibleDescription = "최근 목록에서 표시할 데이터센터 지역을 여러 개 선택합니다.";
             _allFilterButton.Click += delegate { SetGameFilter(null); };
             _eftFilterButton.Click += delegate { SetGameFilter(TarkovGame.Eft); };
             _arenaFilterButton.Click += delegate { SetGameFilter(TarkovGame.Arena); };
+            _regionFilterButton.Click += delegate { ShowRegionFilterMenu(); };
             filters.Controls.Add(_allFilterButton);
             filters.Controls.Add(_eftFilterButton);
             filters.Controls.Add(_arenaFilterButton);
+            filters.Controls.Add(_regionFilterButton);
             titleLayout.Controls.Add(filters, 1, 0);
             layout.Controls.Add(titleBar, 0, 0);
+
+            EventHandler updateToolbarLayout = delegate
+            {
+                int dpi = titleBar.DeviceDpi <= 0 ? 96 : titleBar.DeviceDpi;
+                bool compact = Width > 0
+                    && Width < ScaleLogical(1180, dpi);
+                if (compact)
+                {
+                    titleLayout.SetCellPosition(periodAndTools, new TableLayoutPanelCellPosition(0, 0));
+                    titleLayout.SetColumnSpan(periodAndTools, 2);
+                    titleLayout.SetCellPosition(filters, new TableLayoutPanelCellPosition(0, 1));
+                    titleLayout.SetColumnSpan(filters, 2);
+                    titleLayout.RowStyles[0].SizeType = SizeType.Percent;
+                    titleLayout.RowStyles[0].Height = 50F;
+                    titleLayout.RowStyles[1].SizeType = SizeType.Percent;
+                    titleLayout.RowStyles[1].Height = 50F;
+                    layout.RowStyles[0].Height = ScaleLogical(68, dpi);
+                }
+                else
+                {
+                    titleLayout.SetCellPosition(periodAndTools, new TableLayoutPanelCellPosition(0, 0));
+                    titleLayout.SetColumnSpan(periodAndTools, 1);
+                    titleLayout.SetCellPosition(filters, new TableLayoutPanelCellPosition(1, 0));
+                    titleLayout.SetColumnSpan(filters, 1);
+                    titleLayout.RowStyles[0].SizeType = SizeType.Percent;
+                    titleLayout.RowStyles[0].Height = 100F;
+                    titleLayout.RowStyles[1].SizeType = SizeType.Absolute;
+                    titleLayout.RowStyles[1].Height = 0F;
+                    layout.RowStyles[0].Height = ScaleLogical(34, dpi);
+                }
+            };
+            titleBar.Resize += updateToolbarLayout;
+            layout.Resize += updateToolbarLayout;
 
             _historyGrid = new DataGridView
             {
@@ -1644,6 +1826,16 @@ namespace TarkovServerReporter
                 valueLabels[index] = valueLabel;
             }
             return layout;
+        }
+
+        private void UpdateCurrentServerResponsiveLayout(Panel details)
+        {
+            if (details == null || _advancedDetailsLayout == null) return;
+            int dpi = details.DeviceDpi <= 0 ? 96 : details.DeviceDpi;
+            int responsiveThreshold = ScaleLogical(1180, dpi);
+            int availableWindowWidth = Width;
+            bool compact = availableWindowWidth > 0 && availableWindowWidth < responsiveThreshold;
+            _advancedDetailsLayout.Visible = !compact;
         }
 
         private static int ScaleLogical(int value, int dpi)
@@ -2617,7 +2809,16 @@ namespace TarkovServerReporter
                 ? (_gameFilter.Value == TarkovGame.Eft ? "EFT" : "Arena")
                 : "전체";
             string count;
-            if (_dateRangeScanIncomplete)
+            if (_selectedRegionCodes.Count > 0)
+            {
+                count = string.Format(
+                    "지역 필터 {0}개 표시 / 대상 {1}개",
+                    _visibleSessions.Count,
+                    _regionSourceCount);
+                if (_periodResultsTruncated)
+                    count += string.Format(" · 조건에 맞는 {0}개 중 최근 100개 기준", _periodMatchCount);
+            }
+            else if (_dateRangeScanIncomplete)
             {
                 count = _periodResultsTruncated
                     ? string.Format("최근 100개 표시 · 확인된 기록 {0}개 이상", _periodMatchCount)
@@ -2637,7 +2838,7 @@ namespace TarkovServerReporter
                     : string.Empty);
             SetStatus(
                 string.Format(
-                    "{0} · {1} 접속 기록 {2}{3}{4}",
+                    "{0} · {1} 접속 기록 · {2}{3}{4}",
                     GetSessionPeriodLabel(),
                     game,
                     count,
@@ -2655,6 +2856,31 @@ namespace TarkovServerReporter
             return message;
         }
 
+        private static string AppendLogRefreshSummary(
+            string message,
+            bool refreshPerformed,
+            bool refreshReadSucceeded,
+            int newLogCount,
+            int capExcludedCount)
+        {
+            if (!refreshPerformed) return message;
+            if (newLogCount <= 0)
+                return refreshReadSucceeded ? message + " · 새 로그 없음" : message;
+            string result = message + string.Format(" · 새 로그 {0}개 반영", newLogCount);
+            if (capExcludedCount > 0)
+                result += string.Format(" · 가장 오래된 {0}개 제외", capExcludedCount);
+            return result;
+        }
+
+        private string AppendRegionFilterSummary(string message)
+        {
+            if (_selectedRegionCodes.Count == 0) return message;
+            return message + string.Format(
+                " · 지역 필터 {0}/{1}개",
+                _visibleSessions.Count,
+                _regionSourceCount);
+        }
+
         private void SetGameFilter(TarkovGame? game)
         {
             if (_isRefreshing || _isMeasuring || _isFirewallChanging) return;
@@ -2664,12 +2890,194 @@ namespace TarkovServerReporter
             if (_visibleSessions.Count > 0) SetHistorySummaryStatus(TextMuted, false);
         }
 
+        private void ShowRegionFilterMenu()
+        {
+            if (_regionFilterButton == null || !_regionFilterButton.Enabled) return;
+            if (_regionFilterMenu != null)
+            {
+                _regionFilterMenu.Dispose();
+                _regionFilterMenu = null;
+            }
+
+            IList<ServerSession> source = GetRegionFilterSourceSessions();
+            var counts = source
+                .GroupBy(session => DataCenterRegionClassifier.GetRegionCode(
+                    session == null ? null : session.DataCenterCode),
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+            IList<string> regionCodes = counts.Keys
+                .Concat(_selectedRegionCodes)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(DataCenterRegionClassifier.GetSortOrder)
+                .ThenBy(DataCenterRegionClassifier.GetDisplayLabel, StringComparer.CurrentCulture)
+                .ToList();
+
+            _regionFilterMenu = new ContextMenuStrip
+            {
+                BackColor = SurfaceAlt,
+                ForeColor = TextPrimary,
+                Font = new Font("Malgun Gothic", 8.5F),
+                ShowCheckMargin = true,
+                ShowImageMargin = false,
+                Renderer = new ToolStripProfessionalRenderer(new RegionMenuColorTable())
+            };
+            _regionFilterMenu.AccessibleName = "데이터센터 지역 선택";
+            _regionFilterMenu.Closing += delegate(object sender, ToolStripDropDownClosingEventArgs args)
+            {
+                if (args.CloseReason == ToolStripDropDownCloseReason.ItemClicked)
+                    args.Cancel = true;
+            };
+
+            var allItem = new ToolStripMenuItem("전체 지역")
+            {
+                CheckOnClick = false,
+                Checked = _selectedRegionCodes.Count == 0,
+                BackColor = SurfaceAlt,
+                ForeColor = TextPrimary,
+                Tag = string.Empty
+            };
+            allItem.Click += delegate
+            {
+                _selectedRegionCodes.Clear();
+                ApplyRegionFilterChange();
+                UpdateRegionMenuChecks();
+            };
+            _regionFilterMenu.Items.Add(allItem);
+            _regionFilterMenu.Items.Add(new ToolStripSeparator());
+
+            if (regionCodes.Count == 0)
+            {
+                _regionFilterMenu.Items.Add(new ToolStripMenuItem("표시할 지역 기록 없음")
+                {
+                    Enabled = false,
+                    BackColor = SurfaceAlt,
+                    ForeColor = TextMuted
+                });
+            }
+            else
+            {
+                foreach (string regionCode in regionCodes)
+                {
+                    int count;
+                    counts.TryGetValue(regionCode, out count);
+                    var item = new ToolStripMenuItem(string.Format(
+                        "{0}   {1}개",
+                        DataCenterRegionClassifier.GetDisplayLabel(regionCode),
+                        count))
+                    {
+                        CheckOnClick = true,
+                        Checked = _selectedRegionCodes.Contains(regionCode),
+                        BackColor = SurfaceAlt,
+                        ForeColor = TextPrimary,
+                        Tag = regionCode
+                    };
+                    item.Click += delegate(object sender, EventArgs args)
+                    {
+                        var selectedItem = sender as ToolStripMenuItem;
+                        string code = selectedItem == null ? null : selectedItem.Tag as string;
+                        if (string.IsNullOrWhiteSpace(code)) return;
+                        if (selectedItem.Checked)
+                            _selectedRegionCodes.Add(code);
+                        else
+                            _selectedRegionCodes.Remove(code);
+                        ApplyRegionFilterChange();
+                        UpdateRegionMenuChecks();
+                    };
+                    _regionFilterMenu.Items.Add(item);
+                }
+            }
+
+            _regionFilterMenu.Show(_regionFilterButton, new Point(0, _regionFilterButton.Height));
+        }
+
+        private void UpdateRegionMenuChecks()
+        {
+            if (_regionFilterMenu == null) return;
+            foreach (ToolStripItem rawItem in _regionFilterMenu.Items)
+            {
+                var item = rawItem as ToolStripMenuItem;
+                if (item == null) continue;
+                if (!(item.Tag is string)) continue;
+                string code = item.Tag as string;
+                item.Checked = string.IsNullOrEmpty(code)
+                    ? _selectedRegionCodes.Count == 0
+                    : _selectedRegionCodes.Contains(code);
+            }
+        }
+
+        private void ApplyRegionFilterChange()
+        {
+            UpdateRegionFilterButton();
+            RefreshVisibleSessions();
+            SetHistorySummaryStatus(TextMuted, false);
+        }
+
+        private IList<ServerSession> GetRegionFilterSourceSessions()
+        {
+            return _allSessions
+                .Where(item => !_gameFilter.HasValue || item.Game == _gameFilter.Value)
+                .Where(IsSessionInSelectedPeriod)
+                .OrderByDescending(item => item.DisplayDetectedAt)
+                .ThenByDescending(item => item.LastUpdated)
+                .Take(100)
+                .ToList();
+        }
+
+        private void UpdateRegionFilterButton()
+        {
+            if (_regionFilterButton == null) return;
+            string text;
+            if (_selectedRegionCodes.Count == 0)
+            {
+                text = "지역: 전체 ▾";
+            }
+            else if (_selectedRegionCodes.Count == 1)
+            {
+                string regionCode = _selectedRegionCodes.First();
+                string displayName = DataCenterRegionClassifier.GetDisplayName(regionCode);
+                string candidate = "지역: " + displayName + " ▾";
+                int availableTextWidth = Math.Max(
+                    1,
+                    _regionFilterButton.ClientSize.Width - ScaleLogical(
+                        14,
+                        _regionFilterButton.DeviceDpi <= 0 ? 96 : _regionFilterButton.DeviceDpi));
+                Size measured = TextRenderer.MeasureText(
+                    candidate,
+                    _regionFilterButton.Font,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                string compactName = string.Equals(
+                    regionCode,
+                    DataCenterRegionClassifier.UnknownCode,
+                    StringComparison.OrdinalIgnoreCase)
+                        ? "기타"
+                        : regionCode;
+                text = measured.Width <= availableTextWidth
+                    ? candidate
+                    : "지역: " + compactName + " ▾";
+            }
+            else
+            {
+                text = "지역: " + _selectedRegionCodes.Count + "개 ▾";
+            }
+            _regionFilterButton.Text = text;
+            StyleFilterButton(_regionFilterButton, _selectedRegionCodes.Count > 0);
+            _toolTip.SetToolTip(
+                _regionFilterButton,
+                _selectedRegionCodes.Count == 0
+                    ? "최근 목록의 모든 데이터센터 지역을 표시합니다."
+                    : "선택 지역: " + string.Join(", ", _selectedRegionCodes
+                        .OrderBy(DataCenterRegionClassifier.GetSortOrder)
+                        .Select(DataCenterRegionClassifier.GetDisplayLabel)));
+        }
+
         private void UpdateFilterButtons()
         {
             if (_allFilterButton == null) return;
             StyleFilterButton(_allFilterButton, !_gameFilter.HasValue);
             StyleFilterButton(_eftFilterButton, _gameFilter == TarkovGame.Eft);
             StyleFilterButton(_arenaFilterButton, _gameFilter == TarkovGame.Arena);
+            UpdateRegionFilterButton();
         }
 
         private static void StyleFilterButton(Button button, bool selected)
@@ -2690,7 +3098,13 @@ namespace TarkovServerReporter
             _periodMatchCount = matchingSessions.Count;
             _periodResultsTruncated = _periodMatchCount > 100;
             IList<ServerSession> latestSessions = matchingSessions.Take(100).ToList();
-            _visibleSessions = ApplyHistorySort(latestSessions);
+            _regionSourceCount = latestSessions.Count;
+            IEnumerable<ServerSession> regionFilteredSessions = _selectedRegionCodes.Count == 0
+                ? latestSessions
+                : latestSessions.Where(session => _selectedRegionCodes.Contains(
+                    DataCenterRegionClassifier.GetRegionCode(
+                        session == null ? null : session.DataCenterCode)));
+            _visibleSessions = ApplyHistorySort(regionFilteredSessions.ToList());
             PopulateHistoryGrid(_visibleSessions);
             UpdateHistorySortGlyph();
 
@@ -3083,6 +3497,10 @@ namespace TarkovServerReporter
             int located = 0;
             int blocked = 0;
             int firewallKnown = 0;
+            int refreshedNewLogCount = 0;
+            int refreshCapExcludedCount = 0;
+            bool logRefreshPerformed = false;
+            bool logRefreshReadSucceeded = false;
             bool geoDatabaseReady = NetworkServices.HasUsableGeoDatabase;
             try
             {
@@ -3096,6 +3514,10 @@ namespace TarkovServerReporter
                     if (!string.IsNullOrWhiteSpace(paths.EftPath)
                         || !string.IsNullOrWhiteSpace(paths.ArenaPath))
                     {
+                        var previousSessionIds = new HashSet<string>(
+                            _allSessions.Where(session => session != null)
+                                .Select(GetSessionRefreshIdentity),
+                            StringComparer.OrdinalIgnoreCase);
                         SessionPeriodPreset requestedPeriod = _sessionPeriod;
                         DateTime? requestedStart = _customPeriodStart;
                         DateTime? requestedEnd = _customPeriodEnd;
@@ -3109,10 +3531,14 @@ namespace TarkovServerReporter
                             cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
                         RaidLogScanResult scan = refreshScan.Scan;
+                        logRefreshPerformed = true;
                         bool scanReadSucceeded = scan.ScanCompletedWithoutErrors
                             && refreshScan.AllConfiguredPathsAvailable;
                         bool scanResultsAreComplete = scan.TotalMatchingSessionsIsExact
                             && scanReadSucceeded;
+                        logRefreshReadSucceeded = scanReadSucceeded
+                            && (requestedPeriod == SessionPeriodPreset.Recent100
+                                || scanResultsAreComplete);
 
                         // RaidLogScanner reuses unchanged directory results, so a warm
                         // refresh only reparses new or modified raid folders. Refreshed
@@ -3134,6 +3560,23 @@ namespace TarkovServerReporter
                                 .Take(100)
                                 .ToList();
                         }
+                        var refreshedSessionIds = new HashSet<string>(
+                            refreshedSessions.Where(session => session != null)
+                                .Select(GetSessionRefreshIdentity),
+                            StringComparer.OrdinalIgnoreCase);
+                        refreshedNewLogCount = refreshedSessionIds.Count(identity =>
+                            !previousSessionIds.Contains(identity));
+                        int removedPreviousCount = previousSessionIds.Count(identity =>
+                            !refreshedSessionIds.Contains(identity));
+                        if (requestedPeriod == SessionPeriodPreset.Recent100
+                            && previousSessionIds.Count >= 100
+                            && refreshedSessionIds.Count >= 100
+                            && refreshedNewLogCount > 0)
+                        {
+                            refreshCapExcludedCount = Math.Min(
+                                refreshedNewLogCount,
+                                removedPreviousCount);
+                        }
                         _allSessions = refreshedSessions;
                         RefreshVisibleSessions();
                     }
@@ -3144,7 +3587,13 @@ namespace TarkovServerReporter
                 if (ipAddresses.Count == 0)
                 {
                     SetStatus(
-                        AddLogScanWarning("최신 로그에서 조회할 서버 IP를 찾지 못했습니다."),
+                        AddLogScanWarning(AppendLogRefreshSummary(
+                            AppendRegionFilterSummary(
+                                "최신 로그에서 조회할 서버 IP를 찾지 못했습니다."),
+                            logRefreshPerformed,
+                            logRefreshReadSucceeded,
+                            refreshedNewLogCount,
+                            refreshCapExcludedCount)),
                         Warning);
                     return;
                 }
@@ -3243,6 +3692,13 @@ namespace TarkovServerReporter
                     blocked,
                     located);
                 if (!geoDatabaseReady) summary += " · 지역 DB 준비 실패";
+                summary = AppendRegionFilterSummary(summary);
+                summary = AppendLogRefreshSummary(
+                    summary,
+                    logRefreshPerformed,
+                    logRefreshReadSucceeded,
+                    refreshedNewLogCount,
+                    refreshCapExcludedCount);
                 summary = AddLogScanWarning(summary);
                 SetStatus(
                     summary,
@@ -3905,6 +4361,7 @@ namespace TarkovServerReporter
             if (_allFilterButton != null) _allFilterButton.Enabled = controlsAvailable;
             if (_eftFilterButton != null) _eftFilterButton.Enabled = controlsAvailable;
             if (_arenaFilterButton != null) _arenaFilterButton.Enabled = controlsAvailable;
+            if (_regionFilterButton != null) _regionFilterButton.Enabled = controlsAvailable;
             if (_recentPeriodButton != null) _recentPeriodButton.Enabled = controlsAvailable;
             if (_todayPeriodButton != null) _todayPeriodButton.Enabled = controlsAvailable;
             if (_sevenDaysPeriodButton != null) _sevenDaysPeriodButton.Enabled = controlsAvailable;

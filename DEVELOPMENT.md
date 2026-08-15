@@ -20,16 +20,16 @@ UI 데모는 다음 명령으로 실행할 수 있습니다.
 
 개발용 단일 EXE 옆에 Velopack 런타임이 없으면 자동 업데이트만 안전하게 비활성화됩니다.
 
-## v0.7.3 배포 패키지
+## v0.7.4 배포 패키지
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package-release.ps1 -Version 0.7.3
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package-release.ps1 -Version 0.7.4
 ```
 
 패키징에는 .NET 8 런타임이 필요합니다. 스크립트는 SHA-256으로 고정 검증한 Velopack 1.2.0과 Newtonsoft.Json 13.0.4를 빌드 캐시에 준비하고 런타임 연결 테스트 후 다음 결과를 생성합니다.
 
-- `build\Releases-v0.7.3`: Setup, Portable, `.nupkg`, 업데이트 feed, SHA-256 목록
-- `review\TarkovServerGuard-v0.7.3`: 실행 검토용 복사본과 검증 파일
+- `build\Releases-v0.7.4`: Setup, Portable, `.nupkg`, 업데이트 feed, SHA-256 목록
+- `review\TarkovServerGuard-v0.7.4`: 실행 검토용 복사본과 검증 파일
 
 사용자 검토 폴더는 현재 실행 중인 검토본을 덮어쓰지 않도록 별도로 생성합니다.
 
