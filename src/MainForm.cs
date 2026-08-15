@@ -1264,26 +1264,28 @@ namespace TarkovServerReporter
             _packetLossValueLabel = AddDetailLine(details, "실게임 패킷손실", "-", 192, 126);
 
             _advancedDetailsLayout = CreateDetailInfoLayout(out _detailInfoValueLabels);
-            _advancedDetailsLayout.Location = new Point(478, 40);
+            _advancedDetailsLayout.Location = new Point(466, 40);
             _advancedDetailsLayout.Size = new Size(500, 154);
             _advancedDetailsLayout.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
 
             details.Resize += delegate
             {
                 int dpi = details.DeviceDpi <= 0 ? 96 : details.DeviceDpi;
-                int preferredLeft = ScaleLogical(478, dpi);
+                int leftShift = ScaleLogical(12, dpi);
+                int preferredLeft = ScaleLogical(478, dpi) - leftShift;
                 bool constrainedDetails = details.ClientSize.Width < ScaleLogical(760, dpi);
-                int minimumLeft = ScaleLogical(constrainedDetails ? 370 : 405, dpi);
+                int minimumLeft = ScaleLogical(constrainedDetails ? 370 : 405, dpi) - leftShift;
                 int rightInset = ScaleLogical(8, dpi);
                 int bottomInset = ScaleLogical(4, dpi);
-                _advancedDetailsLayout.Left = Math.Min(preferredLeft, Math.Max(minimumLeft, details.ClientSize.Width / 2));
+                int centeredLeft = Math.Max(0, details.ClientSize.Width / 2 - leftShift);
+                _advancedDetailsLayout.Left = Math.Min(preferredLeft, Math.Max(minimumLeft, centeredLeft));
                 _advancedDetailsLayout.Width = Math.Max(
                     ScaleLogical(180, dpi),
                     details.ClientSize.Width - _advancedDetailsLayout.Left - rightInset);
                 _advancedDetailsLayout.Height = ScaleLogical(154, dpi);
                 _advancedDetailsLayout.Top = Math.Max(0, details.ClientSize.Height - _advancedDetailsLayout.Height - bottomInset);
                 _advancedDetailsLayout.ColumnStyles[0].Width = ScaleLogical(
-                    constrainedDetails ? 106 : 132,
+                    constrainedDetails ? 112 : 138,
                     dpi);
                 UpdateCurrentServerResponsiveLayout(details);
             };
@@ -2406,7 +2408,7 @@ namespace TarkovServerReporter
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
                 GrowStyle = TableLayoutPanelGrowStyle.FixedSize
             };
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132F));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             for (int index = 0; index < keys.Length; index++)
             {
