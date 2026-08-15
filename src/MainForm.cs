@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
-    public sealed class MainForm : Form
+    public sealed class MainForm : BrandedForm
     {
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);
@@ -398,7 +398,6 @@ namespace TarkovServerReporter
             ForeColor = TextPrimary;
             Font = new Font("Malgun Gothic", 9F, FontStyle.Regular, GraphicsUnit.Point);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Icon = SystemIcons.Information;
         }
 
         private void BuildInterface()
@@ -835,7 +834,7 @@ namespace TarkovServerReporter
                 "사용자의 게임 로그·계정정보·SID·로컬경로는 전송하지 않습니다.\r\n"
                 + "차단·해제 시에만 Windows 관리자권한을 요청합니다.\r\n"
                 + "게임서버 IP 지역은 외부 API 대신 PC의 DB-IP Lite 데이터로 조회합니다.\r\n"
-                + "조회 시 새 월간 지역 DB가 있으면 자동으로 업데이트합니다. (약 60~70MB)\r\n"
+                + "조회 시 새 월간 지역 DB가 있으면 자동으로 업데이트합니다. (약 60~70MB교체)\r\n"
                 + "새 버전 확인을 위해 GitHub Releases에 접속합니다.\r\n"
                 + "DB-IP.com . CC BY 4.0";
             string[] privacyNoticeLines = privacyNoticeText.Split(
@@ -2278,7 +2277,7 @@ namespace TarkovServerReporter
             DateTime selectedEnd = (_customPeriodEnd ?? DateTime.Today).Date;
             DateTime selectedStart = (_customPeriodStart ?? selectedEnd.AddDays(-6)).Date;
 
-            using (var dialog = new Form())
+            using (var dialog = new BrandedForm())
             {
                 dialog.Text = "기간 직접 선택";
                 dialog.StartPosition = FormStartPosition.CenterParent;

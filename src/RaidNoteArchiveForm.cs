@@ -6,7 +6,7 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
-    public sealed class RaidNoteArchiveForm : Form
+    public sealed class RaidNoteArchiveForm : BrandedForm
     {
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);

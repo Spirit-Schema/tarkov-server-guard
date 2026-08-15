@@ -8,7 +8,7 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
-    public sealed class BlockedServersForm : Form
+    public sealed class BlockedServersForm : BrandedForm
     {
         private static readonly Color Background = Color.FromArgb(22, 27, 33);
         private static readonly Color Surface = Color.FromArgb(30, 37, 45);
@@ -130,7 +130,7 @@ namespace TarkovServerReporter
             ForeColor = TextPrimary;
             Font = new Font("Malgun Gothic", 9F, FontStyle.Regular, GraphicsUnit.Point);
             AutoScaleMode = AutoScaleMode.Dpi;
-            ShowIcon = false;
+            ShowIcon = true;
 
             var root = new TableLayoutPanel
             {

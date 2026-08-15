@@ -4,7 +4,7 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
-    internal sealed class UpdatePromptForm : Form
+    internal sealed class UpdatePromptForm : BrandedForm
     {
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);

@@ -4,7 +4,7 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
-    public sealed class ArenaBlockWarningForm : Form
+    public sealed class ArenaBlockWarningForm : BrandedForm
     {
         internal const string DialogTitle = "아레나 서버 차단";
         internal const string WarningText =

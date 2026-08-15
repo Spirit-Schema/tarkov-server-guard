@@ -36,7 +36,7 @@ namespace TarkovServerReporter
         }
     }
 
-    public sealed class RaidNoteForm : Form
+    public sealed class RaidNoteForm : BrandedForm
     {
         internal const string DefaultNoteTemplate = RaidNoteStore.LegacyDefaultNoteTemplate;
         internal const string NicknamePlaceholderText = "유저닉네임\r\n1.\r\n2.\r\n3.";

@@ -39,7 +39,7 @@ namespace TarkovServerReporter
         }
     }
 
-    public sealed class UserReportMemoForm : Form
+    public sealed class UserReportMemoForm : BrandedForm
     {
         private const int MaximumVisibleEntryCount = 50;
 

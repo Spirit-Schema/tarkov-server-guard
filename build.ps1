@@ -15,6 +15,11 @@ $distRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [IO.Path]::GetFullPath((Join-Path $projectRoot $OutputDirectory))
 }
 $buildRoot = Join-Path $projectRoot 'build'
+$appIcon = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg.ico'
+
+if (-not (Test-Path -LiteralPath $appIcon -PathType Leaf)) {
+    throw "앱 아이콘을 찾지 못했습니다: $appIcon"
+}
 
 $compilerCandidates = @(
     'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe',
@@ -45,9 +50,11 @@ $appArguments = @(
     '/warn:4',
     ('/out:' + $appOutput),
     ('/win32manifest:' + (Join-Path $projectRoot 'app.manifest')),
+    ('/win32icon:' + $appIcon),
     '/reference:System.Drawing.dll',
     '/reference:System.Windows.Forms.dll'
 ) + $commonReferences + @(
+    (Join-Path $sourceRoot 'AppBranding.cs'),
     (Join-Path $sourceRoot 'Program.cs'),
     (Join-Path $sourceRoot 'MainForm.cs'),
     (Join-Path $sourceRoot 'GitHubUpdateService.cs'),
@@ -146,6 +153,7 @@ if (-not $SkipTests) {
         '/reference:System.Drawing.dll',
         '/reference:System.Windows.Forms.dll'
     ) + $commonReferences + @(
+        (Join-Path $sourceRoot 'AppBranding.cs'),
         (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
         (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
         (Join-Path $sourceRoot 'ServerReportCore.cs'),
@@ -173,6 +181,7 @@ if (-not $SkipTests) {
         '/reference:System.Drawing.dll',
         '/reference:System.Windows.Forms.dll'
     ) + $commonReferences + @(
+        (Join-Path $sourceRoot 'AppBranding.cs'),
         (Join-Path $sourceRoot 'GitHubUpdateService.cs'),
         (Join-Path $sourceRoot 'UpdatePromptForm.cs'),
         (Join-Path $testRoot 'GitHubUpdateTests.cs')

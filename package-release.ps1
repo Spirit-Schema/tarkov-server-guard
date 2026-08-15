@@ -15,6 +15,11 @@ $releasesRoot = Join-Path $buildRoot ("Releases-v" + $Version)
 $releasesStageRoot = Join-Path $buildRoot ("Releases-v" + $Version + '-staging')
 $reviewRoot = Join-Path $projectRoot ("review\TarkovServerGuard-v" + $Version)
 $releaseNotes = Join-Path $projectRoot ("release-notes-v" + $Version + '.md')
+$appIcon = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg.ico'
+
+if (-not (Test-Path -LiteralPath $appIcon -PathType Leaf)) {
+    throw "앱 아이콘을 찾지 못했습니다: $appIcon"
+}
 
 function Reset-ProjectChild([string]$Path, [string]$ExpectedParent) {
     $fullPath = [IO.Path]::GetFullPath($Path)
@@ -61,10 +66,21 @@ Copy-Item -Force -LiteralPath $dependencies.VelopackDll `
     -Destination (Join-Path $publishRoot 'Velopack.dll')
 Copy-Item -Force -LiteralPath $dependencies.NewtonsoftJsonDll `
     -Destination (Join-Path $publishRoot 'Newtonsoft.Json.dll')
-foreach ($document in @('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+foreach ($document in @(
+    'README.md',
+    'PRIVACY.md',
+    'TROUBLESHOOTING.md',
+    'DEVELOPMENT.md',
+    'LICENSE',
+    'THIRD_PARTY_NOTICES.md')) {
     Copy-Item -Force -LiteralPath (Join-Path $projectRoot $document) `
         -Destination (Join-Path $publishRoot $document)
 }
+$publishBrandingRoot = Join-Path $publishRoot 'assets\branding'
+New-Item -ItemType Directory -Force -Path $publishBrandingRoot | Out-Null
+Copy-Item -Force `
+    -LiteralPath (Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg-icon-master.png') `
+    -Destination (Join-Path $publishBrandingRoot 'tarkov-server-guard-tsg-icon-master.png')
 
 if (-not $SkipTests) {
     $updateTestRoot = Join-Path $buildRoot 'update-runtime-test'
@@ -90,6 +106,7 @@ $vpkArguments = @(
     '--mainExe', 'TarkovServerGuard.exe',
     '--packTitle', 'Tarkov Server Guard',
     '--packAuthors', 'Spirit-Schema',
+    '--icon', $appIcon,
     '--outputDir', $releasesStageRoot,
     '--instLocation', 'PerUser',
     # The bootstrap call is intentionally reflection-based so raw developer
@@ -143,6 +160,10 @@ if (Test-Path -LiteralPath $releaseNotes) {
 }
 Copy-Item -Force -Path (Join-Path $projectRoot 'tools') `
     -Destination $sourceReviewRoot -Recurse
+$brandingReviewRoot = Join-Path $sourceReviewRoot 'assets\branding'
+New-Item -ItemType Directory -Force -Path $brandingReviewRoot | Out-Null
+Copy-Item -Force -Path (Join-Path $projectRoot 'assets\branding\*') `
+    -Destination $brandingReviewRoot
 
 $hashFiles = Get-ChildItem -LiteralPath $reviewRoot -File -Recurse |
     Sort-Object FullName

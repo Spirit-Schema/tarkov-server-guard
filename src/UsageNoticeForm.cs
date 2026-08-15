@@ -5,7 +5,7 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
-    public sealed class UsageNoticeForm : Form
+    public sealed class UsageNoticeForm : BrandedForm
     {
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color SurfaceAlt = Color.FromArgb(31, 38, 46);
