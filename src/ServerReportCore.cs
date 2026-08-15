@@ -47,6 +47,13 @@ namespace TarkovServerReporter
         Practice
     }
 
+    public enum RaidOperationState
+    {
+        Unknown,
+        InProgress,
+        Completed
+    }
+
     public sealed class ServerSession
     {
         public TarkovGame Game { get; set; }
@@ -82,6 +89,9 @@ namespace TarkovServerReporter
         public int? DisconnectReason { get; set; }
         public DateTime? ConnectionEndedAt { get; set; }
         public DateTime? IpDetectedAt { get; set; }
+        public DateTime? OperationStartedAt { get; set; }
+        public DateTime? OperationEndedAt { get; set; }
+        public RaidOperationState OperationState { get; set; }
 
         public bool HasServerIp
         {
@@ -96,6 +106,19 @@ namespace TarkovServerReporter
         public int ReconnectCount
         {
             get { return Math.Max(0, ConnectionAttempts - 1); }
+        }
+
+        public TimeSpan? OperationDuration
+        {
+            get
+            {
+                if (OperationState != RaidOperationState.Completed
+                    || !OperationStartedAt.HasValue
+                    || !OperationEndedAt.HasValue
+                    || OperationEndedAt.Value <= OperationStartedAt.Value)
+                    return null;
+                return OperationEndedAt.Value - OperationStartedAt.Value;
+            }
         }
 
         public string GameDisplayName
@@ -293,6 +316,7 @@ namespace TarkovServerReporter
                 { "JP", "일본" },
                 { "CN", "중국" },
                 { "SG", "싱가포르" },
+                { "MY", "말레이시아" },
                 { "HK", "홍콩" },
                 { "TW", "대만" },
                 { "US", "미국" },
@@ -320,13 +344,13 @@ namespace TarkovServerReporter
             if (value.Length < 4 || value[2] != '-' || !IsAsciiLetter(value[0])
                 || !IsAsciiLetter(value[1]))
                 return UnknownCode;
-            return value.Substring(0, 2);
+            return NormalizeRegionCode(value.Substring(0, 2));
         }
 
         public static string GetDisplayName(string regionCode)
         {
             string normalized = NormalizeRegionCode(regionCode);
-            if (normalized == UnknownCode) return "기타/미확인";
+            if (normalized == UnknownCode) return "PVE로컬/기타";
             string displayName;
             return DisplayNames.TryGetValue(normalized, out displayName)
                 ? displayName
@@ -336,7 +360,7 @@ namespace TarkovServerReporter
         public static string GetDisplayLabel(string regionCode)
         {
             string normalized = NormalizeRegionCode(regionCode);
-            if (normalized == UnknownCode) return "기타/미확인";
+            if (normalized == UnknownCode) return "PVE로컬/기타";
             string name = GetDisplayName(normalized);
             return string.Equals(name, normalized, StringComparison.Ordinal)
                 ? normalized
@@ -362,9 +386,11 @@ namespace TarkovServerReporter
         {
             if (string.IsNullOrWhiteSpace(regionCode)) return UnknownCode;
             string value = regionCode.Trim().ToUpperInvariant();
-            return value.Length == 2 && IsAsciiLetter(value[0]) && IsAsciiLetter(value[1])
-                ? value
-                : UnknownCode;
+            if (value.Length != 2 || !IsAsciiLetter(value[0]) || !IsAsciiLetter(value[1]))
+                return UnknownCode;
+
+            // Live data has used SN-SINxx for Singapore as well as the usual SG-SINxx.
+            return string.Equals(value, "SN", StringComparison.Ordinal) ? "SG" : value;
         }
 
         private static bool IsAsciiLetter(char value)
@@ -861,6 +887,9 @@ namespace TarkovServerReporter
                 LogFilePath = session.LogFilePath,
                 IpAddress = session.IpAddress,
                 MapName = session.MapName,
+                OperationStartedAt = session.OperationStartedAt,
+                OperationEndedAt = session.OperationEndedAt,
+                OperationState = session.OperationState,
                 IpDetectedAt = session.IpDetectedAt
             };
         }

@@ -760,6 +760,12 @@ namespace TarkovServerReporter
         private static readonly Regex GameStartedRegex = new Regex(
             @"\bGameStarted:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex EftPostRaidProfileRegex = new Regex(
+            @"\bPrepareSelectedProfileLocally\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex ArenaMatchEndRegex = new Regex(
+            @"\bGameplayState:\s*MatchEnd\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex ArenaMatchingStartedRegex = new Regex(
             @"MatchingProgressState:\s*MatchingStarted",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -1049,15 +1055,26 @@ namespace TarkovServerReporter
             }
 
             IList<ServerSession> scanned = ParseDirectory(directory, relevantFiles, game);
-            lock (CacheLock)
+            // An in-progress value depends on wall-clock freshness even when the file length and
+            // write timestamp do not change. Reparse that single live folder so it naturally
+            // becomes Unknown after the conservative activity window instead of being cached
+            // as "in progress" forever.
+            if (!scanned.Any(session => session.OperationState == RaidOperationState.InProgress))
             {
-                DirectoryCache[cacheKey] = new CachedDirectory
+                lock (CacheLock)
                 {
-                    Length = combinedLength,
-                    LastWriteUtc = latestWriteUtc,
-                    FileCount = relevantFiles.Length,
-                    Sessions = scanned.Select(CloneSession).ToList()
-                };
+                    DirectoryCache[cacheKey] = new CachedDirectory
+                    {
+                        Length = combinedLength,
+                        LastWriteUtc = latestWriteUtc,
+                        FileCount = relevantFiles.Length,
+                        Sessions = scanned.Select(CloneSession).ToList()
+                    };
+                }
+            }
+            else
+            {
+                lock (CacheLock) DirectoryCache.Remove(cacheKey);
             }
             return scanned;
         }
@@ -1072,6 +1089,8 @@ namespace TarkovServerReporter
             var mapPresets = new List<MapPresetEvent>();
             var gameCreatedEvents = new List<TimedLogEvent>();
             var gameStartedEvents = new List<TimedLogEvent>();
+            var eftPostRaidEvents = new List<TimedLogEvent>();
+            var arenaMatchEndEvents = new List<TimedLogEvent>();
             FileInfo[] applicationFiles = relevantFiles
                 .Where(file => file.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0)
                 .OrderBy(file => file.LastWriteTimeUtc)
@@ -1132,6 +1151,9 @@ namespace TarkovServerReporter
                         });
                     }
 
+                    if (GameStartedRegex.IsMatch(line))
+                        gameStartedEvents.Add(new TimedLogEvent { Timestamp = timestamp });
+
                     if (game == TarkovGame.Eft)
                     {
                         Match mapMatch = LegacyMapRegex.Match(line);
@@ -1145,8 +1167,8 @@ namespace TarkovServerReporter
                         }
                         if (GameCreatedRegex.IsMatch(line))
                             gameCreatedEvents.Add(new TimedLogEvent { Timestamp = timestamp });
-                        if (GameStartedRegex.IsMatch(line))
-                            gameStartedEvents.Add(new TimedLogEvent { Timestamp = timestamp });
+                        if (EftPostRaidProfileRegex.IsMatch(line))
+                            eftPostRaidEvents.Add(new TimedLogEvent { Timestamp = timestamp });
                     }
                 }
             }
@@ -1155,6 +1177,7 @@ namespace TarkovServerReporter
             mapPresets.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
             gameCreatedEvents.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
             gameStartedEvents.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
+            eftPostRaidEvents.Sort((left, right) => left.Timestamp.CompareTo(right.Timestamp));
 
             var sessionsByKey = new Dictionary<string, ServerSession>(StringComparer.OrdinalIgnoreCase);
             string legacyIp = null;
@@ -1175,6 +1198,12 @@ namespace TarkovServerReporter
                 foreach (string line in ReadLines(file.FullName))
                 {
                     DateTime lineTimestamp;
+                    if (game == TarkovGame.Arena
+                        && ArenaMatchEndRegex.IsMatch(line)
+                        && TryParseTimestamp(line, out lineTimestamp))
+                    {
+                        arenaMatchEndEvents.Add(new TimedLogEvent { Timestamp = lineTimestamp });
+                    }
                     if (game == TarkovGame.Arena
                         && ArenaMatchingStartedRegex.IsMatch(line)
                         && TryParseTimestamp(line, out lineTimestamp))
@@ -1277,6 +1306,12 @@ namespace TarkovServerReporter
             ApplyNetworkEvents(
                 sessions,
                 relevantFiles.Where(file => file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0));
+            ApplyOperationTimes(
+                sessions,
+                game,
+                gameStartedEvents,
+                game == TarkovGame.Arena ? arenaMatchEndEvents : eftPostRaidEvents,
+                relevantFiles);
             if (game == TarkovGame.Eft)
             {
                 ApplyUserReportEvents(
@@ -1284,6 +1319,141 @@ namespace TarkovServerReporter
                     relevantFiles.Where(file => file.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0));
             }
             return sessions.OrderByDescending(item => item.DisplayDetectedAt).ToList();
+        }
+
+        private static void ApplyOperationTimes(
+            IList<ServerSession> sessions,
+            TarkovGame game,
+            IEnumerable<TimedLogEvent> gameStartedEvents,
+            IEnumerable<TimedLogEvent> terminalEvents,
+            IEnumerable<FileInfo> relevantFiles)
+        {
+            if (sessions == null || sessions.Count == 0) return;
+
+            List<DateTime> starts = gameStartedEvents
+                .Select(item => item.Timestamp)
+                .OrderBy(timestamp => timestamp)
+                .ToList();
+            List<DateTime> terminals = terminalEvents
+                .Select(item => item.Timestamp)
+                .OrderBy(timestamp => timestamp)
+                .ToList();
+            List<ServerSession> ordered = sessions
+                .Where(session => session != null)
+                .OrderBy(session => session.DisplayDetectedAt)
+                .ToList();
+            DateTime now = DateTime.Now;
+
+            for (int index = 0; index < ordered.Count; index++)
+            {
+                ServerSession session = ordered[index];
+                session.OperationStartedAt = null;
+                session.OperationEndedAt = null;
+                session.OperationState = RaidOperationState.Unknown;
+
+                DateTime assignment = session.DisplayDetectedAt;
+                DateTime? nextAssignment = index + 1 < ordered.Count
+                    ? (DateTime?)ordered[index + 1].DisplayDetectedAt
+                    : null;
+                DateTime? started = starts
+                    .Where(timestamp => timestamp >= assignment
+                        && timestamp <= assignment.AddMinutes(30)
+                        && (!nextAssignment.HasValue || timestamp < nextAssignment.Value))
+                    .Select(timestamp => (DateTime?)timestamp)
+                    .FirstOrDefault();
+                if (!started.HasValue) continue;
+
+                session.OperationStartedAt = started;
+                DateTime? nextGameStart = starts
+                    .Where(timestamp => timestamp > started.Value)
+                    .Select(timestamp => (DateTime?)timestamp)
+                    .FirstOrDefault();
+                DateTime? endBoundary = MinTimestamp(nextAssignment, nextGameStart);
+
+                DateTime? explicitTerminal = terminals
+                    .Where(timestamp => timestamp > started.Value
+                        && (!endBoundary.HasValue || timestamp < endBoundary.Value))
+                    .Select(timestamp => (DateTime?)timestamp)
+                    .FirstOrDefault();
+
+                // EFT's normal reason 0 disconnect is closer to the actual raid end than the
+                // subsequent profile refresh. ApplyNetworkEvents retains only the final attempt,
+                // so a reason 0 followed by a reconnect cannot prematurely end the operation.
+                DateTime? networkTerminal = null;
+                if (game == TarkovGame.Eft
+                    && session.DisconnectReason == 0
+                    && session.ConnectionEndedAt.HasValue
+                    && session.ConnectionEndedAt.Value > started.Value
+                    && (!endBoundary.HasValue || session.ConnectionEndedAt.Value < endBoundary.Value))
+                {
+                    networkTerminal = session.ConnectionEndedAt;
+                }
+
+                DateTime? ended = MinTimestamp(networkTerminal, explicitTerminal);
+                if (ended.HasValue)
+                {
+                    TimeSpan duration = ended.Value - started.Value;
+                    if (duration > TimeSpan.Zero && duration <= TimeSpan.FromHours(6))
+                    {
+                        session.OperationEndedAt = ended;
+                        session.OperationState = RaidOperationState.Completed;
+                    }
+                    continue;
+                }
+
+                bool hasOutOfOrderTerminal = terminals.Any(timestamp =>
+                    timestamp >= assignment
+                    && timestamp <= started.Value
+                    && (!endBoundary.HasValue || timestamp < endBoundary.Value));
+                bool isLastOperation = !nextAssignment.HasValue && !nextGameStart.HasValue;
+                bool hasRecentOperationActivity = HasRecentLogActivity(
+                    relevantFiles.Where(file => session.HasServerIp
+                        ? file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0
+                        : file.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0),
+                    now);
+                bool hasActiveConnectionEvidence = !session.HasServerIp
+                    || (session.ConnectedOnce
+                        && session.CurrentAttemptConnected
+                        && !session.HasDisconnectRecord
+                        && !session.TimedOut);
+                TimeSpan elapsed = now - started.Value;
+                if (!hasOutOfOrderTerminal
+                    && isLastOperation
+                    && hasRecentOperationActivity
+                    && hasActiveConnectionEvidence
+                    && elapsed >= TimeSpan.Zero
+                    && elapsed <= TimeSpan.FromHours(6))
+                {
+                    session.OperationState = RaidOperationState.InProgress;
+                }
+            }
+        }
+
+        private static DateTime? MinTimestamp(DateTime? first, DateTime? second)
+        {
+            if (!first.HasValue) return second;
+            if (!second.HasValue) return first;
+            return first.Value <= second.Value ? first : second;
+        }
+
+        private static bool HasRecentLogActivity(IEnumerable<FileInfo> relevantFiles, DateTime now)
+        {
+            DateTime latestWriteUtc = DateTime.MinValue;
+            foreach (FileInfo file in relevantFiles ?? Enumerable.Empty<FileInfo>())
+            {
+                try
+                {
+                    file.Refresh();
+                    if (file.LastWriteTimeUtc > latestWriteUtc) latestWriteUtc = file.LastWriteTimeUtc;
+                }
+                catch
+                {
+                    // A rotating file cannot by itself prove that a historical raid is active.
+                }
+            }
+            if (latestWriteUtc == DateTime.MinValue) return false;
+            TimeSpan age = now.ToUniversalTime() - latestWriteUtc;
+            return age >= TimeSpan.FromMinutes(-2) && age <= TimeSpan.FromMinutes(10);
         }
 
         private static ServerSession CreateRichSession(
@@ -1848,6 +2018,13 @@ namespace TarkovServerReporter
                     existing.RaidPurpose = candidate.RaidPurpose;
                 if (!existing.MatchmakingSeconds.HasValue && candidate.MatchmakingSeconds.HasValue)
                     existing.MatchmakingSeconds = candidate.MatchmakingSeconds;
+                if (GetOperationStatePriority(candidate.OperationState)
+                    > GetOperationStatePriority(existing.OperationState))
+                {
+                    existing.OperationStartedAt = candidate.OperationStartedAt;
+                    existing.OperationEndedAt = candidate.OperationEndedAt;
+                    existing.OperationState = candidate.OperationState;
+                }
                 if (candidate.ActualRttMs.HasValue && (!existing.ActualRttMs.HasValue || candidateIsLater))
                     existing.ActualRttMs = candidate.ActualRttMs;
                 if (candidateIsLater)
@@ -1864,6 +2041,13 @@ namespace TarkovServerReporter
                 }
             }
             return merged.Values;
+        }
+
+        private static int GetOperationStatePriority(RaidOperationState state)
+        {
+            if (state == RaidOperationState.Completed) return 2;
+            if (state == RaidOperationState.InProgress) return 1;
+            return 0;
         }
 
         private static ServerSession CloneSession(ServerSession source)
@@ -1906,6 +2090,9 @@ namespace TarkovServerReporter
                 TimedOut = source.TimedOut,
                 DisconnectReason = source.DisconnectReason,
                 ConnectionEndedAt = source.ConnectionEndedAt,
+                OperationStartedAt = source.OperationStartedAt,
+                OperationEndedAt = source.OperationEndedAt,
+                OperationState = source.OperationState,
                 IpDetectedAt = source.IpDetectedAt
             };
         }

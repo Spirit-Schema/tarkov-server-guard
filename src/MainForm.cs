@@ -177,6 +177,24 @@ namespace TarkovServerReporter
             }
         }
 
+        private sealed class HeaderLinkButton : Button
+        {
+            public override Size GetPreferredSize(Size proposedSize)
+            {
+                int dpi = DeviceDpi <= 0 ? 96 : DeviceDpi;
+                Size glyph = TextRenderer.MeasureText(
+                    Text ?? string.Empty,
+                    Font,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding
+                    | TextFormatFlags.NoPrefix
+                    | TextFormatFlags.SingleLine);
+                return new Size(
+                    glyph.Width + ScaleLogical(12, dpi),
+                    glyph.Height + ScaleLogical(4, dpi));
+            }
+        }
+
         private sealed class ToolIconButton : Button
         {
             private readonly ToolIconKind _iconKind;
@@ -636,15 +654,15 @@ namespace TarkovServerReporter
             var version = CreateHeaderTextLabel(
                 "v" + GetApplicationSemanticVersion(),
                 new Font("Segoe UI", 9F, FontStyle.Bold),
-                Accent);
+                TextMuted);
             var updateSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
                 TextMuted);
             _manualUpdateButton = CreateHeaderLinkButton(
-                "업데이트 확인",
+                "업데이트확인",
                 "새 버전이 있는지 지금 확인합니다.");
-            _manualUpdateButton.AccessibleName = "업데이트 확인";
+            _manualUpdateButton.AccessibleName = "업데이트확인";
             _manualUpdateButton.AccessibleDescription = "GitHub Releases에서 새 버전을 수동으로 확인합니다.";
             _manualUpdateButton.Click += async delegate { await CheckForUpdatesManuallyAsync(); };
             updateRow.Controls.Add(_manualUpdateButton);
@@ -706,33 +724,32 @@ namespace TarkovServerReporter
         private Button CreateHeaderLinkButton(string text, string toolTip)
         {
             var buttonFont = new Font("Malgun Gothic", 8.5F, FontStyle.Bold);
-            Size measured = TextRenderer.MeasureText(
-                text,
-                buttonFont,
-                Size.Empty,
-                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-            var button = new Button
+            var button = new HeaderLinkButton
             {
-                AutoSize = false,
-                Size = new Size(measured.Width + 20, 24),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Text = text,
                 Font = buttonFont,
-                ForeColor = TextMuted,
+                ForeColor = Accent,
                 BackColor = Background,
                 FlatStyle = FlatStyle.Flat,
                 Cursor = Cursors.Hand,
                 TabStop = true,
                 UseVisualStyleBackColor = false,
-                Margin = new Padding(0, 1, 0, 1),
-                Padding = new Padding(2, 0, 2, 0)
+                // Preferred-size layout keeps a full glyph box at every DPI. The
+                // extra logical bottom padding/margin provides a two-pixel safety
+                // zone instead of relying on a fragile Y-coordinate adjustment.
+                Margin = new Padding(0, 0, 0, 3),
+                Padding = new Padding(0),
+                TextAlign = ContentAlignment.MiddleCenter
             };
             button.FlatAppearance.BorderSize = 0;
             button.FlatAppearance.MouseOverBackColor = SurfaceAlt;
             button.FlatAppearance.MouseDownBackColor = Surface;
             button.MouseEnter += delegate { button.ForeColor = AccentHover; };
-            button.MouseLeave += delegate { button.ForeColor = TextMuted; };
-            button.GotFocus += delegate { button.ForeColor = Accent; };
-            button.LostFocus += delegate { button.ForeColor = TextMuted; };
+            button.MouseLeave += delegate { button.ForeColor = button.Focused ? AccentHover : Accent; };
+            button.GotFocus += delegate { button.ForeColor = AccentHover; };
+            button.LostFocus += delegate { button.ForeColor = Accent; };
             _toolTip.SetToolTip(button, toolTip);
             return button;
         }
@@ -808,7 +825,7 @@ namespace TarkovServerReporter
                 cancellation.Dispose();
                 if (_manualUpdateButton != null && !_manualUpdateButton.IsDisposed)
                 {
-                    _manualUpdateButton.Text = "업데이트 확인";
+                    _manualUpdateButton.Text = "업데이트확인";
                     _manualUpdateButton.Enabled = true;
                 }
             }
@@ -1000,7 +1017,8 @@ namespace TarkovServerReporter
             {
                 int dpi = details.DeviceDpi <= 0 ? 96 : details.DeviceDpi;
                 int preferredLeft = ScaleLogical(478, dpi);
-                int minimumLeft = ScaleLogical(405, dpi);
+                bool constrainedDetails = details.ClientSize.Width < ScaleLogical(760, dpi);
+                int minimumLeft = ScaleLogical(constrainedDetails ? 370 : 405, dpi);
                 int rightInset = ScaleLogical(8, dpi);
                 int bottomInset = ScaleLogical(4, dpi);
                 _advancedDetailsLayout.Left = Math.Min(preferredLeft, Math.Max(minimumLeft, details.ClientSize.Width / 2));
@@ -1009,7 +1027,9 @@ namespace TarkovServerReporter
                     details.ClientSize.Width - _advancedDetailsLayout.Left - rightInset);
                 _advancedDetailsLayout.Height = ScaleLogical(154, dpi);
                 _advancedDetailsLayout.Top = Math.Max(0, details.ClientSize.Height - _advancedDetailsLayout.Height - bottomInset);
-                _advancedDetailsLayout.ColumnStyles[0].Width = ScaleLogical(132, dpi);
+                _advancedDetailsLayout.ColumnStyles[0].Width = ScaleLogical(
+                    constrainedDetails ? 106 : 132,
+                    dpi);
                 UpdateCurrentServerResponsiveLayout(details);
             };
             details.Controls.Add(_advancedDetailsLayout);
@@ -1161,7 +1181,15 @@ namespace TarkovServerReporter
 
         private Control BuildHistoryCard()
         {
-            var outer = new Panel { Dock = DockStyle.Fill, BackColor = Background, Padding = new Padding(0, 12, 0, 0) };
+            var outer = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Background,
+                // Match the card panels' zero horizontal margin. The default
+                // Panel margin narrowed this section by three pixels per side.
+                Margin = new Padding(0, 3, 0, 3),
+                Padding = new Padding(0, 12, 0, 0)
+            };
             var card = CreateCardPanel();
             card.Dock = DockStyle.Fill;
             card.Padding = new Padding(14, 9, 14, 9);
@@ -1291,38 +1319,60 @@ namespace TarkovServerReporter
             titleLayout.Controls.Add(filters, 1, 0);
             layout.Controls.Add(titleBar, 0, 0);
 
+            bool updatingToolbarLayout = false;
             EventHandler updateToolbarLayout = delegate
             {
-                int dpi = titleBar.DeviceDpi <= 0 ? 96 : titleBar.DeviceDpi;
-                bool compact = Width > 0
-                    && Width < ScaleLogical(1180, dpi);
-                if (compact)
+                if (updatingToolbarLayout) return;
+                updatingToolbarLayout = true;
+                try
                 {
-                    titleLayout.SetCellPosition(periodAndTools, new TableLayoutPanelCellPosition(0, 0));
-                    titleLayout.SetColumnSpan(periodAndTools, 2);
-                    titleLayout.SetCellPosition(filters, new TableLayoutPanelCellPosition(0, 1));
-                    titleLayout.SetColumnSpan(filters, 2);
-                    titleLayout.RowStyles[0].SizeType = SizeType.Percent;
-                    titleLayout.RowStyles[0].Height = 50F;
-                    titleLayout.RowStyles[1].SizeType = SizeType.Percent;
-                    titleLayout.RowStyles[1].Height = 50F;
-                    layout.RowStyles[0].Height = ScaleLogical(68, dpi);
+                    int dpi = titleBar.DeviceDpi <= 0 ? 96 : titleBar.DeviceDpi;
+                    bool compact = Width > 0
+                        && Width < ScaleLogical(1180, dpi);
+                    if (compact)
+                    {
+                        titleLayout.SetCellPosition(periodAndTools, new TableLayoutPanelCellPosition(0, 0));
+                        titleLayout.SetColumnSpan(periodAndTools, 2);
+                        titleLayout.SetCellPosition(filters, new TableLayoutPanelCellPosition(0, 1));
+                        titleLayout.SetColumnSpan(filters, 2);
+                        titleLayout.RowStyles[0].SizeType = SizeType.Percent;
+                        titleLayout.RowStyles[0].Height = 50F;
+                        titleLayout.RowStyles[1].SizeType = SizeType.Percent;
+                        titleLayout.RowStyles[1].Height = 50F;
+                        float compactHeight = ScaleLogical(68, dpi);
+                        if (Math.Abs(layout.RowStyles[0].Height - compactHeight) > 0.5F)
+                            layout.RowStyles[0].Height = compactHeight;
+                    }
+                    else
+                    {
+                        titleLayout.SetCellPosition(periodAndTools, new TableLayoutPanelCellPosition(0, 0));
+                        titleLayout.SetColumnSpan(periodAndTools, 1);
+                        titleLayout.SetCellPosition(filters, new TableLayoutPanelCellPosition(1, 0));
+                        titleLayout.SetColumnSpan(filters, 1);
+                        titleLayout.RowStyles[0].SizeType = SizeType.Percent;
+                        titleLayout.RowStyles[0].Height = 100F;
+                        titleLayout.RowStyles[1].SizeType = SizeType.Absolute;
+                        titleLayout.RowStyles[1].Height = 0F;
+                        float regularHeight = ScaleLogical(34, dpi);
+                        if (Math.Abs(layout.RowStyles[0].Height - regularHeight) > 0.5F)
+                            layout.RowStyles[0].Height = regularHeight;
+                    }
+                    // A width change can arrive while the parent TableLayoutPanel is
+                    // already laying out its rows. Force the newly selected two-row
+                    // height through the nested layouts in the same pass so the first
+                    // compact render cannot retain the preceding 34px header height.
+                    layout.PerformLayout();
+                    titleBar.PerformLayout();
+                    titleLayout.PerformLayout();
                 }
-                else
+                finally
                 {
-                    titleLayout.SetCellPosition(periodAndTools, new TableLayoutPanelCellPosition(0, 0));
-                    titleLayout.SetColumnSpan(periodAndTools, 1);
-                    titleLayout.SetCellPosition(filters, new TableLayoutPanelCellPosition(1, 0));
-                    titleLayout.SetColumnSpan(filters, 1);
-                    titleLayout.RowStyles[0].SizeType = SizeType.Percent;
-                    titleLayout.RowStyles[0].Height = 100F;
-                    titleLayout.RowStyles[1].SizeType = SizeType.Absolute;
-                    titleLayout.RowStyles[1].Height = 0F;
-                    layout.RowStyles[0].Height = ScaleLogical(34, dpi);
+                    updatingToolbarLayout = false;
                 }
             };
             titleBar.Resize += updateToolbarLayout;
             layout.Resize += updateToolbarLayout;
+            outer.Resize += updateToolbarLayout;
 
             _historyGrid = new DataGridView
             {
@@ -1386,8 +1436,12 @@ namespace TarkovServerReporter
             _historyGrid.Columns.Add(CreateTextColumn("ip", "서버 IP", 124));
             _historyGrid.Columns.Add(CreateTextColumn("location", "데이터센터 / 지역", 172));
             _historyGrid.Columns.Add(CreateTextColumn("ping", "현재 핑", 92));
-            _historyGrid.Columns.Add(CreateTextColumn("actualRtt", "실게임 RTT", 96));
-            _historyGrid.Columns.Add(CreateTextColumn("packetLoss", "실게임 패킷손실", 88));
+            _historyGrid.Columns.Add(CreateTwoLineTextColumn("actualRtt", "실게임\r\nRTT", 96, 88));
+            _historyGrid.Columns.Add(CreateTwoLineTextColumn(
+                "packetLoss",
+                "실게임\r\n패킷손실",
+                96,
+                92));
             DataGridViewButtonColumn blockActionColumn = CreateConnectionActionColumn("blockAction", "차단");
             DataGridViewButtonColumn unblockActionColumn = CreateConnectionActionColumn("unblockAction", "해제");
             // The action state remains on the main row. A small native DataGridView
@@ -1473,6 +1527,7 @@ namespace TarkovServerReporter
             _historyGrid.Layout += delegate { UpdateStickyActionGridBounds(); };
 
             _stickyActionGrid = CreateStickyActionGrid();
+            _stickyActionGrid.CellPainting += StickyActionGridCellPainting;
             _stickyActionGrid.CurrentCellChanged += delegate { SyncHistorySelectionFromStickyActions(); };
             _stickyActionGrid.SelectionChanged += delegate { SyncHistorySelectionFromStickyActions(); };
             _stickyActionGrid.CellContentClick += async delegate(object sender, DataGridViewCellEventArgs args)
@@ -1540,6 +1595,20 @@ namespace TarkovServerReporter
             };
         }
 
+        private static DataGridViewTextBoxColumn CreateTwoLineTextColumn(
+            string name,
+            string header,
+            int width,
+            int minimumWidth)
+        {
+            var column = CreateTextColumn(name, header, width);
+            column.MinimumWidth = minimumWidth;
+            column.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            column.HeaderCell.Style.WrapMode = DataGridViewTriState.True;
+            column.HeaderCell.Style.Padding = new Padding(0);
+            return column;
+        }
+
         private StickyActionGrid CreateStickyActionGrid()
         {
             var grid = new StickyActionGrid(this)
@@ -1605,11 +1674,134 @@ namespace TarkovServerReporter
 
         private Rectangle GetActionButtonBounds(Rectangle cellBounds)
         {
-            int horizontal = Math.Max(2, (int)Math.Round(3.0 * _historyGrid.DeviceDpi / 96.0));
-            int vertical = Math.Max(3, (int)Math.Round(4.0 * _historyGrid.DeviceDpi / 96.0));
+            return GetActionButtonBounds(
+                cellBounds,
+                _historyGrid == null || _historyGrid.DeviceDpi <= 0 ? 96 : _historyGrid.DeviceDpi);
+        }
+
+        private static Rectangle GetActionButtonBounds(Rectangle cellBounds, int dpi)
+        {
+            int safeDpi = dpi <= 0 ? 96 : dpi;
+            int horizontal = Math.Max(2, (int)Math.Round(3.0 * safeDpi / 96.0));
+            int vertical = Math.Max(3, (int)Math.Round(4.0 * safeDpi / 96.0));
             Rectangle result = Rectangle.Inflate(cellBounds, -horizontal, -vertical);
             if (result.Width < 1 || result.Height < 1) return Rectangle.Empty;
             return result;
+        }
+
+        private void StickyActionGridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            var grid = sender as DataGridView;
+            if (grid == null || e.ColumnIndex < 0) return;
+
+            Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
+            if (clip.Width <= 0 || clip.Height <= 0)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            GraphicsState state = e.Graphics.Save();
+            try
+            {
+                e.Graphics.SetClip(clip);
+                if (e.RowIndex < 0)
+                {
+                    e.Paint(e.ClipBounds, e.PaintParts);
+                    PaintStickyActionDivider(e.Graphics, e.CellBounds, e.ColumnIndex);
+                    return;
+                }
+
+                bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                Color rowBackground = selected
+                    ? grid.DefaultCellStyle.SelectionBackColor
+                    : Surface;
+                using (var rowBrush = new SolidBrush(rowBackground))
+                    e.Graphics.FillRectangle(rowBrush, e.CellBounds);
+                using (var rowBorder = new Pen(Border))
+                    e.Graphics.DrawLine(
+                        rowBorder,
+                        e.CellBounds.Left,
+                        e.CellBounds.Bottom - 1,
+                        e.CellBounds.Right - 1,
+                        e.CellBounds.Bottom - 1);
+
+                DataGridViewCell cell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                bool enabled = cell.Tag is bool && (bool)cell.Tag;
+                bool isBlock = string.Equals(
+                    grid.Columns[e.ColumnIndex].Name,
+                    "blockAction",
+                    StringComparison.Ordinal);
+                Rectangle buttonBounds = GetActionButtonBounds(
+                    e.CellBounds,
+                    grid.DeviceDpi <= 0 ? 96 : grid.DeviceDpi);
+                if (!buttonBounds.IsEmpty)
+                {
+                    Color background = enabled
+                        ? (isBlock ? Danger : Success)
+                        : Color.FromArgb(37, 44, 53);
+                    Color foreground = enabled
+                        ? (isBlock ? Color.White : Color.FromArgb(18, 50, 34))
+                        : TextMuted;
+                    Color outline = enabled
+                        ? (isBlock ? Color.FromArgb(202, 78, 86) : Color.FromArgb(53, 170, 110))
+                        : Border;
+                    using (var fill = new SolidBrush(background))
+                        e.Graphics.FillRectangle(fill, buttonBounds);
+                    using (var border = new Pen(outline, 1F))
+                        e.Graphics.DrawRectangle(
+                            border,
+                            buttonBounds.X,
+                            buttonBounds.Y,
+                            buttonBounds.Width - 1,
+                            buttonBounds.Height - 1);
+                    TextRenderer.DrawText(
+                        e.Graphics,
+                        isBlock ? "차단" : "해제",
+                        e.CellStyle.Font,
+                        buttonBounds,
+                        foreground,
+                        TextFormatFlags.HorizontalCenter
+                        | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.SingleLine
+                        | TextFormatFlags.NoPrefix);
+
+                    if (grid.Focused
+                        && grid.CurrentCell != null
+                        && grid.CurrentCell.RowIndex == e.RowIndex
+                        && grid.CurrentCell.ColumnIndex == e.ColumnIndex)
+                    {
+                        Rectangle focusBounds = Rectangle.Inflate(buttonBounds, -2, -2);
+                        if (focusBounds.Width > 0 && focusBounds.Height > 0)
+                            ControlPaint.DrawFocusRectangle(
+                                e.Graphics,
+                                focusBounds,
+                                foreground,
+                                background);
+                    }
+                }
+                PaintStickyActionDivider(e.Graphics, e.CellBounds, e.ColumnIndex);
+            }
+            finally
+            {
+                e.Graphics.Restore(state);
+                e.Handled = true;
+            }
+        }
+
+        private static void PaintStickyActionDivider(
+            Graphics graphics,
+            Rectangle cellBounds,
+            int columnIndex)
+        {
+            if (graphics == null || columnIndex != 0) return;
+            using (var divider = new Pen(Color.FromArgb(82, 94, 108), 1F))
+                graphics.DrawLine(
+                    divider,
+                    cellBounds.Left,
+                    cellBounds.Top,
+                    cellBounds.Left,
+                    cellBounds.Bottom - 1);
         }
 
         private void HistoryGridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
@@ -1907,12 +2099,12 @@ namespace TarkovServerReporter
             return valueLabel;
         }
 
-        private static TableLayoutPanel CreateDetailInfoLayout(out Label[] valueLabels)
+        private TableLayoutPanel CreateDetailInfoLayout(out Label[] valueLabels)
         {
             string[] keys =
             {
+                "작전시간",
                 "서버배정",
-                "재접속",
                 "서버연결 결과",
                 "게임버전",
                 "포트 / 데이터센터",
@@ -1961,6 +2153,13 @@ namespace TarkovServerReporter
                 };
                 layout.Controls.Add(keyLabel, 0, index);
                 layout.Controls.Add(valueLabel, 1, index);
+                if (index == 0)
+                {
+                    const string operationTimeHelp =
+                        "게임 시작부터 종료까지 로그를 기준으로 계산한 시간입니다.";
+                    _toolTip.SetToolTip(keyLabel, operationTimeHelp);
+                    _toolTip.SetToolTip(valueLabel, operationTimeHelp);
+                }
                 valueLabels[index] = valueLabel;
             }
             return layout;
@@ -3491,7 +3690,13 @@ namespace TarkovServerReporter
             else if (_selectedRegionCodes.Count == 1)
             {
                 string regionCode = _selectedRegionCodes.First();
-                string displayName = DataCenterRegionClassifier.GetDisplayName(regionCode);
+                bool isLocalPveOrUnknown = string.Equals(
+                    regionCode,
+                    DataCenterRegionClassifier.UnknownCode,
+                    StringComparison.OrdinalIgnoreCase);
+                string displayName = isLocalPveOrUnknown
+                    ? "PVE로컬/기타"
+                    : DataCenterRegionClassifier.GetDisplayName(regionCode);
                 string candidate = "지역: " + displayName + " ▾";
                 int availableTextWidth = Math.Max(
                     1,
@@ -3503,12 +3708,7 @@ namespace TarkovServerReporter
                     _regionFilterButton.Font,
                     Size.Empty,
                     TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-                string compactName = string.Equals(
-                    regionCode,
-                    DataCenterRegionClassifier.UnknownCode,
-                    StringComparison.OrdinalIgnoreCase)
-                        ? "기타"
-                        : regionCode;
+                string compactName = isLocalPveOrUnknown ? "PVE/기타" : regionCode;
                 text = measured.Width <= availableTextWidth
                     ? candidate
                     : "지역: " + compactName + " ▾";
@@ -3525,7 +3725,12 @@ namespace TarkovServerReporter
                     ? "최근 목록의 모든 데이터센터 지역을 표시합니다."
                     : "선택 지역: " + string.Join(", ", _selectedRegionCodes
                         .OrderBy(DataCenterRegionClassifier.GetSortOrder)
-                        .Select(DataCenterRegionClassifier.GetDisplayLabel)));
+                        .Select(code => string.Equals(
+                            code,
+                            DataCenterRegionClassifier.UnknownCode,
+                            StringComparison.OrdinalIgnoreCase)
+                                ? "PVE로컬/기타"
+                                : DataCenterRegionClassifier.GetDisplayLabel(code))));
         }
 
         private void UpdateFilterButtons()
@@ -3546,7 +3751,23 @@ namespace TarkovServerReporter
 
         private void RefreshVisibleSessions()
         {
-            string selectedKey = _selectedSession == null ? null : _selectedSession.SessionKey;
+            RefreshVisibleSessionsAfterScan(null);
+        }
+
+        private ServerSession RefreshVisibleSessionsAfterScan(
+            ISet<string> preferredNewSessionIdentities)
+        {
+            bool preserveViewportWhenNoNewSession = preferredNewSessionIdentities != null;
+            string viewportAnchorIdentity;
+            int viewportAnchorIndex;
+            int horizontalOffset;
+            CaptureHistoryViewport(
+                out viewportAnchorIdentity,
+                out viewportAnchorIndex,
+                out horizontalOffset);
+            string selectedIdentity = _selectedSession == null
+                ? null
+                : GetSessionRefreshIdentity(_selectedSession);
             IList<ServerSession> matchingSessions = _allSessions
                 .Where(item => !_gameFilter.HasValue || item.Game == _gameFilter.Value)
                 .Where(IsSessionInSelectedPeriod)
@@ -3565,18 +3786,39 @@ namespace TarkovServerReporter
             PopulateHistoryGrid(_visibleSessions);
             UpdateHistorySortGlyph();
 
-            ServerSession desired = _visibleSessions.FirstOrDefault(item =>
-                !string.IsNullOrWhiteSpace(selectedKey)
-                && string.Equals(item.SessionKey, selectedKey, StringComparison.OrdinalIgnoreCase));
+            ServerSession newestVisibleNewSession = preferredNewSessionIdentities == null
+                ? null
+                : _visibleSessions
+                    .Where(item => preferredNewSessionIdentities.Contains(
+                        GetSessionRefreshIdentity(item)))
+                    .OrderByDescending(item => item.DisplayDetectedAt)
+                    .ThenByDescending(item => item.LastUpdated)
+                    .ThenBy(GetSessionRefreshIdentity, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+            ServerSession desired = newestVisibleNewSession
+                ?? _visibleSessions.FirstOrDefault(item =>
+                    !string.IsNullOrWhiteSpace(selectedIdentity)
+                    && string.Equals(
+                        GetSessionRefreshIdentity(item),
+                        selectedIdentity,
+                        StringComparison.OrdinalIgnoreCase));
             if (desired == null) desired = _visibleSessions.FirstOrDefault();
             if (desired == null)
                 ShowNoServer(AddLogScanWarning("현재 필터에 표시할 접속 기록이 없습니다."));
             else
             {
-                SelectGridRow(desired);
+                SelectGridRow(
+                    desired,
+                    newestVisibleNewSession != null || !preserveViewportWhenNoNewSession);
                 SelectSession(desired);
             }
+            if (preserveViewportWhenNoNewSession && newestVisibleNewSession == null)
+                RestoreHistoryViewport(
+                    viewportAnchorIdentity,
+                    viewportAnchorIndex,
+                    horizontalOffset);
             UpdateActionButtons();
+            return newestVisibleNewSession;
         }
 
         private void HistoryGridColumnHeaderMouseClick(
@@ -3613,18 +3855,35 @@ namespace TarkovServerReporter
                 ReapplyHistorySort();
         }
 
-        private void ReapplyHistorySort()
+        private void ReapplyHistorySort(bool scrollSelectedIntoView = true)
         {
             if (_historyGrid == null || _visibleSessions == null) return;
-            string selectedKey = _selectedSession == null ? null : _selectedSession.SessionKey;
+            string viewportAnchorIdentity;
+            int viewportAnchorIndex;
+            int horizontalOffset;
+            CaptureHistoryViewport(
+                out viewportAnchorIdentity,
+                out viewportAnchorIndex,
+                out horizontalOffset);
+            string selectedIdentity = _selectedSession == null
+                ? null
+                : GetSessionRefreshIdentity(_selectedSession);
             _visibleSessions = ApplyHistorySort(_visibleSessions);
             PopulateHistoryGrid(_visibleSessions);
             UpdateHistorySortGlyph();
 
             ServerSession selected = _visibleSessions.FirstOrDefault(item =>
-                !string.IsNullOrWhiteSpace(selectedKey)
-                && string.Equals(item.SessionKey, selectedKey, StringComparison.OrdinalIgnoreCase));
-            if (selected != null) SelectGridRow(selected);
+                !string.IsNullOrWhiteSpace(selectedIdentity)
+                && string.Equals(
+                    GetSessionRefreshIdentity(item),
+                    selectedIdentity,
+                    StringComparison.OrdinalIgnoreCase));
+            if (selected != null) SelectGridRow(selected, scrollSelectedIntoView);
+            if (!scrollSelectedIntoView)
+                RestoreHistoryViewport(
+                    viewportAnchorIdentity,
+                    viewportAnchorIndex,
+                    horizontalOffset);
         }
 
         private IList<ServerSession> ApplyHistorySort(IEnumerable<ServerSession> sessions)
@@ -3827,17 +4086,76 @@ namespace TarkovServerReporter
                 .Replace("재접속 ", "재접속");
         }
 
-        private void SelectGridRow(ServerSession session)
+        private void CaptureHistoryViewport(
+            out string anchorIdentity,
+            out int anchorIndex,
+            out int horizontalOffset)
         {
+            anchorIdentity = null;
+            anchorIndex = -1;
+            horizontalOffset = 0;
+            if (_historyGrid == null) return;
+            try { horizontalOffset = _historyGrid.HorizontalScrollingOffset; }
+            catch { }
+            try { anchorIndex = _historyGrid.FirstDisplayedScrollingRowIndex; }
+            catch { anchorIndex = -1; }
+            if (anchorIndex < 0 || anchorIndex >= _historyGrid.Rows.Count) return;
+            var anchorSession = _historyGrid.Rows[anchorIndex].Tag as ServerSession;
+            if (anchorSession != null)
+                anchorIdentity = GetSessionRefreshIdentity(anchorSession);
+        }
+
+        private void RestoreHistoryViewport(
+            string anchorIdentity,
+            int fallbackIndex,
+            int horizontalOffset)
+        {
+            if (_historyGrid == null || _historyGrid.Rows.Count == 0) return;
+            int targetIndex = -1;
+            if (!string.IsNullOrWhiteSpace(anchorIdentity))
+            {
+                DataGridViewRow anchoredRow = _historyGrid.Rows
+                    .Cast<DataGridViewRow>()
+                    .FirstOrDefault(row =>
+                    {
+                        var session = row.Tag as ServerSession;
+                        return session != null
+                            && string.Equals(
+                                GetSessionRefreshIdentity(session),
+                                anchorIdentity,
+                                StringComparison.OrdinalIgnoreCase);
+                    });
+                if (anchoredRow != null) targetIndex = anchoredRow.Index;
+            }
+            if (targetIndex < 0 && fallbackIndex >= 0)
+                targetIndex = Math.Min(fallbackIndex, _historyGrid.Rows.Count - 1);
+            if (targetIndex >= 0)
+            {
+                try { _historyGrid.FirstDisplayedScrollingRowIndex = targetIndex; }
+                catch { }
+            }
+            try { _historyGrid.HorizontalScrollingOffset = Math.Max(0, horizontalOffset); }
+            catch { }
+            UpdateStickyActionGridBounds();
+            SyncStickyActionVerticalScroll();
+        }
+
+        private void SelectGridRow(ServerSession session, bool scrollIntoView = true)
+        {
+            if (session == null || _historyGrid == null) return;
+            string targetIdentity = GetSessionRefreshIdentity(session);
             _historyGrid.ClearSelection();
             foreach (DataGridViewRow row in _historyGrid.Rows)
             {
                 var rowSession = row.Tag as ServerSession;
                 bool matches = rowSession != null
-                    && string.Equals(rowSession.SessionKey, session.SessionKey, StringComparison.OrdinalIgnoreCase);
+                    && string.Equals(
+                        GetSessionRefreshIdentity(rowSession),
+                        targetIdentity,
+                        StringComparison.OrdinalIgnoreCase);
                 if (!matches) continue;
                 row.Selected = true;
-                if (row.Index >= 0)
+                if (scrollIntoView && row.Index >= 0)
                 {
                     try { _historyGrid.FirstDisplayedScrollingRowIndex = row.Index; }
                     catch { }
@@ -3916,9 +4234,11 @@ namespace TarkovServerReporter
             string shortId = string.IsNullOrWhiteSpace(session.ShortId) ? "-" : session.ShortId;
             string[] values =
             {
+                FormatOperationDuration(session),
                 matching,
-                session.ReconnectCount + "회",
-                string.IsNullOrWhiteSpace(session.ConnectionStateText) ? "-" : session.ConnectionStateText,
+                string.IsNullOrWhiteSpace(session.ConnectionResultText)
+                    ? "-"
+                    : session.ConnectionResultText,
                 version,
                 port + " / " + (string.IsNullOrWhiteSpace(session.DataCenterCode) ? "-" : session.DataCenterCode),
                 shortId,
@@ -3929,6 +4249,22 @@ namespace TarkovServerReporter
                 _detailInfoValueLabels[index].Text = values[index];
                 _detailInfoValueLabels[index].ForeColor = TextPrimary;
             }
+        }
+
+        private static string FormatOperationDuration(ServerSession session)
+        {
+            if (session == null) return "확인 안 됨";
+            if (session.OperationState == RaidOperationState.InProgress) return "진행 중";
+            TimeSpan? duration = session.OperationDuration;
+            if (session.OperationState != RaidOperationState.Completed || !duration.HasValue)
+                return "확인 안 됨";
+
+            long totalSeconds = Math.Max(0L, (long)Math.Floor(duration.Value.TotalSeconds));
+            long totalMinutes = totalSeconds / 60L;
+            long remainingSeconds = totalSeconds % 60L;
+            return totalMinutes > 0
+                ? string.Format("{0}분 {1}초", totalMinutes, remainingSeconds)
+                : string.Format("{0}초", remainingSeconds);
         }
 
         private static string FormatDuration(double seconds)
@@ -3959,6 +4295,7 @@ namespace TarkovServerReporter
             int refreshCapExcludedCount = 0;
             bool logRefreshPerformed = false;
             bool logRefreshReadSucceeded = false;
+            ServerSession refreshedVisibleNewSession = null;
             bool geoDatabaseReady = NetworkServices.HasUsableGeoDatabase;
             try
             {
@@ -3989,6 +4326,12 @@ namespace TarkovServerReporter
                             cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
                         RaidLogScanResult scan = refreshScan.Scan;
+                        var scannedNewSessionIdentities = new HashSet<string>(
+                            scan.Sessions
+                                .Where(session => session != null)
+                                .Select(GetSessionRefreshIdentity)
+                                .Where(identity => !previousSessionIds.Contains(identity)),
+                            StringComparer.OrdinalIgnoreCase);
                         logRefreshPerformed = true;
                         bool scanReadSucceeded = scan.ScanCompletedWithoutErrors
                             && refreshScan.AllConfiguredPathsAvailable;
@@ -4036,7 +4379,8 @@ namespace TarkovServerReporter
                                 removedPreviousCount);
                         }
                         _allSessions = refreshedSessions;
-                        RefreshVisibleSessions();
+                        refreshedVisibleNewSession = RefreshVisibleSessionsAfterScan(
+                            scannedNewSessionIdentities);
                     }
                 }
 
@@ -4187,7 +4531,7 @@ namespace TarkovServerReporter
                 UpdateActionButtons();
                 RefreshActionCells();
                 if (_historySortColumn == "ping" || _historySortColumn == "location")
-                    ReapplyHistorySort();
+                    ReapplyHistorySort(refreshedVisibleNewSession != null);
             }
         }
 
@@ -4893,7 +5237,10 @@ namespace TarkovServerReporter
                     HasDisconnectRecord = true,
                     TimedOut = true,
                     DisconnectReason = 2,
-                    IpDetectedAt = now.AddMinutes(2)
+                    IpDetectedAt = now.AddMinutes(2),
+                    OperationStartedAt = now.AddMinutes(5),
+                    OperationEndedAt = now.AddMinutes(23).AddSeconds(42),
+                    OperationState = RaidOperationState.Completed
                 },
                 new ServerSession
                 {
@@ -4917,7 +5264,10 @@ namespace TarkovServerReporter
                     ConnectedOnce = true,
                     HasDisconnectRecord = true,
                     DisconnectReason = 0,
-                    IpDetectedAt = now.AddHours(-1.4)
+                    IpDetectedAt = now.AddHours(-1.4),
+                    OperationStartedAt = now.AddHours(-1.35),
+                    OperationEndedAt = now.AddHours(-1.05),
+                    OperationState = RaidOperationState.Completed
                 },
                 new ServerSession
                 {
@@ -4944,7 +5294,9 @@ namespace TarkovServerReporter
                     ConnectedOnce = true,
                     HasDisconnectRecord = true,
                     DisconnectReason = 5,
-                    IpDetectedAt = now.AddHours(-2.9)
+                    IpDetectedAt = now.AddHours(-2.9),
+                    OperationStartedAt = now.AddHours(-2.85),
+                    OperationState = RaidOperationState.InProgress
                 },
                 new ServerSession
                 {

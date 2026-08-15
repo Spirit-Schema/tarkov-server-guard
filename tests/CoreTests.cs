@@ -28,6 +28,7 @@ namespace TarkovServerReporter.Tests
                 TestEftRaidTypesAndUserReports(tempRoot);
                 TestNetworkEventBoundariesAndDuplicateMerge(tempRoot);
                 TestArenaRaidScanning(tempRoot);
+                TestRaidOperationDuration(tempRoot);
                 TestRaidLogQueryFiltering(tempRoot);
                 TestLauncherSelectionReading(tempRoot);
                 TestPathNormalization(tempRoot);
@@ -468,6 +469,219 @@ namespace TarkovServerReporter.Tests
                 && Math.Abs(session.ActualRttMs.Value - 47.75) < 0.001
                 && session.ConnectionResultText == "정상종료",
                 "Arena scanner joins network RTT and normal connection completion");
+        }
+
+        private static void TestRaidOperationDuration(string tempRoot)
+        {
+            string eftLogs = Path.Combine(tempRoot, "OperationDurationEftLogs");
+            string eftFolder = Path.Combine(eftLogs, "log_completed");
+            Directory.CreateDirectory(eftFolder);
+            File.WriteAllText(
+                Path.Combine(eftFolder, "application.log"),
+                "2026.08.14 08:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.61, Port: 17001, Location: Shoreline, Sid: SG-SIN01G001_operation-one, GameMode: deathmatch, shortId: OP001'\r\n"
+                + "2026.08.14 08:01:00|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n"
+                + "2026.08.14 08:20:10|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n"
+                + "2026.08.14 09:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.62, Port: 17002, Location: Woods, Sid: JP-TK02G005_operation-reconnect, GameMode: deathmatch, shortId: OP002'\r\n"
+                + "2026.08.14 09:01:00|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n"
+                + "2026.08.14 09:21:10|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n"
+                + "2026.08.14 10:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.63, Port: 17003, Location: Factory, Sid: KR-SEL01G001_operation-no-start, GameMode: deathmatch, shortId: OP003'\r\n"
+                + "2026.08.14 10:10:00|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n",
+                Encoding.UTF8);
+            File.WriteAllText(
+                Path.Combine(eftFolder, "network-connection.log"),
+                "2026.08.14 08:00:01|Connect (address: 203.0.113.61:17001)\r\n"
+                + "2026.08.14 08:00:02|Enter to the 'Connected' state (address: 203.0.113.61:17001)\r\n"
+                + "2026.08.14 08:20:00|Enter to the 'Disconnected' state (address: 203.0.113.61:17001, reason: 0)\r\n"
+                + "2026.08.14 09:00:01|Connect (address: 203.0.113.62:17002)\r\n"
+                + "2026.08.14 09:00:02|Enter to the 'Connected' state (address: 203.0.113.62:17002)\r\n"
+                + "2026.08.14 09:05:00|Enter to the 'Disconnected' state (address: 203.0.113.62:17002, reason: 0)\r\n"
+                + "2026.08.14 09:06:00|Connect (address: 203.0.113.62:17002)\r\n"
+                + "2026.08.14 09:06:01|Enter to the 'Connected' state (address: 203.0.113.62:17002)\r\n"
+                + "2026.08.14 09:21:00|Enter to the 'Disconnected' state (address: 203.0.113.62:17002, reason: 0)\r\n"
+                + "2026.08.14 10:00:01|Connect (address: 203.0.113.63:17003)\r\n"
+                + "2026.08.14 10:10:00|Enter to the 'Disconnected' state (address: 203.0.113.63:17003, reason: 0)\r\n",
+                Encoding.UTF8);
+
+            RaidLogScanResult eft = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = eftLogs },
+                100);
+            ServerSession completed = eft.Sessions.Single(item => item.ShortId == "OP001");
+            ServerSession reconnected = eft.Sessions.Single(item => item.ShortId == "OP002");
+            ServerSession missingStart = eft.Sessions.Single(item => item.ShortId == "OP003");
+            Assert(completed.OperationState == RaidOperationState.Completed
+                && completed.OperationStartedAt == new DateTime(2026, 8, 14, 8, 1, 0)
+                && completed.OperationEndedAt == new DateTime(2026, 8, 14, 8, 20, 0)
+                && completed.OperationDuration == TimeSpan.FromMinutes(19),
+                "EFT operation time uses GameStarted and the final normal disconnect");
+            Assert(reconnected.OperationState == RaidOperationState.Completed
+                && reconnected.ReconnectCount == 1
+                && reconnected.OperationEndedAt == new DateTime(2026, 8, 14, 9, 21, 0)
+                && reconnected.OperationDuration == TimeSpan.FromMinutes(20),
+                "an intermediate reason-zero disconnect followed by reconnect does not end the operation");
+            Assert(missingStart.OperationState == RaidOperationState.Unknown
+                && !missingStart.OperationStartedAt.HasValue
+                && !missingStart.OperationDuration.HasValue,
+                "a terminal record without GameStarted does not invent an operation duration");
+            ServerSession cachedCompleted = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = eftLogs },
+                100).Sessions.Single(item => item.ShortId == "OP001");
+            Assert(cachedCompleted.OperationState == RaidOperationState.Completed
+                && cachedCompleted.OperationDuration == TimeSpan.FromMinutes(19),
+                "directory cache clones preserve completed operation evidence");
+
+            DateTime activeNow = DateTime.Now;
+            DateTime activeAssignment = new DateTime(
+                activeNow.Year,
+                activeNow.Month,
+                activeNow.Day,
+                activeNow.Hour,
+                activeNow.Minute,
+                activeNow.Second).AddMinutes(-5);
+            DateTime activeStart = activeAssignment.AddMinutes(1);
+            string activeLogs = Path.Combine(tempRoot, "OperationDurationActiveLogs");
+            string activeFolder = Path.Combine(activeLogs, "log_active");
+            Directory.CreateDirectory(activeFolder);
+            string activeApplication = Path.Combine(activeFolder, "application.log");
+            File.WriteAllText(
+                activeApplication,
+                activeAssignment.ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.64, Port: 17004, Location: Woods, Sid: JP-TK02G005_operation-active, GameMode: deathmatch, shortId: OP004'\r\n"
+                + activeStart.ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n",
+                Encoding.UTF8);
+            string activeNetwork = Path.Combine(activeFolder, "network-connection.log");
+            File.WriteAllText(
+                activeNetwork,
+                activeAssignment.AddSeconds(1).ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|Connect (address: 203.0.113.64:17004)\r\n"
+                + activeAssignment.AddSeconds(2).ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|Enter to the 'Connected' state (address: 203.0.113.64:17004)\r\n",
+                Encoding.UTF8);
+            File.SetLastWriteTimeUtc(activeApplication, DateTime.UtcNow);
+            File.SetLastWriteTimeUtc(activeNetwork, DateTime.UtcNow);
+            RaidLogScanResult activeResult = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = activeLogs },
+                100);
+            ServerSession active = activeResult.Sessions.Single();
+            Assert(active.OperationState == RaidOperationState.InProgress
+                && active.OperationStartedAt == activeStart
+                && !active.OperationEndedAt.HasValue
+                && !active.OperationDuration.HasValue,
+                "a fresh final GameStarted sequence is exposed as an operation in progress");
+            File.SetLastWriteTimeUtc(activeApplication, DateTime.UtcNow.AddMinutes(-11));
+            File.SetLastWriteTimeUtc(activeNetwork, DateTime.UtcNow.AddMinutes(-11));
+            ServerSession noLongerActive = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = activeLogs },
+                100).Sessions.Single();
+            Assert(noLongerActive.OperationState == RaidOperationState.Unknown,
+                "an in-progress result is not cached after log activity becomes stale");
+
+            string oldLogs = Path.Combine(tempRoot, "OperationDurationOldLogs");
+            string oldFolder = Path.Combine(oldLogs, "log_old_truncated");
+            Directory.CreateDirectory(oldFolder);
+            string oldApplication = Path.Combine(oldFolder, "application.log");
+            File.WriteAllText(
+                oldApplication,
+                "2025.01.01 12:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.65, Port: 17005, Location: Woods, Sid: JP-TK02G005_operation-old, GameMode: deathmatch, shortId: OP005'\r\n"
+                + "2025.01.01 12:01:00|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n",
+                Encoding.UTF8);
+            File.SetLastWriteTimeUtc(oldApplication, new DateTime(2025, 1, 1, 3, 0, 0, DateTimeKind.Utc));
+            ServerSession old = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = oldLogs },
+                100).Sessions.Single();
+            Assert(old.OperationState == RaidOperationState.Unknown
+                && old.OperationStartedAt.HasValue
+                && !old.OperationEndedAt.HasValue,
+                "an old truncated GameStarted sequence does not remain in progress forever");
+
+            DateTime invalidNow = DateTime.Now;
+            DateTime invalidAssignment = new DateTime(
+                invalidNow.Year,
+                invalidNow.Month,
+                invalidNow.Day,
+                invalidNow.Hour,
+                invalidNow.Minute,
+                invalidNow.Second).AddMinutes(-4);
+            DateTime invalidEnd = invalidAssignment.AddMinutes(1);
+            DateTime invalidStart = invalidAssignment.AddMinutes(2);
+            string invalidLogs = Path.Combine(tempRoot, "OperationDurationOutOfOrderLogs");
+            string invalidFolder = Path.Combine(invalidLogs, "log_out_of_order");
+            Directory.CreateDirectory(invalidFolder);
+            string invalidApplication = Path.Combine(invalidFolder, "application.log");
+            File.WriteAllText(
+                invalidApplication,
+                invalidAssignment.ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.66, Port: 17006, Location: Woods, Sid: JP-TK02G005_operation-order, GameMode: deathmatch, shortId: OP006'\r\n"
+                + invalidEnd.ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n"
+                + invalidStart.ToString("yyyy.MM.dd HH:mm:ss")
+                    + "|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n",
+                Encoding.UTF8);
+            File.SetLastWriteTimeUtc(invalidApplication, DateTime.UtcNow);
+            ServerSession outOfOrder = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = invalidLogs },
+                100).Sessions.Single();
+            Assert(outOfOrder.OperationState == RaidOperationState.Unknown
+                && !outOfOrder.OperationDuration.HasValue,
+                "an end event before GameStarted is rejected instead of producing a negative or active duration");
+
+            string localLogs = Path.Combine(tempRoot, "OperationDurationLocalLogs");
+            string localFolder = Path.Combine(localLogs, "log_local_pve");
+            Directory.CreateDirectory(localFolder);
+            File.WriteAllText(
+                Path.Combine(localFolder, "application.log"),
+                "2026.08.14 11:59:50|1.1.0.1.46699|Info|application|Session mode: Pve\r\n"
+                + "2026.08.14 12:00:00|1.1.0.1.46699|Info|application|MatchingCompleted:0 real:0 diff:0\r\n"
+                + "2026.08.14 12:00:01|1.1.0.1.46699|Info|application|scene preset path:maps/woods_preset.bundle\r\n"
+                + "2026.08.14 12:00:10|1.1.0.1.46699|Info|application|GameCreated:10 real:10 diff:0\r\n"
+                + "2026.08.14 12:01:00|1.1.0.1.46699|Info|application|GameStarted:60 real:60 diff:0\r\n"
+                + "2026.08.14 12:16:00|1.1.0.1.46699|Info|application|PrepareSelectedProfileLocally ProfileId:redacted\r\n",
+                Encoding.UTF8);
+            ServerSession local = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = localLogs },
+                100).Sessions.Single();
+            Assert(local.HostingMode == TarkovHostingMode.Local
+                && local.OperationState == RaidOperationState.Completed
+                && local.OperationDuration == TimeSpan.FromMinutes(15),
+                "local PvE operation time uses GameStarted and the confirmed post-raid profile transition");
+
+            string arenaLogs = Path.Combine(tempRoot, "OperationDurationArenaLogs");
+            string arenaFolder = Path.Combine(arenaLogs, "log_completed");
+            Directory.CreateDirectory(arenaFolder);
+            File.WriteAllText(
+                Path.Combine(arenaFolder, "application.log"),
+                "2026.08.14 12:01:00|0.5.3.0.46662|Info|application|GameStarted:60 real:60 diff:0\r\n",
+                Encoding.UTF8);
+            File.WriteAllText(
+                Path.Combine(arenaFolder, "lifecycle.log"),
+                "2026.08.14 12:00:00|0.5.3.0.46662|Info|lifecycle|Server found. ip: 192.0.2.81 port: 17013 sid: JP-TK02G005_operation-arena shortId: AOP001 map: Arena_Bay5 mode: CheckPoint\r\n"
+                + "2026.08.14 12:11:00|0.5.3.0.46662|Info|lifecycle|GameplayState: MatchEnd\r\n",
+                Encoding.UTF8);
+            ServerSession arena = RaidLogScanner.Scan(
+                new TarkovLogPaths { ArenaPath = arenaLogs },
+                100).Sessions.Single();
+            Assert(arena.OperationState == RaidOperationState.Completed
+                && arena.OperationDuration == TimeSpan.FromMinutes(10),
+                "Arena operation time uses application GameStarted and lifecycle MatchEnd");
+
+            string longArenaLogs = Path.Combine(tempRoot, "OperationDurationLongArenaLogs");
+            string longArenaFolder = Path.Combine(longArenaLogs, "log_too_long");
+            Directory.CreateDirectory(longArenaFolder);
+            File.WriteAllText(
+                Path.Combine(longArenaFolder, "application.log"),
+                "2026.08.14 13:01:00|0.5.3.0.46662|Info|application|GameStarted:60 real:60 diff:0\r\n",
+                Encoding.UTF8);
+            File.WriteAllText(
+                Path.Combine(longArenaFolder, "lifecycle.log"),
+                "2026.08.14 13:00:00|0.5.3.0.46662|Info|lifecycle|Server found. ip: 192.0.2.82 port: 17014 sid: JP-TK02G005_operation-long shortId: AOP002 map: Arena_Bay5 mode: CheckPoint\r\n"
+                + "2026.08.14 20:01:00|0.5.3.0.46662|Info|lifecycle|GameplayState: MatchEnd\r\n",
+                Encoding.UTF8);
+            ServerSession tooLong = RaidLogScanner.Scan(
+                new TarkovLogPaths { ArenaPath = longArenaLogs },
+                100).Sessions.Single();
+            Assert(tooLong.OperationState == RaidOperationState.Unknown
+                && !tooLong.OperationDuration.HasValue,
+                "an implausibly long terminal interval is rejected as unknown");
         }
 
         private static void TestRaidLogQueryFiltering(string tempRoot)
@@ -1068,7 +1282,9 @@ namespace TarkovServerReporter.Tests
         {
             Assert(DataCenterRegionClassifier.GetRegionCode("KR-SEL01") == "KR"
                 && DataCenterRegionClassifier.GetRegionCode("jp-tk02") == "JP"
-                && DataCenterRegionClassifier.GetRegionCode(" SG-SIN01 ") == "SG",
+                && DataCenterRegionClassifier.GetRegionCode("MY-KUL01") == "MY"
+                && DataCenterRegionClassifier.GetRegionCode(" SG-SIN01 ") == "SG"
+                && DataCenterRegionClassifier.GetRegionCode("SN-SIN03") == "SG",
                 "data center filter derives an invariant country prefix");
             Assert(DataCenterRegionClassifier.GetRegionCode(null) == DataCenterRegionClassifier.UnknownCode
                 && DataCenterRegionClassifier.GetRegionCode("-") == DataCenterRegionClassifier.UnknownCode
@@ -1077,13 +1293,19 @@ namespace TarkovServerReporter.Tests
                 "data center filter classifies malformed and missing values as unknown");
             Assert(DataCenterRegionClassifier.GetDisplayName("kr") == "한국"
                 && DataCenterRegionClassifier.GetDisplayLabel("JP") == "일본 (JP)"
+                && DataCenterRegionClassifier.GetDisplayName("MY") == "말레이시아"
+                && DataCenterRegionClassifier.GetDisplayLabel("my") == "말레이시아 (MY)"
+                && DataCenterRegionClassifier.GetDisplayLabel("SN") == "싱가포르 (SG)"
                 && DataCenterRegionClassifier.GetDisplayLabel("ZZ") == "ZZ"
-                && DataCenterRegionClassifier.GetDisplayLabel(null) == "기타/미확인",
+                && DataCenterRegionClassifier.GetDisplayName(null) == "PVE로컬/기타"
+                && DataCenterRegionClassifier.GetDisplayLabel(null) == "PVE로컬/기타",
                 "data center filter provides stable Korean labels with a safe fallback");
             Assert(DataCenterRegionClassifier.GetSortOrder("KR")
                     < DataCenterRegionClassifier.GetSortOrder("JP")
                 && DataCenterRegionClassifier.GetSortOrder("JP")
                     < DataCenterRegionClassifier.GetSortOrder("CN")
+                && DataCenterRegionClassifier.GetSortOrder("SN")
+                    == DataCenterRegionClassifier.GetSortOrder("SG")
                 && DataCenterRegionClassifier.GetSortOrder(DataCenterRegionClassifier.UnknownCode)
                     == int.MaxValue,
                 "data center filter ordering is deterministic and keeps unknown last");
