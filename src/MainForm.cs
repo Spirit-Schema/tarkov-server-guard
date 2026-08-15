@@ -60,6 +60,8 @@ namespace TarkovServerReporter
         private Label _packetLossValueLabel;
         private Label[] _detailInfoValueLabels;
         private DataGridView _historyGrid;
+        private StickyActionGrid _stickyActionGrid;
+        private bool _syncingStickyActionGrid;
         private Button _queryButton;
         private Button _copyIpButton;
         private Button _blockedServersButton;
@@ -138,6 +140,41 @@ namespace TarkovServerReporter
             public override Color ImageMarginGradientEnd { get { return SurfaceAlt; } }
             public override Color SeparatorDark { get { return Border; } }
             public override Color SeparatorLight { get { return Border; } }
+        }
+
+        private sealed class StickyActionGrid : DataGridView
+        {
+            private readonly MainForm _owner;
+
+            public StickyActionGrid(MainForm owner)
+            {
+                if (owner == null) throw new ArgumentNullException("owner");
+                _owner = owner;
+                TabStop = true;
+                AccessibleName = "서버 차단 및 해제";
+                AccessibleDescription = "가로 스크롤과 관계없이 선택한 서버를 차단하거나 해제합니다.";
+            }
+
+            protected override void OnMouseWheel(MouseEventArgs e)
+            {
+                _owner.ScrollHistoryRowsFromStickyActions(e.Delta);
+            }
+
+            protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+            {
+                Keys keyCode = keyData & Keys.KeyCode;
+                Keys modifiers = keyData & Keys.Modifiers;
+                if (modifiers == Keys.None
+                    && (keyCode == Keys.Enter || keyCode == Keys.Space)
+                    && CurrentCell is DataGridViewButtonCell)
+                {
+                    OnCellContentClick(new DataGridViewCellEventArgs(
+                        CurrentCell.ColumnIndex,
+                        CurrentCell.RowIndex));
+                    return true;
+                }
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
         }
 
         private sealed class ToolIconButton : Button
@@ -1351,8 +1388,15 @@ namespace TarkovServerReporter
             _historyGrid.Columns.Add(CreateTextColumn("ping", "현재 핑", 92));
             _historyGrid.Columns.Add(CreateTextColumn("actualRtt", "실게임 RTT", 96));
             _historyGrid.Columns.Add(CreateTextColumn("packetLoss", "실게임 패킷손실", 88));
-            _historyGrid.Columns.Add(CreateConnectionActionColumn("blockAction", "차단"));
-            _historyGrid.Columns.Add(CreateConnectionActionColumn("unblockAction", "해제"));
+            DataGridViewButtonColumn blockActionColumn = CreateConnectionActionColumn("blockAction", "차단");
+            DataGridViewButtonColumn unblockActionColumn = CreateConnectionActionColumn("unblockAction", "해제");
+            // The action state remains on the main row. A small native DataGridView
+            // mirrors these two ButtonCells at the fixed right edge because WinForms
+            // only supports freezing columns on the left.
+            blockActionColumn.Visible = false;
+            unblockActionColumn.Visible = false;
+            _historyGrid.Columns.Add(blockActionColumn);
+            _historyGrid.Columns.Add(unblockActionColumn);
             _historyGrid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "result",
@@ -1365,6 +1409,24 @@ namespace TarkovServerReporter
                 {
                     Font = new Font("Malgun Gothic", 7.5F),
                     Padding = new Padding(2, 0, 2, 0)
+                }
+            });
+            _historyGrid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "stickyActionSpacer",
+                HeaderText = string.Empty,
+                Width = 116,
+                MinimumWidth = 2,
+                SortMode = DataGridViewColumnSortMode.NotSortable,
+                Resizable = DataGridViewTriState.False,
+                ReadOnly = true,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Surface,
+                    ForeColor = Surface,
+                    SelectionBackColor = Color.FromArgb(56, 65, 76),
+                    SelectionForeColor = Color.FromArgb(56, 65, 76),
+                    Padding = new Padding(0)
                 }
             });
             foreach (string sortableColumn in new[]
@@ -1393,6 +1455,39 @@ namespace TarkovServerReporter
                     ? Cursors.Hand
                     : Cursors.Default;
             };
+            _historyGrid.Scroll += delegate
+            {
+                UpdateStickyActionGridBounds();
+                SyncStickyActionVerticalScroll();
+            };
+            _historyGrid.SelectionChanged += delegate { SyncStickySelectionFromHistory(); };
+            _historyGrid.RowsAdded += delegate
+            {
+                UpdateStickyActionGridBounds();
+            };
+            _historyGrid.RowsRemoved += delegate
+            {
+                UpdateStickyActionGridBounds();
+            };
+            _historyGrid.Resize += delegate { UpdateStickyActionGridBounds(); };
+            _historyGrid.Layout += delegate { UpdateStickyActionGridBounds(); };
+
+            _stickyActionGrid = CreateStickyActionGrid();
+            _stickyActionGrid.CurrentCellChanged += delegate { SyncHistorySelectionFromStickyActions(); };
+            _stickyActionGrid.SelectionChanged += delegate { SyncHistorySelectionFromStickyActions(); };
+            _stickyActionGrid.CellContentClick += async delegate(object sender, DataGridViewCellEventArgs args)
+            {
+                await StickyActionGridCellContentClickAsync(args);
+            };
+            _stickyActionGrid.CellMouseMove += delegate(object sender, DataGridViewCellMouseEventArgs args)
+            {
+                _stickyActionGrid.Cursor = args.RowIndex >= 0 && args.ColumnIndex >= 0
+                    ? Cursors.Hand
+                    : Cursors.Default;
+            };
+            _stickyActionGrid.MouseLeave += delegate { _stickyActionGrid.Cursor = Cursors.Default; };
+            _historyGrid.Controls.Add(_stickyActionGrid);
+            UpdateStickyActionGridBounds();
             layout.Controls.Add(_historyGrid, 0, 1);
 
             _statusLabel = new Label
@@ -1443,6 +1538,49 @@ namespace TarkovServerReporter
                     Padding = new Padding(2, 3, 2, 3)
                 }
             };
+        }
+
+        private StickyActionGrid CreateStickyActionGrid()
+        {
+            var grid = new StickyActionGrid(this)
+            {
+                BackgroundColor = Surface,
+                BorderStyle = BorderStyle.None,
+                ReadOnly = true,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AllowUserToResizeColumns = false,
+                AllowUserToResizeRows = false,
+                AutoGenerateColumns = false,
+                RowHeadersVisible = false,
+                MultiSelect = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
+                GridColor = Border,
+                EnableHeadersVisualStyles = false,
+                ColumnHeadersHeight = _historyGrid.ColumnHeadersHeight,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ScrollBars = ScrollBars.None,
+                StandardTab = false,
+                RowTemplate = { Height = _historyGrid.RowTemplate.Height }
+            };
+            grid.DefaultCellStyle.BackColor = Surface;
+            grid.DefaultCellStyle.ForeColor = TextPrimary;
+            grid.DefaultCellStyle.SelectionBackColor = _historyGrid.DefaultCellStyle.SelectionBackColor;
+            grid.DefaultCellStyle.SelectionForeColor = TextPrimary;
+            grid.DefaultCellStyle.Font = _historyGrid.DefaultCellStyle.Font;
+            grid.ColumnHeadersDefaultCellStyle.BackColor = SurfaceAlt;
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = TextMuted;
+            grid.ColumnHeadersDefaultCellStyle.Font = _historyGrid.ColumnHeadersDefaultCellStyle.Font;
+            grid.Columns.Add(CreateConnectionActionColumn("blockAction", "차단"));
+            grid.Columns.Add(CreateConnectionActionColumn("unblockAction", "해제"));
+            foreach (DataGridViewColumn column in grid.Columns)
+            {
+                column.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+                column.MinimumWidth = 2;
+                column.Resizable = DataGridViewTriState.False;
+            }
+            return grid;
         }
 
         private bool IsInteractiveCellPoint(DataGridViewCellMouseEventArgs args)
@@ -2872,6 +3010,325 @@ namespace TarkovServerReporter
             return result;
         }
 
+        private void UpdateStickyActionGridBounds()
+        {
+            if (_historyGrid == null || _stickyActionGrid == null
+                || _historyGrid.ClientSize.Width <= 0 || _historyGrid.ClientSize.Height <= 0)
+                return;
+
+            int dpi = _historyGrid.DeviceDpi <= 0 ? 96 : _historyGrid.DeviceDpi;
+            int overlayWidth = ScaleLogical(116, dpi);
+            if (_historyGrid.Columns.Contains("stickyActionSpacer"))
+            {
+                DataGridViewColumn spacer = _historyGrid.Columns["stickyActionSpacer"];
+                if (spacer.Width != overlayWidth)
+                    spacer.Width = overlayWidth;
+            }
+
+            int verticalScrollbarWidth = 0;
+            int horizontalScrollbarHeight = 0;
+            foreach (Control control in _historyGrid.Controls)
+            {
+                var vertical = control as VScrollBar;
+                if (vertical != null && vertical.Visible)
+                    verticalScrollbarWidth = Math.Max(verticalScrollbarWidth, vertical.Width);
+                var horizontal = control as HScrollBar;
+                if (horizontal != null && horizontal.Visible)
+                    horizontalScrollbarHeight = Math.Max(horizontalScrollbarHeight, horizontal.Height);
+            }
+
+            int right = Math.Max(0, _historyGrid.ClientSize.Width - verticalScrollbarWidth);
+            int height = Math.Max(0, _historyGrid.ClientSize.Height - horizontalScrollbarHeight);
+            int width = Math.Min(overlayWidth, right);
+            Rectangle desired = new Rectangle(Math.Max(0, right - width), 0, width, height);
+            if (_stickyActionGrid.Bounds != desired)
+                _stickyActionGrid.Bounds = desired;
+            _stickyActionGrid.BringToFront();
+            _stickyActionGrid.Invalidate();
+        }
+
+        private void SyncStickyActionRows()
+        {
+            if (_historyGrid == null || _stickyActionGrid == null || _syncingStickyActionGrid)
+                return;
+            _syncingStickyActionGrid = true;
+            try
+            {
+                string currentColumnName = _stickyActionGrid.CurrentCell == null
+                    ? "blockAction"
+                    : _stickyActionGrid.Columns[_stickyActionGrid.CurrentCell.ColumnIndex].Name;
+                _stickyActionGrid.Rows.Clear();
+                foreach (DataGridViewRow historyRow in _historyGrid.Rows)
+                {
+                    int rowIndex = _stickyActionGrid.Rows.Add();
+                    DataGridViewRow actionRow = _stickyActionGrid.Rows[rowIndex];
+                    actionRow.Tag = historyRow.Tag;
+                    actionRow.Height = historyRow.Height;
+                    CopyStickyActionCellState(historyRow, actionRow, "blockAction", true);
+                    CopyStickyActionCellState(historyRow, actionRow, "unblockAction", false);
+                }
+                SyncStickySelectionFromHistoryCore(currentColumnName);
+                SyncStickyActionVerticalScrollCore();
+            }
+            finally
+            {
+                _syncingStickyActionGrid = false;
+            }
+            UpdateStickyActionGridBounds();
+        }
+
+        private void UpdateStickyActionRow(DataGridViewRow historyRow)
+        {
+            if (historyRow == null || _stickyActionGrid == null || _syncingStickyActionGrid)
+                return;
+            if (_stickyActionGrid.Rows.Count != _historyGrid.Rows.Count)
+                return;
+            DataGridViewRow actionRow = FindStickyActionRow(
+                historyRow.Tag as ServerSession,
+                historyRow.Index);
+            if (actionRow == null) return;
+            actionRow.Tag = historyRow.Tag;
+            actionRow.Height = historyRow.Height;
+            CopyStickyActionCellState(historyRow, actionRow, "blockAction", true);
+            CopyStickyActionCellState(historyRow, actionRow, "unblockAction", false);
+            _stickyActionGrid.InvalidateRow(actionRow.Index);
+        }
+
+        private static void CopyStickyActionCellState(
+            DataGridViewRow historyRow,
+            DataGridViewRow actionRow,
+            string columnName,
+            bool isBlock)
+        {
+            DataGridViewCell source = historyRow.Cells[columnName];
+            DataGridViewCell target = actionRow.Cells[columnName];
+            bool enabled = source.Tag is bool && (bool)source.Tag;
+            Color background = enabled ? (isBlock ? Danger : Success) : Color.FromArgb(37, 44, 53);
+            Color foreground = enabled
+                ? (isBlock ? Color.White : Color.FromArgb(18, 50, 34))
+                : TextMuted;
+            target.Tag = enabled;
+            target.ToolTipText = source.ToolTipText;
+            target.Style.BackColor = background;
+            target.Style.ForeColor = foreground;
+            target.Style.SelectionBackColor = background;
+            target.Style.SelectionForeColor = foreground;
+        }
+
+        private void SyncStickySelectionFromHistory()
+        {
+            if (_syncingStickyActionGrid || _historyGrid == null || _stickyActionGrid == null)
+                return;
+            _syncingStickyActionGrid = true;
+            try
+            {
+                string currentColumnName = _stickyActionGrid.CurrentCell == null
+                    ? "blockAction"
+                    : _stickyActionGrid.Columns[_stickyActionGrid.CurrentCell.ColumnIndex].Name;
+                SyncStickySelectionFromHistoryCore(currentColumnName);
+                SyncStickyActionVerticalScrollCore();
+            }
+            finally
+            {
+                _syncingStickyActionGrid = false;
+            }
+        }
+
+        private void SyncStickySelectionFromHistoryCore(string preferredColumnName)
+        {
+            if (_historyGrid == null || _stickyActionGrid == null) return;
+            DataGridViewRow historyRow = _historyGrid.SelectedRows
+                .Cast<DataGridViewRow>()
+                .OrderBy(row => row.Index)
+                .FirstOrDefault();
+            if (historyRow == null) historyRow = _historyGrid.CurrentRow;
+            _stickyActionGrid.ClearSelection();
+            if (historyRow == null
+                || historyRow.Index < 0
+                || historyRow.Index >= _stickyActionGrid.Rows.Count)
+                return;
+            string columnName = _stickyActionGrid.Columns.Contains(preferredColumnName)
+                ? preferredColumnName
+                : "blockAction";
+            DataGridViewRow actionRow = FindStickyActionRow(
+                historyRow.Tag as ServerSession,
+                historyRow.Index);
+            if (actionRow == null) return;
+            _stickyActionGrid.CurrentCell = actionRow.Cells[columnName];
+            actionRow.Selected = true;
+        }
+
+        private void SyncHistorySelectionFromStickyActions()
+        {
+            if (_syncingStickyActionGrid || _historyGrid == null || _stickyActionGrid == null
+                || _stickyActionGrid.CurrentCell == null)
+                return;
+            int actionRowIndex = _stickyActionGrid.CurrentCell.RowIndex;
+            if (actionRowIndex < 0 || actionRowIndex >= _stickyActionGrid.Rows.Count) return;
+            var actionSession = _stickyActionGrid.Rows[actionRowIndex].Tag as ServerSession;
+            DataGridViewRow historyRow = FindHistoryRow(actionSession, actionRowIndex);
+            if (historyRow == null) return;
+            _syncingStickyActionGrid = true;
+            try
+            {
+                int horizontalOffset = _historyGrid.HorizontalScrollingOffset;
+                _historyGrid.ClearSelection();
+                historyRow.Selected = true;
+                int columnIndex = GetHistoryCurrentColumnIndex();
+                if (columnIndex >= 0)
+                    _historyGrid.CurrentCell = historyRow.Cells[columnIndex];
+                try { _historyGrid.HorizontalScrollingOffset = horizontalOffset; }
+                catch { }
+                var session = historyRow.Tag as ServerSession;
+                if (session != null) SelectSession(session);
+                SyncHistoryVerticalScrollToRow(historyRow.Index);
+            }
+            finally
+            {
+                _syncingStickyActionGrid = false;
+            }
+        }
+
+        private int GetHistoryCurrentColumnIndex()
+        {
+            int columnIndex = _historyGrid.CurrentCell == null
+                ? _historyGrid.FirstDisplayedScrollingColumnIndex
+                : _historyGrid.CurrentCell.ColumnIndex;
+            if (columnIndex >= 0 && columnIndex < _historyGrid.Columns.Count
+                && _historyGrid.Columns[columnIndex].Visible
+                && !string.Equals(
+                    _historyGrid.Columns[columnIndex].Name,
+                    "stickyActionSpacer",
+                    StringComparison.Ordinal))
+                return columnIndex;
+            DataGridViewColumn first = _historyGrid.Columns
+                .Cast<DataGridViewColumn>()
+                .Where(column => column.Visible
+                    && !string.Equals(column.Name, "stickyActionSpacer", StringComparison.Ordinal))
+                .OrderBy(column => column.DisplayIndex)
+                .FirstOrDefault();
+            return first == null ? -1 : first.Index;
+        }
+
+        private DataGridViewRow FindStickyActionRow(ServerSession session, int fallbackIndex)
+        {
+            if (_stickyActionGrid == null) return null;
+            DataGridViewRow matched = _stickyActionGrid.Rows
+                .Cast<DataGridViewRow>()
+                .FirstOrDefault(row => SameSessionKey(row.Tag as ServerSession, session));
+            if (matched != null) return matched;
+            if (session != null && !string.IsNullOrWhiteSpace(session.SessionKey))
+                return null;
+            return fallbackIndex >= 0 && fallbackIndex < _stickyActionGrid.Rows.Count
+                ? _stickyActionGrid.Rows[fallbackIndex]
+                : null;
+        }
+
+        private DataGridViewRow FindHistoryRow(ServerSession session, int fallbackIndex)
+        {
+            if (_historyGrid == null) return null;
+            DataGridViewRow matched = _historyGrid.Rows
+                .Cast<DataGridViewRow>()
+                .FirstOrDefault(row => SameSessionKey(row.Tag as ServerSession, session));
+            if (matched != null) return matched;
+            if (session != null && !string.IsNullOrWhiteSpace(session.SessionKey))
+                return null;
+            return fallbackIndex >= 0 && fallbackIndex < _historyGrid.Rows.Count
+                ? _historyGrid.Rows[fallbackIndex]
+                : null;
+        }
+
+        private static bool SameSessionKey(ServerSession left, ServerSession right)
+        {
+            if (left == null || right == null) return false;
+            if (!string.IsNullOrWhiteSpace(left.SessionKey)
+                && !string.IsNullOrWhiteSpace(right.SessionKey))
+                return string.Equals(left.SessionKey, right.SessionKey, StringComparison.Ordinal);
+            return ReferenceEquals(left, right);
+        }
+
+        private void SyncHistoryVerticalScrollToRow(int rowIndex)
+        {
+            if (_historyGrid == null || rowIndex < 0 || rowIndex >= _historyGrid.Rows.Count) return;
+            if (!_historyGrid.Rows[rowIndex].Displayed)
+            {
+                try { _historyGrid.FirstDisplayedScrollingRowIndex = rowIndex; }
+                catch { }
+            }
+            SyncStickyActionVerticalScrollCore();
+        }
+
+        private void SyncStickyActionVerticalScroll()
+        {
+            if (_syncingStickyActionGrid || _historyGrid == null || _stickyActionGrid == null)
+                return;
+            _syncingStickyActionGrid = true;
+            try { SyncStickyActionVerticalScrollCore(); }
+            finally { _syncingStickyActionGrid = false; }
+        }
+
+        private void SyncStickyActionVerticalScrollCore()
+        {
+            if (_historyGrid == null || _stickyActionGrid == null || _stickyActionGrid.Rows.Count == 0)
+                return;
+            int firstRow;
+            try { firstRow = _historyGrid.FirstDisplayedScrollingRowIndex; }
+            catch { return; }
+            if (firstRow < 0 || firstRow >= _stickyActionGrid.Rows.Count) return;
+            try
+            {
+                if (_stickyActionGrid.FirstDisplayedScrollingRowIndex != firstRow)
+                    _stickyActionGrid.FirstDisplayedScrollingRowIndex = firstRow;
+            }
+            catch { }
+        }
+
+        private async Task StickyActionGridCellContentClickAsync(DataGridViewCellEventArgs args)
+        {
+            if (args == null || args.RowIndex < 0 || args.ColumnIndex < 0
+                || _stickyActionGrid == null || _historyGrid == null
+                || args.RowIndex >= _historyGrid.Rows.Count)
+                return;
+            string columnName = _stickyActionGrid.Columns[args.ColumnIndex].Name;
+            PingKickAction action;
+            if (string.Equals(columnName, "blockAction", StringComparison.Ordinal))
+                action = PingKickAction.Block;
+            else if (string.Equals(columnName, "unblockAction", StringComparison.Ordinal))
+                action = PingKickAction.Unblock;
+            else
+                return;
+            SyncHistorySelectionFromStickyActions();
+            var actionSession = _stickyActionGrid.Rows[args.RowIndex].Tag as ServerSession;
+            DataGridViewRow historyRow = FindHistoryRow(actionSession, args.RowIndex);
+            if (historyRow == null) return;
+            var session = historyRow.Tag as ServerSession;
+            if (session != null)
+                await ExecuteHistoryConnectionActionAsync(historyRow, session, action);
+        }
+
+        private void ScrollHistoryRowsFromStickyActions(int wheelDelta)
+        {
+            if (_historyGrid == null || _historyGrid.Rows.Count == 0 || wheelDelta == 0) return;
+            int current;
+            try { current = _historyGrid.FirstDisplayedScrollingRowIndex; }
+            catch { return; }
+            if (current < 0) return;
+            int lines = SystemInformation.MouseWheelScrollLines;
+            if (lines == -1)
+                lines = Math.Max(1, _historyGrid.DisplayedRowCount(false));
+            else
+                lines = Math.Max(1, lines);
+            int notches = Math.Max(1, Math.Abs(wheelDelta) / SystemInformation.MouseWheelScrollDelta);
+            int direction = wheelDelta > 0 ? -1 : 1;
+            int target = Math.Max(
+                0,
+                Math.Min(_historyGrid.Rows.Count - 1, current + (direction * lines * notches)));
+            if (target == current) return;
+            try { _historyGrid.FirstDisplayedScrollingRowIndex = target; }
+            catch { }
+            SyncStickyActionVerticalScroll();
+        }
+
         private string AppendRegionFilterSummary(string message)
         {
             if (_selectedRegionCodes.Count == 0) return message;
@@ -3348,6 +3805,7 @@ namespace TarkovServerReporter
                 UpdateNoteCell(row, hasNote);
                 UpdateActionCells(row);
             }
+            SyncStickyActionRows();
         }
 
         private static string GetMapAndTypeText(ServerSession session)
@@ -3976,20 +4434,29 @@ namespace TarkovServerReporter
             }
 
             PingKickAction action;
-            string actionColumn;
             if (args.ColumnIndex == _historyGrid.Columns["blockAction"].Index)
             {
                 action = PingKickAction.Block;
-                actionColumn = "blockAction";
             }
             else if (args.ColumnIndex == _historyGrid.Columns["unblockAction"].Index)
             {
                 action = PingKickAction.Unblock;
-                actionColumn = "unblockAction";
             }
             else return;
             if (!IsInteractiveCellPoint(args)) return;
 
+            await ExecuteHistoryConnectionActionAsync(row, session, action);
+        }
+
+        private async Task ExecuteHistoryConnectionActionAsync(
+            DataGridViewRow row,
+            ServerSession session,
+            PingKickAction action)
+        {
+            if (row == null || session == null) return;
+            string actionColumn = action == PingKickAction.Block
+                ? "blockAction"
+                : "unblockAction";
             if (_demoMode)
             {
                 ShowActionNotice("미리보기 모드에서는 실제 방화벽을 변경하지 않습니다.");
@@ -4148,6 +4615,7 @@ namespace TarkovServerReporter
         {
             if (_historyGrid == null) return;
             foreach (DataGridViewRow row in _historyGrid.Rows) UpdateActionCells(row);
+            if (_stickyActionGrid != null) _stickyActionGrid.Invalidate();
         }
 
         private void UpdateActionCells(DataGridViewRow row)
@@ -4166,6 +4634,7 @@ namespace TarkovServerReporter
                 ApplyActionCellStyle(unblockCell, false, false);
                 blockCell.ToolTipText = "이 기록에는 접속 제어할 서버 IP가 없습니다.";
                 unblockCell.ToolTipText = blockCell.ToolTipText;
+                UpdateStickyActionRow(row);
                 return;
             }
 
@@ -4191,6 +4660,7 @@ namespace TarkovServerReporter
             unblockCell.ToolTipText = help;
             _historyGrid.InvalidateCell(blockCell);
             _historyGrid.InvalidateCell(unblockCell);
+            UpdateStickyActionRow(row);
         }
 
         private static void ApplyActionCellStyle(DataGridViewCell cell, bool enabled, bool isBlock)
