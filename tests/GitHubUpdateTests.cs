@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +19,7 @@ internal static class GitHubUpdateTests
     {
         Run("semantic versions are strict and ordered", TestSemanticVersions);
         Run("production repository is fixed and token-free", TestFixedRepository);
+        Run("GitHub checks add TLS 1.2 without replacing other protocols", TestTls12Boundary);
         Run("update checks run at most once per day", TestDailyCheckCadence);
         Run("future clock state cannot suppress checks", TestFutureClockRecovery);
         Run("only newer stable releases are accepted", TestStableUpgradeBoundary);
@@ -89,6 +91,39 @@ internal static class GitHubUpdateTests
         clock.UtcNowValue = clock.UtcNowValue.AddMinutes(1);
         Assert(Get(service) != null, "The 24-hour check did not run.");
         Assert(engine.CheckCount == 2, "Daily update check count mismatch.");
+    }
+
+    private static void TestTls12Boundary()
+    {
+        SecurityProtocolType original = ServicePointManager.SecurityProtocol;
+        SecurityProtocolType observedAtCheck = 0;
+        SecurityProtocolType observedAfterCheck = 0;
+        try
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls;
+            var engine = new FakeEngine(null);
+            var service = new GitHubUpdateService(
+                "0.7.1",
+                engine,
+                new MemoryStateStore(),
+                new FakeClock(new DateTime(2026, 8, 15, 1, 0, 0, DateTimeKind.Utc)));
+
+            Assert(Get(service) == null, "TLS boundary check unexpectedly returned an update.");
+            observedAtCheck = engine.SecurityProtocolAtLastCheck;
+            observedAfterCheck = ServicePointManager.SecurityProtocol;
+        }
+        finally
+        {
+            ServicePointManager.SecurityProtocol = original;
+        }
+
+        SecurityProtocolType expected = SecurityProtocolType.Tls | SecurityProtocolType.Tls12;
+        Assert(observedAtCheck == expected,
+            "TLS 1.2 was not added before the update engine check or another protocol was replaced.");
+        Assert(observedAfterCheck == expected,
+            "TLS 1.2 update-check configuration did not preserve the existing protocol flags.");
+        Assert(ServicePointManager.SecurityProtocol == original,
+            "The TLS test did not restore the process-wide security protocol value.");
     }
 
     private static void TestFutureClockRecovery()
@@ -327,6 +362,7 @@ internal static class GitHubUpdateTests
         public bool IsAvailable { get { return Available; } }
         public int CheckCount { get; private set; }
         public Exception CheckException { get; set; }
+        public SecurityProtocolType SecurityProtocolAtLastCheck { get; private set; }
 
         public FakeEngine(string candidate)
         {
@@ -337,6 +373,8 @@ internal static class GitHubUpdateTests
         public Task<ApplicationUpdate> CheckForUpdateAsync(CancellationToken cancellationToken)
         {
             CheckCount++;
+            SecurityProtocolAtLastCheck = ServicePointManager.SecurityProtocol;
+            cancellationToken.ThrowIfCancellationRequested();
             if (CheckException != null) throw CheckException;
             return Task.FromResult(string.IsNullOrEmpty(_candidate)
                 ? null
