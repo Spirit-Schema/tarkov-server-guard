@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright 2026 Spirit-Schema
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

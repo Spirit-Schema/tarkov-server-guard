@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright 2026 Spirit-Schema
+
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -17,9 +20,9 @@ namespace TarkovServerReporter
         private static readonly Color ButtonText = Color.FromArgb(29, 24, 17);
 
         internal const string MatchLine = "매칭 로딩 중 차단한 서버가 매칭되면";
-        internal const string ErrorLine = "화면이 잠시 멈춘 후 접속 오류가 표시될 수 있습니다.";
+        internal const string ErrorLine = "화면이 잠시 멈춘 후 접속실패가 표시될 수 있습니다.";
         internal const string NormalLine = "이는 차단한 서버로의 접속을 막아주는 정상 작동입니다.";
-        internal const string Step1Line = "1. 접속 오류가 표시되면 종료 대신 ESCAPE FROM TARKOV 선택";
+        internal const string Step1Line = "1. 접속실패가 표시되면 종료 대신 ESCAPE FROM TARKOV 선택";
         internal const string Step2Line = "2. 다음 화면에서 재진입 대신 나가기 확인 선택";
         internal const string Step3Line = "3. 축하합니다! 차단한 서버로의 접속을 막았습니다. 다시 매칭해 주세요.";
         internal const string NoticeText =
@@ -194,7 +197,7 @@ namespace TarkovServerReporter
             notice.Controls.Add(CreateBodyLabel("- " + MatchLine + "\r\n  " + ErrorLine), 0, 0);
             notice.Controls.Add(CreateBodyLabel("- " + NormalLine), 0, 2);
             notice.Controls.Add(CreateStepBlock(
-                new[] { "1. 접속 오류가 표시되면 ", "종료", " 대신" },
+                new[] { "1. 접속실패가 표시되면 ", "종료", " 대신" },
                 new[] { "   ", "ESCAPE FROM TARKOV", " 선택" }), 0, 4);
             notice.Controls.Add(CreateStepBlock(
                 new[] { "2. 다음 화면에서 ", "재진입", " 대신" },

@@ -53,4 +53,4 @@ GitHub Releases에는 Setup과 Portable만이 아니라 같은 실행에서 생�
 - 추정 지역 데이터: [DB-IP Lite City](https://db-ip.com/db/download/ip-to-city-lite) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - 설치·자동 업데이트: [Velopack](https://github.com/velopack/velopack) · MIT
 
-프로젝트 라이선스는 [LICENSE](LICENSE), 전체 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.
+프로젝트 자체 소스와 자산은 [MPL-2.0](LICENSE)을 따릅니다. 적용 범위는 [라이선스 안내](LICENSING.md), 전체 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.

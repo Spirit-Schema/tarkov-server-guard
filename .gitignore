@@ -1,9 +1,86 @@
+# Build, packaging, and review output
 /build/
 /dist/
 /release/
 /review/
+/artifacts/
+/out/
+**/bin/
+**/obj/
 /preview*.png
+
+# Real game/launcher logs and copied local application data
+*.log
+*.log.*
+/logs/
+/Logs/
+/EFT-Logs/
+/Arena-Logs/
+/Launcher-Logs/
+/AppData/
+/LocalAppData/
+/Roaming/
+/runtime-data/
+/local-app-data/
+/user-data/
+/private-data/
+/diagnostics/
+
+# User settings, notes, reports, and block history
+/log-paths.txt
+/settings.txt
+/blocked-server-metadata.json
+/update-check-state.json
+/usage-guide.shown
+/RaidNotes/
+/UserReportMemos/
+/sid*.txt
+/account*.json
+/profile*.json
+
+# DB-IP databases and download/update caches
+*.mmdb
+*.mmdb.gz
+*.mmdb.bak*
+/DbIpLite/
+/cache/
+/.cache/
+
+# Secrets, tokens, certificates, and signing keys
+/.env
+/.env.*
+!/.env.example
+/secrets/
+/tokens/
+/credentials/
+/certificates/
+/signing/
+/github-token*
+/gh-token*
+*.token
+*.pfx
+*.p12
+*.p7b
+*.p7c
+*.pem
+*.key
+*.snk
+*.jks
+*.keystore
+
+# Personal or sensitive captures (publishable artwork stays under assets/branding)
+/captures/
+/screenshots/
+/personal-captures/
+/private-captures/
+/test-captures/
+
+# IDE, OS, and temporary files
 /.vs/
 *.suo
 *.user
 *.tmp
+*.tmp.*
+*.bak
+.DS_Store
+Thumbs.db

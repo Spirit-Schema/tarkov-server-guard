@@ -1,5 +1,7 @@
 # Third-party notices
 
+Tarkov Server Guard 자체 소스와 자산의 MPL-2.0 조건은 `LICENSE`와 `LICENSING.md`를 따릅니다. 아래 고지는 프로젝트에 사용되거나 참고된 외부 구성요소의 별도 권리를 보존합니다.
+
 ## EFT: Where Am I
 
 - Repository: https://github.com/karpitony/eft-where-am-i
@@ -58,7 +60,7 @@ For servers blocked by this application, the server IP, data-center code, return
 - Project: https://github.com/velopack/velopack
 - Authors: Velopack Ltd, Caelan Sayler, Kevin Bost
 - License: MIT, https://licenses.nuget.org/MIT
-- Copyright: Copyright © Velopack Ltd. All rights reserved.
+- Copyright: Copyright © 2021 Caelan Sayler; Copyright © 2024 Velopack Ltd.
 
 Velopack is distributed with installable and portable builds to check, download, apply, and restart into a newer Tarkov Server Guard release. The application uses the fixed public GitHub repository `Spirit-Schema/tarkov-server-guard`, requests stable releases without a GitHub access token, and leaves the current application usable if an update check or download fails.
 

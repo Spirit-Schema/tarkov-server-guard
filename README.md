@@ -41,7 +41,7 @@ Escape from Tarkov와 Escape from Tarkov: Arena의 최근 접속 서버를 한�
 
 ## 꼭 알아두세요
 
-- 차단한 서버가 매칭되면 로딩이 멈추거나 접속 오류가 표시될 수 있습니다. 
+- 차단한 서버가 매칭되면 로딩이 멈추거나 접속실패가 표시될 수 있습니다.
    이는 차단서버 연결을 막은 정상 작동이며, 게임에서 나간 뒤 다시 매칭하면 됩니다.
 - Arena 서버 차단 시 탈주 페널티 적용 여부는 확인되지 않았습니다. 전용 확인창에 동의한 경우에만 차단됩니다.
 - 지역은 DB-IP Lite 기반 추정값이므로 실제 데이터센터 위치와 다를 수 있습니다.
@@ -68,9 +68,13 @@ Escape from Tarkov와 Escape from Tarkov: Arena의 최근 접속 서버를 한�
 
 - [문제 해결](TROUBLESHOOTING.md)
 - [개인정보 및 네트워크](PRIVACY.md)
+- [라이선스 안내](LICENSING.md)
+- [공개 및 제외 범위](PUBLICATION_SCOPE.md)
 - [개발·빌드 안내](DEVELOPMENT.md)
 - [서드파티 고지](THIRD_PARTY_NOTICES.md)
-- [MIT 라이선스](LICENSE)
+- [MPL-2.0 원문](LICENSE)
+
+현재 자체 소스와 자산은 MPL-2.0으로 공개되며 자세한 적용 범위는 [라이선스 안내](LICENSING.md)를 따릅니다.
 
 이 프로그램은 Battlestate Games 또는 Escape from Tarkov의 공식 도구가 아닙니다.
 

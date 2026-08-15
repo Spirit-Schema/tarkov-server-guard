@@ -30,7 +30,7 @@ Portable은 압축을 푼 뒤 폴더 안의 파일 구성을 유지해 주세요
 
 ## 주의사항
 
-- 차단한 서버가 매칭되면 로딩이 멈추거나 접속 오류가 표시될 수 있습니다. 게임에서 나간 뒤 다시 매칭하세요.
+- 차단한 서버가 매칭되면 로딩이 멈추거나 접속실패가 표시될 수 있습니다. 게임에서 나간 뒤 다시 매칭하세요.
 - Arena 서버 차단의 탈주 페널티 적용 여부는 확인되지 않았으며, 전용 경고창에서 동의해야 차단됩니다.
 - 지역 정보는 DB-IP Lite 기반 추정값입니다. 조회 시 새 월간 DB가 있으면 약 60~70MB를 새 파일로 교체하며 매달 누적하지 않습니다.
 - 사용자의 게임 로그·계정 정보·SID·로컬 경로는 전송하지 않습니다.
@@ -48,5 +48,9 @@ Portable은 압축을 푼 뒤 폴더 안의 파일 구성을 유지해 주세요
 ```powershell
 Get-FileHash -Algorithm SHA256 .\SpiritSchema.TarkovServerGuard-win-Setup.exe
 ```
+
+## 라이선스
+
+현재 자체 소스와 자산은 MPL-2.0으로 공개됩니다. 자세한 내용은 저장소의 `LICENSE`와 `LICENSING.md`에서 확인할 수 있습니다.
 
 자세한 사용법과 개인정보 안내는 [README](https://github.com/Spirit-Schema/tarkov-server-guard#readme)에서 확인할 수 있습니다.

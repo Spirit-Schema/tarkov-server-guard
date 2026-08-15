@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright 2026 Spirit-Schema
+
 param(
     [string]$Version = '0.7.1',
     [switch]$SkipTests
@@ -70,6 +73,8 @@ foreach ($document in @(
     'README.md',
     'PRIVACY.md',
     'TROUBLESHOOTING.md',
+    'LICENSING.md',
+    'PUBLICATION_SCOPE.md',
     'DEVELOPMENT.md',
     'LICENSE',
     'THIRD_PARTY_NOTICES.md')) {
