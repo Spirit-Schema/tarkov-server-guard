@@ -512,23 +512,27 @@ namespace TarkovServerReporter.Tests
             Assert(completed.OperationState == RaidOperationState.Completed
                 && completed.OperationStartedAt == new DateTime(2026, 8, 14, 8, 1, 0)
                 && completed.OperationEndedAt == new DateTime(2026, 8, 14, 8, 20, 0)
+                && completed.RaidEntryDuration == TimeSpan.FromMinutes(1)
                 && completed.OperationDuration == TimeSpan.FromMinutes(19),
-                "EFT operation time uses GameStarted and the final normal disconnect");
+                "EFT entry and operation times use server assignment, GameStarted, and the final normal disconnect");
             Assert(reconnected.OperationState == RaidOperationState.Completed
                 && reconnected.ReconnectCount == 1
+                && reconnected.RaidEntryDuration == TimeSpan.FromMinutes(1)
                 && reconnected.OperationEndedAt == new DateTime(2026, 8, 14, 9, 21, 0)
                 && reconnected.OperationDuration == TimeSpan.FromMinutes(20),
                 "an intermediate reason-zero disconnect followed by reconnect does not end the operation");
             Assert(missingStart.OperationState == RaidOperationState.Unknown
                 && !missingStart.OperationStartedAt.HasValue
+                && !missingStart.RaidEntryDuration.HasValue
                 && !missingStart.OperationDuration.HasValue,
                 "a terminal record without GameStarted does not invent an operation duration");
             ServerSession cachedCompleted = RaidLogScanner.Scan(
                 new TarkovLogPaths { EftPath = eftLogs },
                 100).Sessions.Single(item => item.ShortId == "OP001");
             Assert(cachedCompleted.OperationState == RaidOperationState.Completed
+                && cachedCompleted.RaidEntryDuration == TimeSpan.FromMinutes(1)
                 && cachedCompleted.OperationDuration == TimeSpan.FromMinutes(19),
-                "directory cache clones preserve completed operation evidence");
+                "directory cache clones preserve entry and completed operation evidence");
 
             DateTime activeNow = DateTime.Now;
             DateTime activeAssignment = new DateTime(
@@ -566,6 +570,7 @@ namespace TarkovServerReporter.Tests
             ServerSession active = activeResult.Sessions.Single();
             Assert(active.OperationState == RaidOperationState.InProgress
                 && active.OperationStartedAt == activeStart
+                && active.RaidEntryDuration == TimeSpan.FromMinutes(1)
                 && !active.OperationEndedAt.HasValue
                 && !active.OperationDuration.HasValue,
                 "a fresh final GameStarted sequence is exposed as an operation in progress");
@@ -643,8 +648,9 @@ namespace TarkovServerReporter.Tests
                 100).Sessions.Single();
             Assert(local.HostingMode == TarkovHostingMode.Local
                 && local.OperationState == RaidOperationState.Completed
+                && !local.RaidEntryDuration.HasValue
                 && local.OperationDuration == TimeSpan.FromMinutes(15),
-                "local PvE operation time uses GameStarted and the confirmed post-raid profile transition");
+                "local PvE operation time is retained without inventing a server-entry duration");
 
             string arenaLogs = Path.Combine(tempRoot, "OperationDurationArenaLogs");
             string arenaFolder = Path.Combine(arenaLogs, "log_completed");
@@ -662,8 +668,9 @@ namespace TarkovServerReporter.Tests
                 new TarkovLogPaths { ArenaPath = arenaLogs },
                 100).Sessions.Single();
             Assert(arena.OperationState == RaidOperationState.Completed
+                && arena.RaidEntryDuration == TimeSpan.FromMinutes(1)
                 && arena.OperationDuration == TimeSpan.FromMinutes(10),
-                "Arena operation time uses application GameStarted and lifecycle MatchEnd");
+                "Arena entry and operation times use server assignment, application GameStarted, and lifecycle MatchEnd");
 
             string longArenaLogs = Path.Combine(tempRoot, "OperationDurationLongArenaLogs");
             string longArenaFolder = Path.Combine(longArenaLogs, "log_too_long");
@@ -683,6 +690,22 @@ namespace TarkovServerReporter.Tests
             Assert(tooLong.OperationState == RaidOperationState.Unknown
                 && !tooLong.OperationDuration.HasValue,
                 "an implausibly long terminal interval is rejected as unknown");
+
+            var invalidEntryOrder = new ServerSession
+            {
+                IpAddress = "192.0.2.90",
+                IpDetectedAt = new DateTime(2026, 8, 14, 15, 0, 0),
+                OperationStartedAt = new DateTime(2026, 8, 14, 14, 59, 59)
+            };
+            var implausibleEntryDelay = new ServerSession
+            {
+                IpAddress = "192.0.2.91",
+                IpDetectedAt = new DateTime(2026, 8, 14, 15, 0, 0),
+                OperationStartedAt = new DateTime(2026, 8, 14, 15, 30, 1)
+            };
+            Assert(!invalidEntryOrder.RaidEntryDuration.HasValue
+                && !implausibleEntryDelay.RaidEntryDuration.HasValue,
+                "entry duration rejects reversed and implausibly delayed log sequences");
         }
 
         private static void TestRaidLogQueryFiltering(string tempRoot)
@@ -1440,11 +1463,11 @@ namespace TarkovServerReporter.Tests
             {
                 HostingMode = TarkovHostingMode.Server
             };
-            Assert(RaidMetricPresentation.FormatActualRtt(missingServer) == "표본부족"
-                && RaidMetricPresentation.FormatPacketLoss(missingServer) == "표본부족"
-                && RaidMetricPresentation.GetActualRttHelp(missingServer) == RaidMetricPresentation.MissingLogHelp
-                && RaidMetricPresentation.GetPacketLossHelp(missingServer) == RaidMetricPresentation.MissingLogHelp,
-                "missing server samples use an explicit label and the shared missing-log help");
+            Assert(RaidMetricPresentation.FormatActualRtt(missingServer) == "로그없음"
+                && RaidMetricPresentation.FormatPacketLoss(missingServer) == "로그없음"
+                && RaidMetricPresentation.GetActualRttHelp(missingServer) == "유효한 RTT 로그가 없습니다."
+                && RaidMetricPresentation.GetPacketLossHelp(missingServer) == "유효한 패킷손실 로그가 없습니다.",
+                "missing server samples use one compact label and metric-specific help");
 
             var local = new ServerSession
             {
@@ -1473,9 +1496,12 @@ namespace TarkovServerReporter.Tests
                 && value == 0,
                 "valid zero-loss server metrics keep their measured values without missing-log help");
 
-            measured.NetworkLoss = 0.0000001;
-            Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "<0.01%",
-                "positive packet loss below one hundredth of a percent remains visible");
+            foreach (double tinyPositive in new[] { double.Epsilon, 0.0000001 })
+            {
+                measured.NetworkLoss = tinyPositive;
+                Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "0.01%",
+                    "every positive packet loss below one hundredth of a percent is clamped to the display floor");
+            }
             measured.NetworkLoss = 0.0001;
             Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "0.01%",
                 "the packet-loss precision boundary uses the numeric percentage");
@@ -1487,8 +1513,8 @@ namespace TarkovServerReporter.Tests
             {
                 measured.ActualRttMs = invalid;
                 measured.NetworkLoss = invalid;
-                Assert(RaidMetricPresentation.FormatActualRtt(measured) == "표본부족"
-                    && RaidMetricPresentation.FormatPacketLoss(measured) == "표본부족"
+                Assert(RaidMetricPresentation.FormatActualRtt(measured) == "로그없음"
+                    && RaidMetricPresentation.FormatPacketLoss(measured) == "로그없음"
                     && !RaidMetricPresentation.TryGetActualRtt(measured, out value)
                     && !RaidMetricPresentation.TryGetPacketLoss(measured, out value),
                     "negative and non-finite metrics are treated as unavailable samples");

@@ -2018,6 +2018,8 @@ namespace TarkovServerReporter
                     existing.RaidPurpose = candidate.RaidPurpose;
                 if (!existing.MatchmakingSeconds.HasValue && candidate.MatchmakingSeconds.HasValue)
                     existing.MatchmakingSeconds = candidate.MatchmakingSeconds;
+                if (!existing.OperationStartedAt.HasValue && candidate.OperationStartedAt.HasValue)
+                    existing.OperationStartedAt = candidate.OperationStartedAt;
                 if (GetOperationStatePriority(candidate.OperationState)
                     > GetOperationStatePriority(existing.OperationState))
                 {

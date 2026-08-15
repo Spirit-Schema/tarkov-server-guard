@@ -27,6 +27,7 @@ namespace TarkovServerReporter
         private static readonly Color Warning = Color.FromArgb(247, 190, 79);
         private static readonly Color Danger = Color.FromArgb(238, 106, 112);
         private static readonly Color ReportOrange = Color.FromArgb(205, 132, 48);
+        private static readonly Color NativeScrollTrack = Color.FromArgb(23, 23, 23);
 
         private readonly bool _demoMode;
         private readonly TarkovLogSettingsStore _settingsStore = new TarkovLogSettingsStore();
@@ -61,6 +62,7 @@ namespace TarkovServerReporter
         private Label[] _detailInfoValueLabels;
         private DataGridView _historyGrid;
         private StickyActionGrid _stickyActionGrid;
+        private DataGridViewScrollCorner _historyScrollCorner;
         private bool _syncingStickyActionGrid;
         private Button _queryButton;
         private Button _copyIpButton;
@@ -237,6 +239,146 @@ namespace TarkovServerReporter
                     if (focusBounds.Width > 0 && focusBounds.Height > 0)
                         ControlPaint.DrawFocusRectangle(e.Graphics, focusBounds, ForeColor, BackColor);
                 }
+            }
+        }
+
+        private sealed class SegmentedDetailLabel : Label
+        {
+            private string _primaryText = string.Empty;
+            private string _suffixText = string.Empty;
+
+            public Color SuffixColor { get; set; }
+
+            public override string Text
+            {
+                get { return base.Text; }
+                set
+                {
+                    _primaryText = value ?? string.Empty;
+                    _suffixText = string.Empty;
+                    base.Text = _primaryText;
+                    Invalidate();
+                }
+            }
+
+            public void SetTextSegments(string primaryText, string suffixText)
+            {
+                _primaryText = primaryText ?? string.Empty;
+                _suffixText = suffixText ?? string.Empty;
+                base.Text = _primaryText + _suffixText;
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.Clear(BackColor);
+                var bounds = new Rectangle(
+                    Padding.Left,
+                    Padding.Top,
+                    Math.Max(0, ClientSize.Width - Padding.Horizontal),
+                    Math.Max(0, ClientSize.Height - Padding.Vertical));
+                if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+                const TextFormatFlags measureFlags = TextFormatFlags.NoPadding
+                    | TextFormatFlags.NoPrefix
+                    | TextFormatFlags.SingleLine;
+                const TextFormatFlags drawFlags = measureFlags
+                    | TextFormatFlags.VerticalCenter
+                    | TextFormatFlags.EndEllipsis;
+                int primaryWidth = TextRenderer.MeasureText(
+                    e.Graphics,
+                    _primaryText,
+                    Font,
+                    Size.Empty,
+                    measureFlags).Width;
+                int suffixWidth = TextRenderer.MeasureText(
+                    e.Graphics,
+                    _suffixText,
+                    Font,
+                    Size.Empty,
+                    measureFlags).Width;
+
+                if (string.IsNullOrEmpty(_suffixText))
+                {
+                    TextRenderer.DrawText(e.Graphics, _primaryText, Font, bounds, ForeColor, drawFlags);
+                    return;
+                }
+
+                bool fits = primaryWidth + suffixWidth <= bounds.Width;
+                int visibleSuffixWidth = Math.Min(suffixWidth, bounds.Width);
+                int primaryBoundsWidth = fits
+                    ? primaryWidth
+                    : Math.Max(0, bounds.Width - visibleSuffixWidth);
+                if (primaryBoundsWidth > 0)
+                {
+                    TextRenderer.DrawText(
+                        e.Graphics,
+                        _primaryText,
+                        Font,
+                        new Rectangle(bounds.Left, bounds.Top, primaryBoundsWidth, bounds.Height),
+                        ForeColor,
+                        drawFlags);
+                }
+
+                int suffixLeft = fits
+                    ? bounds.Left + primaryBoundsWidth
+                    : bounds.Right - visibleSuffixWidth;
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    _suffixText,
+                    Font,
+                    new Rectangle(suffixLeft, bounds.Top, visibleSuffixWidth, bounds.Height),
+                    SuffixColor,
+                    drawFlags);
+            }
+        }
+
+        private sealed class FittedDetailLabel : Label
+        {
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.Clear(BackColor);
+                var bounds = new Rectangle(
+                    Padding.Left,
+                    Padding.Top,
+                    Math.Max(0, ClientSize.Width - Padding.Horizontal),
+                    Math.Max(0, ClientSize.Height - Padding.Vertical));
+                if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+                const TextFormatFlags measureFlags = TextFormatFlags.NoPadding
+                    | TextFormatFlags.NoPrefix
+                    | TextFormatFlags.SingleLine;
+                const TextFormatFlags drawFlags = measureFlags
+                    | TextFormatFlags.VerticalCenter;
+                Font fittedFont = null;
+                Font drawFont = Font;
+                float fittedSize = Font.Size;
+                while (TextRenderer.MeasureText(
+                        e.Graphics,
+                        Text ?? string.Empty,
+                        drawFont,
+                        Size.Empty,
+                        measureFlags).Width > bounds.Width
+                    && fittedSize > 6F)
+                {
+                    if (fittedFont != null) fittedFont.Dispose();
+                    fittedSize = Math.Max(6F, fittedSize - 0.25F);
+                    fittedFont = new Font(
+                        Font.FontFamily,
+                        fittedSize,
+                        Font.Style,
+                        GraphicsUnit.Point);
+                    drawFont = fittedFont;
+                }
+
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    Text ?? string.Empty,
+                    drawFont,
+                    bounds,
+                    ForeColor,
+                    drawFlags);
+                if (fittedFont != null) fittedFont.Dispose();
             }
         }
 
@@ -1586,6 +1728,9 @@ namespace TarkovServerReporter
             };
             _stickyActionGrid.MouseLeave += delegate { _stickyActionGrid.Cursor = Cursors.Default; };
             _historyGrid.Controls.Add(_stickyActionGrid);
+            _historyScrollCorner = new DataGridViewScrollCorner(
+                _historyGrid,
+                NativeScrollTrack);
             UpdateStickyActionGridBounds();
             layout.Controls.Add(_historyGrid, 0, 1);
 
@@ -2149,7 +2294,7 @@ namespace TarkovServerReporter
             string[] keys =
             {
                 "작전시간",
-                "서버배정",
+                "서버배정 / 입장시간",
                 "서버연결 결과",
                 "게임버전",
                 "포트 / 데이터센터",
@@ -2172,30 +2317,32 @@ namespace TarkovServerReporter
             for (int index = 0; index < keys.Length; index++)
             {
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / keys.Length));
-                var keyLabel = new Label
-                {
-                    Dock = DockStyle.Fill,
-                    AutoSize = false,
-                    Text = keys[index],
-                    ForeColor = TextMuted,
-                    Font = new Font("Malgun Gothic", 8.5F),
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    Margin = new Padding(0),
-                    Padding = new Padding(0),
-                    AutoEllipsis = true
-                };
-                var valueLabel = new Label
-                {
-                    Dock = DockStyle.Fill,
-                    AutoSize = false,
-                    Text = "-",
-                    ForeColor = TextMuted,
-                    Font = new Font("Malgun Gothic", 8.5F),
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    Margin = new Padding(0),
-                    Padding = new Padding(0),
-                    AutoEllipsis = true
-                };
+                Label keyLabel = new FittedDetailLabel();
+                keyLabel.Dock = DockStyle.Fill;
+                keyLabel.AutoSize = false;
+                keyLabel.Text = keys[index];
+                keyLabel.ForeColor = TextMuted;
+                keyLabel.BackColor = Surface;
+                keyLabel.Font = new Font("Malgun Gothic", 8.5F);
+                keyLabel.TextAlign = ContentAlignment.MiddleLeft;
+                keyLabel.Margin = new Padding(0);
+                keyLabel.Padding = new Padding(0);
+                keyLabel.AutoEllipsis = false;
+                Label valueLabel = index == 1
+                    ? (Label)new SegmentedDetailLabel { SuffixColor = TextMuted }
+                    : index == 2
+                        ? (Label)new FittedDetailLabel()
+                        : new Label();
+                valueLabel.Dock = DockStyle.Fill;
+                valueLabel.AutoSize = false;
+                valueLabel.Text = "-";
+                valueLabel.ForeColor = TextMuted;
+                valueLabel.BackColor = Surface;
+                valueLabel.Font = new Font("Malgun Gothic", 8.5F);
+                valueLabel.TextAlign = ContentAlignment.MiddleLeft;
+                valueLabel.Margin = new Padding(0);
+                valueLabel.Padding = new Padding(0);
+                valueLabel.AutoEllipsis = !(valueLabel is FittedDetailLabel);
                 layout.Controls.Add(keyLabel, 0, index);
                 layout.Controls.Add(valueLabel, 1, index);
                 if (index == 0)
@@ -2204,6 +2351,13 @@ namespace TarkovServerReporter
                         "게임 시작부터 종료까지 로그를 기준으로 계산한 시간입니다.";
                     _toolTip.SetToolTip(keyLabel, operationTimeHelp);
                     _toolTip.SetToolTip(valueLabel, operationTimeHelp);
+                }
+                else if (index == 1)
+                {
+                    const string entryTimeHelp =
+                        "서버 배정과 서버 배정 후 레이드 입장까지 걸린 시간을 로그를 기준으로 표시합니다.";
+                    _toolTip.SetToolTip(keyLabel, entryTimeHelp);
+                    _toolTip.SetToolTip(valueLabel, entryTimeHelp);
                 }
                 valueLabels[index] = valueLabel;
             }
@@ -3289,6 +3443,8 @@ namespace TarkovServerReporter
                 _stickyActionGrid.Bounds = desired;
             _stickyActionGrid.BringToFront();
             _stickyActionGrid.Invalidate();
+            if (_historyScrollCorner != null)
+                _historyScrollCorner.RefreshBounds();
         }
 
         private void SyncStickyActionRows()
@@ -4112,6 +4268,7 @@ namespace TarkovServerReporter
                 row.Cells["actualRtt"].ToolTipText = RaidMetricPresentation.GetActualRttHelp(session);
                 row.Cells["packetLoss"].ToolTipText = RaidMetricPresentation.GetPacketLossHelp(session);
                 ApplyResultRowStyle(row, session, ping, geo, firewall);
+                ApplyMissingMetricCellFonts(row);
                 UpdateNoteCell(row, hasNote);
                 UpdateActionCells(row);
             }
@@ -4235,6 +4392,7 @@ namespace TarkovServerReporter
                 _packetLossValueLabel,
                 RaidMetricPresentation.GetPacketLossHelp(session));
             UpdateDetailInfo(session);
+            ApplySelectedMetricFonts();
 
             if (!session.HasServerIp)
             {
@@ -4276,7 +4434,11 @@ namespace TarkovServerReporter
             {
                 foreach (Label label in _detailInfoValueLabels)
                 {
-                    label.Text = "-";
+                    SegmentedDetailLabel segmentedLabel = label as SegmentedDetailLabel;
+                    if (segmentedLabel != null)
+                        segmentedLabel.SetTextSegments("-", string.Empty);
+                    else
+                        label.Text = "-";
                     label.ForeColor = TextMuted;
                 }
                 _toolTip.SetToolTip(_detailInfoValueLabels[2], string.Empty);
@@ -4284,7 +4446,11 @@ namespace TarkovServerReporter
             }
 
             string matching = session.MatchmakingSeconds.HasValue
-                ? FormatDuration(session.MatchmakingSeconds.Value) + " 걸림"
+                ? FormatDuration(session.MatchmakingSeconds.Value)
+                : "확인 안 됨";
+            TimeSpan? raidEntryDuration = session.RaidEntryDuration;
+            string entry = raidEntryDuration.HasValue
+                ? FormatDuration(raidEntryDuration.Value.TotalSeconds)
                 : "확인 안 됨";
             string port = session.Port > 0 ? session.Port.ToString() : "-";
             string version = string.IsNullOrWhiteSpace(session.ClientVersion) ? "확인 안 됨" : session.ClientVersion;
@@ -4293,7 +4459,7 @@ namespace TarkovServerReporter
             string[] values =
             {
                 FormatOperationDuration(session),
-                matching,
+                matching + " / " + entry,
                 string.IsNullOrWhiteSpace(session.ConnectionResultText)
                     ? "-"
                     : session.ConnectionResultText,
@@ -4304,7 +4470,12 @@ namespace TarkovServerReporter
             };
             for (int index = 0; index < _detailInfoValueLabels.Length && index < values.Length; index++)
             {
-                _detailInfoValueLabels[index].Text = values[index];
+                SegmentedDetailLabel segmentedLabel =
+                    _detailInfoValueLabels[index] as SegmentedDetailLabel;
+                if (segmentedLabel != null)
+                    segmentedLabel.SetTextSegments(values[index], " 걸림");
+                else
+                    _detailInfoValueLabels[index].Text = values[index];
                 _detailInfoValueLabels[index].ForeColor = TextPrimary;
             }
             _toolTip.SetToolTip(_detailInfoValueLabels[2], GetConnectionResultHelp(session));
@@ -4328,11 +4499,18 @@ namespace TarkovServerReporter
 
         private static string FormatDuration(double seconds)
         {
-            if (seconds < 0) return "확인 안 됨";
-            TimeSpan value = TimeSpan.FromSeconds(seconds);
-            return value.TotalMinutes >= 1
-                ? string.Format("{0}분 {1:0.0}초", (int)value.TotalMinutes, value.Seconds + (value.Milliseconds / 1000.0))
-                : string.Format("{0:0.0}초", value.TotalSeconds);
+            if (double.IsNaN(seconds)
+                || double.IsInfinity(seconds)
+                || seconds < 0
+                || seconds > int.MaxValue)
+                return "확인 안 됨";
+
+            long totalSeconds = (long)Math.Round(seconds, MidpointRounding.AwayFromZero);
+            long totalMinutes = totalSeconds / 60L;
+            long remainingSeconds = totalSeconds % 60L;
+            return totalMinutes > 0
+                ? string.Format("{0}분 {1}초", totalMinutes, remainingSeconds)
+                : string.Format("{0}초", remainingSeconds);
         }
 
         private async Task QueryVisibleServersAsync()
@@ -4715,6 +4893,52 @@ namespace TarkovServerReporter
             row.Cells["packetLoss"].Style.ForeColor = GetPacketLossColor(session);
             row.Cells["userReport"].Style.ForeColor = session.UserReportCount > 0 ? ReportOrange : TextMuted;
             row.Cells["result"].Style.ForeColor = GetConnectionResultColor(session);
+        }
+
+        private void ApplyMissingMetricCellFonts(DataGridViewRow row)
+        {
+            if (row == null || _historyGrid == null) return;
+            Font resultFont = _historyGrid.Columns["result"].DefaultCellStyle.Font;
+            ApplyMissingMetricCellFont(row.Cells["actualRtt"], resultFont);
+            ApplyMissingMetricCellFont(row.Cells["packetLoss"], resultFont);
+        }
+
+        private static void ApplyMissingMetricCellFont(DataGridViewCell cell, Font resultFont)
+        {
+            if (cell == null) return;
+            bool missing = string.Equals(
+                Convert.ToString(cell.Value),
+                "로그없음",
+                StringComparison.Ordinal);
+            // Null restores the normal inherited metric font for measured,
+            // local-PvE, and neutral values. Only the compact missing state uses
+            // the connection-result font beside it.
+            cell.Style.Font = missing ? resultFont : null;
+        }
+
+        private void ApplySelectedMetricFonts()
+        {
+            if (_actualRttValueLabel == null
+                || _packetLossValueLabel == null
+                || _mapValueLabel == null
+                || _detailInfoValueLabels == null
+                || _detailInfoValueLabels.Length < 3)
+                return;
+
+            Font regularFont = _mapValueLabel.Font;
+            Font resultFont = _detailInfoValueLabels[2].Font;
+            _actualRttValueLabel.Font = string.Equals(
+                _actualRttValueLabel.Text,
+                "로그없음",
+                StringComparison.Ordinal)
+                    ? resultFont
+                    : regularFont;
+            _packetLossValueLabel.Font = string.Equals(
+                _packetLossValueLabel.Text,
+                "로그없음",
+                StringComparison.Ordinal)
+                    ? resultFont
+                    : regularFont;
         }
 
         private static Color GetPacketLossColor(ServerSession session)
@@ -5177,6 +5401,7 @@ namespace TarkovServerReporter
             _packetLossValueLabel.ForeColor = TextMuted;
             _toolTip.SetToolTip(_actualRttValueLabel, string.Empty);
             _toolTip.SetToolTip(_packetLossValueLabel, string.Empty);
+            ApplySelectedMetricFonts();
             UpdateActionButtons();
             SetStatus(message, Warning);
         }

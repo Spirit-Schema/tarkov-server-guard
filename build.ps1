@@ -60,6 +60,7 @@ $appArguments = @(
     '/reference:System.Windows.Forms.dll'
 ) + $commonReferences + @(
     (Join-Path $sourceRoot 'AppBranding.cs'),
+    (Join-Path $sourceRoot 'DataGridViewScrollCorner.cs'),
     (Join-Path $sourceRoot 'Program.cs'),
     (Join-Path $sourceRoot 'MainForm.cs'),
     (Join-Path $sourceRoot 'GitHubUpdateService.cs'),
