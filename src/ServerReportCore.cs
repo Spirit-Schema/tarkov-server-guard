@@ -196,13 +196,13 @@ namespace TarkovServerReporter
                 else if (ConnectionAttempts <= 0)
                     result = "접속기록 없음";
                 else if (!currentAttemptConnected)
-                    result = "종료미확인";
+                    result = "로그없음";
                 else if (HasDisconnectRecord && DisconnectReason.HasValue)
                     result = DisconnectReason.Value == 0 ? "정상종료" : "비정상종료";
                 else if (HasDisconnectRecord)
-                    result = "종료미확인";
+                    result = "로그없음";
                 else
-                    result = "종료미확인";
+                    result = "로그없음";
 
                 return result;
             }
@@ -216,6 +216,86 @@ namespace TarkovServerReporter
                     ? ConnectionStateText + " · 재접속 " + ReconnectCount + "회"
                     : ConnectionStateText;
             }
+        }
+    }
+
+    public static class RaidMetricPresentation
+    {
+        public const string MissingLogHelp =
+            "레이드 진행 중 또는 게임의 강제·비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
+
+        public const string LocalRaidHelp =
+            "로컬 PvE 레이드는 게임 서버 통계가 적용되지 않습니다.";
+
+        public static string FormatActualRtt(ServerSession session)
+        {
+            double value;
+            if (TryGetActualRtt(session, out value))
+                return Math.Round(value) + " ms";
+            return GetUnavailableText(session);
+        }
+
+        public static string FormatPacketLoss(ServerSession session)
+        {
+            double value;
+            if (!TryGetPacketLoss(session, out value))
+                return GetUnavailableText(session);
+            if (value == 0) return "0%";
+
+            double percent = value * 100.0;
+            return percent < 0.01
+                ? "<0.01%"
+                : string.Format("{0:0.##}%", percent);
+        }
+
+        public static string GetActualRttHelp(ServerSession session)
+        {
+            double ignored;
+            return GetMetricHelp(session, TryGetActualRtt(session, out ignored));
+        }
+
+        public static string GetPacketLossHelp(ServerSession session)
+        {
+            double ignored;
+            return GetMetricHelp(session, TryGetPacketLoss(session, out ignored));
+        }
+
+        public static bool TryGetActualRtt(ServerSession session, out double value)
+        {
+            value = 0;
+            if (session == null
+                || session.HostingMode == TarkovHostingMode.Local
+                || !session.ActualRttMs.HasValue)
+                return false;
+            value = session.ActualRttMs.Value;
+            return !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0;
+        }
+
+        public static bool TryGetPacketLoss(ServerSession session, out double value)
+        {
+            value = 0;
+            if (session == null
+                || session.HostingMode == TarkovHostingMode.Local
+                || !session.NetworkLoss.HasValue)
+                return false;
+            value = session.NetworkLoss.Value;
+            return !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0;
+        }
+
+        private static string GetUnavailableText(ServerSession session)
+        {
+            if (session == null) return "-";
+            return session.HostingMode == TarkovHostingMode.Local
+                ? "해당 없음"
+                : "표본부족";
+        }
+
+        private static string GetMetricHelp(ServerSession session, bool hasValue)
+        {
+            if (session == null || hasValue) return string.Empty;
+            return session.HostingMode == TarkovHostingMode.Local
+                ? LocalRaidHelp
+                : MissingLogHelp;
         }
     }
 

@@ -3995,13 +3995,17 @@ namespace TarkovServerReporter
                     rightKnown = TryGetSortablePing(right, out rightPing);
                     return leftPing.CompareTo(rightPing);
                 case "actualRtt":
-                    leftKnown = left.ActualRttMs.HasValue && left.ActualRttMs.Value >= 0;
-                    rightKnown = right.ActualRttMs.HasValue && right.ActualRttMs.Value >= 0;
-                    return left.ActualRttMs.GetValueOrDefault().CompareTo(right.ActualRttMs.GetValueOrDefault());
+                    double leftActualRtt;
+                    double rightActualRtt;
+                    leftKnown = RaidMetricPresentation.TryGetActualRtt(left, out leftActualRtt);
+                    rightKnown = RaidMetricPresentation.TryGetActualRtt(right, out rightActualRtt);
+                    return leftActualRtt.CompareTo(rightActualRtt);
                 case "packetLoss":
-                    leftKnown = left.NetworkLoss.HasValue && left.NetworkLoss.Value >= 0;
-                    rightKnown = right.NetworkLoss.HasValue && right.NetworkLoss.Value >= 0;
-                    return left.NetworkLoss.GetValueOrDefault().CompareTo(right.NetworkLoss.GetValueOrDefault());
+                    double leftPacketLoss;
+                    double rightPacketLoss;
+                    leftKnown = RaidMetricPresentation.TryGetPacketLoss(left, out leftPacketLoss);
+                    rightKnown = RaidMetricPresentation.TryGetPacketLoss(right, out rightPacketLoss);
+                    return leftPacketLoss.CompareTo(rightPacketLoss);
                 default:
                     string leftText = GetHistorySortText(left, _historySortColumn, out leftKnown);
                     string rightText = GetHistorySortText(right, _historySortColumn, out rightKnown);
@@ -4094,8 +4098,8 @@ namespace TarkovServerReporter
                     session.HasServerIp ? session.IpAddress : "-",
                     GetLocationCellText(session, geo),
                     GetPingCellText(session, ping, firewall),
-                    FormatActualRtt(session.ActualRttMs),
-                    FormatPacketLoss(session.NetworkLoss),
+                    RaidMetricPresentation.FormatActualRtt(session),
+                    RaidMetricPresentation.FormatPacketLoss(session),
                     "차단",
                     "해제",
                     FormatConnectionResultCell(session));
@@ -4105,6 +4109,8 @@ namespace TarkovServerReporter
                     ? "클릭하여 신고한 유저의 닉네임과 신고 사유를 메모합니다."
                     : string.Empty;
                 row.Cells["result"].ToolTipText = GetConnectionResultHelp(session);
+                row.Cells["actualRtt"].ToolTipText = RaidMetricPresentation.GetActualRttHelp(session);
+                row.Cells["packetLoss"].ToolTipText = RaidMetricPresentation.GetPacketLossHelp(session);
                 ApplyResultRowStyle(row, session, ping, geo, firewall);
                 UpdateNoteCell(row, hasNote);
                 UpdateActionCells(row);
@@ -4218,10 +4224,16 @@ namespace TarkovServerReporter
             _ipLabel.ForeColor = session.HasServerIp ? TextPrimary : TextMuted;
             _mapValueLabel.Text = session.GameDisplayName + " · " + GetMapAndTypeText(session);
             _timeValueLabel.Text = session.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm:ss");
-            _actualRttValueLabel.Text = FormatActualRtt(session.ActualRttMs);
-            _actualRttValueLabel.ForeColor = GetLatencyColor(session.ActualRttMs);
-            _packetLossValueLabel.Text = FormatPacketLoss(session.NetworkLoss);
-            _packetLossValueLabel.ForeColor = GetPacketLossColor(session.NetworkLoss);
+            _actualRttValueLabel.Text = RaidMetricPresentation.FormatActualRtt(session);
+            _actualRttValueLabel.ForeColor = GetLatencyColor(session);
+            _packetLossValueLabel.Text = RaidMetricPresentation.FormatPacketLoss(session);
+            _packetLossValueLabel.ForeColor = GetPacketLossColor(session);
+            _toolTip.SetToolTip(
+                _actualRttValueLabel,
+                RaidMetricPresentation.GetActualRttHelp(session));
+            _toolTip.SetToolTip(
+                _packetLossValueLabel,
+                RaidMetricPresentation.GetPacketLossHelp(session));
             UpdateDetailInfo(session);
 
             if (!session.HasServerIp)
@@ -4267,6 +4279,7 @@ namespace TarkovServerReporter
                     label.Text = "-";
                     label.ForeColor = TextMuted;
                 }
+                _toolTip.SetToolTip(_detailInfoValueLabels[2], string.Empty);
                 return;
             }
 
@@ -4294,6 +4307,7 @@ namespace TarkovServerReporter
                 _detailInfoValueLabels[index].Text = values[index];
                 _detailInfoValueLabels[index].ForeColor = TextPrimary;
             }
+            _toolTip.SetToolTip(_detailInfoValueLabels[2], GetConnectionResultHelp(session));
         }
 
         private static string FormatOperationDuration(ServerSession session)
@@ -4685,18 +4699,6 @@ namespace TarkovServerReporter
             return ping.IsAvailable ? ping.AverageMs + " ms" : "응답 없음";
         }
 
-        private static string FormatActualRtt(double? value)
-        {
-            return value.HasValue && value.Value >= 0 ? Math.Round(value.Value) + " ms" : "-";
-        }
-
-        private static string FormatPacketLoss(double? value)
-        {
-            return value.HasValue && value.Value >= 0
-                ? string.Format("{0:0.##}%", value.Value * 100.0)
-                : "-";
-        }
-
         private static void ApplyResultRowStyle(
             DataGridViewRow row,
             ServerSession session,
@@ -4709,17 +4711,18 @@ namespace TarkovServerReporter
             row.Cells["location"].Style.ForeColor = geo != null && geo.Success ? TextPrimary : TextMuted;
             bool isBlocked = firewall != null && firewall.Success && firewall.IsBlocked;
             row.Cells["ping"].Style.ForeColor = isBlocked ? Danger : GetPingColor(ping);
-            row.Cells["actualRtt"].Style.ForeColor = GetLatencyColor(session.ActualRttMs);
-            row.Cells["packetLoss"].Style.ForeColor = GetPacketLossColor(session.NetworkLoss);
+            row.Cells["actualRtt"].Style.ForeColor = GetLatencyColor(session);
+            row.Cells["packetLoss"].Style.ForeColor = GetPacketLossColor(session);
             row.Cells["userReport"].Style.ForeColor = session.UserReportCount > 0 ? ReportOrange : TextMuted;
             row.Cells["result"].Style.ForeColor = GetConnectionResultColor(session);
         }
 
-        private static Color GetPacketLossColor(double? value)
+        private static Color GetPacketLossColor(ServerSession session)
         {
-            if (!value.HasValue || value.Value < 0) return TextMuted;
-            if (value.Value >= 0.05) return Danger;
-            if (value.Value > 0) return Warning;
+            double value;
+            if (!RaidMetricPresentation.TryGetPacketLoss(session, out value)) return TextMuted;
+            if (value >= 0.05) return Danger;
+            if (value > 0) return Warning;
             return Success;
         }
 
@@ -4754,6 +4757,8 @@ namespace TarkovServerReporter
                 return "서버 IP는 배정됐지만 대응하는 Connect 로그를 찾지 못했습니다.";
             if (state == "해당 없음")
                 return "로컬 레이드는 연결할 게임 서버가 없어 서버연결 결과가 적용되지 않습니다.";
+            if (state == "로그없음")
+                return RaidMetricPresentation.MissingLogHelp;
             return "종료 기록이 없거나 사유를 확정할 수 없습니다. 진행 중·강제 종료·로그 누락일 수 있습니다.";
         }
 
@@ -4791,11 +4796,12 @@ namespace TarkovServerReporter
             }
         }
 
-        private static Color GetLatencyColor(double? value)
+        private static Color GetLatencyColor(ServerSession session)
         {
-            if (!value.HasValue || value.Value < 0) return TextMuted;
-            if (value.Value >= 150) return Danger;
-            if (value.Value >= 100) return Warning;
+            double value;
+            if (!RaidMetricPresentation.TryGetActualRtt(session, out value)) return TextMuted;
+            if (value >= 150) return Danger;
+            if (value >= 100) return Warning;
             return Success;
         }
 
@@ -5169,6 +5175,8 @@ namespace TarkovServerReporter
             _locationValueLabel.ForeColor = TextMuted;
             _actualRttValueLabel.ForeColor = TextMuted;
             _packetLossValueLabel.ForeColor = TextMuted;
+            _toolTip.SetToolTip(_actualRttValueLabel, string.Empty);
+            _toolTip.SetToolTip(_packetLossValueLabel, string.Empty);
             UpdateActionButtons();
             SetStatus(message, Warning);
         }

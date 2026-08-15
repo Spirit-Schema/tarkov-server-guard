@@ -39,6 +39,7 @@ namespace TarkovServerReporter.Tests
                 TestPingQualityThresholds();
                 TestProductUserAgent();
                 TestConnectionResultFormatting();
+                TestRaidMetricPresentation();
                 TestGeoFormatting();
                 TestDataCenterRegionClassification();
                 TestFirewallCommandValidation();
@@ -1330,7 +1331,7 @@ namespace TarkovServerReporter.Tests
                 ConnectedOnce = true,
                 HasDisconnectRecord = true
             };
-            Assert(endedWithoutReason.ConnectionResultText == "종료미확인",
+            Assert(endedWithoutReason.ConnectionResultText == "로그없음",
                 "a disconnect without an explicit reason is not labeled as a normal exit");
 
             var pendingReconnect = new ServerSession
@@ -1341,9 +1342,9 @@ namespace TarkovServerReporter.Tests
                 CurrentAttemptConnected = false
             };
             Assert(pendingReconnect.ReconnectCount == 1
-                && pendingReconnect.ConnectionResultText == "종료미확인 · 재접속 1회",
+                && pendingReconnect.ConnectionResultText == "로그없음 · 재접속 1회",
                 "positive reconnects append the count and Korean occurrence suffix");
-            Assert(pendingReconnect.ConnectionStateText == "종료미확인",
+            Assert(pendingReconnect.ConnectionStateText == "로그없음",
                 "the detail connection state does not duplicate the separate reconnect count");
 
             var timedOutReconnect = new ServerSession
@@ -1427,6 +1428,71 @@ namespace TarkovServerReporter.Tests
                     HostingMode = TarkovHostingMode.Local
                 }.ConnectionStateText == "해당 없음",
                 "connection state is not applicable to a confirmed local raid");
+        }
+
+        private static void TestRaidMetricPresentation()
+        {
+            Assert(RaidMetricPresentation.FormatActualRtt(null) == "-"
+                && RaidMetricPresentation.FormatPacketLoss(null) == "-",
+                "an unselected record keeps the neutral metric placeholder");
+
+            var missingServer = new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Server
+            };
+            Assert(RaidMetricPresentation.FormatActualRtt(missingServer) == "표본부족"
+                && RaidMetricPresentation.FormatPacketLoss(missingServer) == "표본부족"
+                && RaidMetricPresentation.GetActualRttHelp(missingServer) == RaidMetricPresentation.MissingLogHelp
+                && RaidMetricPresentation.GetPacketLossHelp(missingServer) == RaidMetricPresentation.MissingLogHelp,
+                "missing server samples use an explicit label and the shared missing-log help");
+
+            var local = new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Local,
+                ActualRttMs = 40,
+                NetworkLoss = 0
+            };
+            Assert(RaidMetricPresentation.FormatActualRtt(local) == "해당 없음"
+                && RaidMetricPresentation.FormatPacketLoss(local) == "해당 없음"
+                && RaidMetricPresentation.GetActualRttHelp(local) == RaidMetricPresentation.LocalRaidHelp
+                && RaidMetricPresentation.GetPacketLossHelp(local) == RaidMetricPresentation.LocalRaidHelp,
+                "local PvE overrides stray server metrics with the not-applicable state");
+
+            var measured = new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Server,
+                ActualRttMs = 81.6,
+                NetworkLoss = 0
+            };
+            double value;
+            Assert(RaidMetricPresentation.FormatActualRtt(measured) == "82 ms"
+                && RaidMetricPresentation.FormatPacketLoss(measured) == "0%"
+                && RaidMetricPresentation.GetActualRttHelp(measured) == string.Empty
+                && RaidMetricPresentation.GetPacketLossHelp(measured) == string.Empty
+                && RaidMetricPresentation.TryGetPacketLoss(measured, out value)
+                && value == 0,
+                "valid zero-loss server metrics keep their measured values without missing-log help");
+
+            measured.NetworkLoss = 0.0000001;
+            Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "<0.01%",
+                "positive packet loss below one hundredth of a percent remains visible");
+            measured.NetworkLoss = 0.0001;
+            Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "0.01%",
+                "the packet-loss precision boundary uses the numeric percentage");
+            measured.NetworkLoss = 0.0123456;
+            Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "1.23%",
+                "packet loss is displayed to at most two decimal places");
+
+            foreach (double invalid in new[] { -0.001, double.NaN, double.PositiveInfinity })
+            {
+                measured.ActualRttMs = invalid;
+                measured.NetworkLoss = invalid;
+                Assert(RaidMetricPresentation.FormatActualRtt(measured) == "표본부족"
+                    && RaidMetricPresentation.FormatPacketLoss(measured) == "표본부족"
+                    && !RaidMetricPresentation.TryGetActualRtt(measured, out value)
+                    && !RaidMetricPresentation.TryGetPacketLoss(measured, out value),
+                    "negative and non-finite metrics are treated as unavailable samples");
+            }
         }
 
         private static void TestFirewallCommandValidation()
