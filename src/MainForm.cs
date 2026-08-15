@@ -1071,7 +1071,7 @@ namespace TarkovServerReporter
             _eftPathTextBox = CreatePathTextBox();
             layout.Controls.Add(_eftPathTextBox, 1, 0);
             _eftBrowseButton = CreateButton("직접선택", false);
-            _eftBrowseButton.Margin = new Padding(0, 2, 8, 2);
+            AlignPathButtonToTextBox(_eftBrowseButton, _eftPathTextBox, 8);
             _eftBrowseButton.Click += delegate { BrowseForGame(TarkovGame.Eft); };
             layout.Controls.Add(_eftBrowseButton, 2, 0);
 
@@ -1079,19 +1079,30 @@ namespace TarkovServerReporter
             _arenaPathTextBox = CreatePathTextBox();
             layout.Controls.Add(_arenaPathTextBox, 1, 1);
             _arenaBrowseButton = CreateButton("직접선택", false);
-            _arenaBrowseButton.Margin = new Padding(0, 2, 8, 2);
+            AlignPathButtonToTextBox(_arenaBrowseButton, _arenaPathTextBox, 8);
             _arenaBrowseButton.Click += delegate { BrowseForGame(TarkovGame.Arena); };
             layout.Controls.Add(_arenaBrowseButton, 2, 1);
 
             _rediscoverPathButton = CreateButton("자동 찾기", false);
-            _rediscoverPathButton.Margin = new Padding(0, 2, 0, 2);
+            AlignPathButtonToTextBox(_rediscoverPathButton, _eftPathTextBox, 0);
             _rediscoverPathButton.Click += async delegate { await RediscoverLogPathsAsync(); };
             layout.Controls.Add(_rediscoverPathButton, 3, 0);
 
             _applyPathButton = CreateButton("적용", false);
-            _applyPathButton.Margin = new Padding(0, 2, 0, 2);
+            AlignPathButtonToTextBox(_applyPathButton, _arenaPathTextBox, 0);
             _applyPathButton.Click += async delegate { await ApplyLogPathsAsync(); };
             layout.Controls.Add(_applyPathButton, 3, 1);
+
+            // A single-line TextBox keeps its native font-dependent height even
+            // in a taller table row. Keep the neighboring actions on that same
+            // top/bottom line at every DPI instead of filling the whole row.
+            layout.Layout += delegate
+            {
+                AlignPathButtonToTextBox(_eftBrowseButton, _eftPathTextBox, 8);
+                AlignPathButtonToTextBox(_rediscoverPathButton, _eftPathTextBox, 0);
+                AlignPathButtonToTextBox(_arenaBrowseButton, _arenaPathTextBox, 8);
+                AlignPathButtonToTextBox(_applyPathButton, _arenaPathTextBox, 0);
+            };
 
             const string pathHelp = "시작할 때 공홈과 Steam 설치 경로를 자동으로 찾습니다. 찾지 못한 경우에만 직접 선택하세요.";
             _toolTip.SetToolTip(_eftPathTextBox, pathHelp);
@@ -1145,6 +1156,29 @@ namespace TarkovServerReporter
                 Font = new Font("Segoe UI", 9F),
                 Margin = new Padding(0, 4, 10, 3)
             };
+        }
+
+        private static void AlignPathButtonToTextBox(
+            Button button,
+            TextBox textBox,
+            int rightMargin)
+        {
+            if (button == null || textBox == null) return;
+            button.Dock = DockStyle.None;
+            button.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            int scaledRightMargin = rightMargin <= 0
+                ? 0
+                : Math.Max(1, (int)Math.Round(
+                    textBox.Margin.Right * rightMargin / 10F));
+            Padding targetMargin = new Padding(
+                0,
+                textBox.Margin.Top,
+                scaledRightMargin,
+                textBox.Margin.Bottom);
+            if (button.Margin != targetMargin)
+                button.Margin = targetMargin;
+            if (button.Height != textBox.Height)
+                button.Height = textBox.Height;
         }
 
         private Control BuildCurrentServerCard()
@@ -1900,7 +1934,11 @@ namespace TarkovServerReporter
                 e.Graphics.SetClip(clip);
                 if (e.RowIndex < 0)
                 {
-                    e.Paint(e.ClipBounds, e.PaintParts);
+                    PaintDarkGridHeader(
+                        e,
+                        SortOrder.None,
+                        e.ColumnIndex == 0,
+                        true);
                     return;
                 }
 
@@ -1986,8 +2024,14 @@ namespace TarkovServerReporter
             if (e.RowIndex == -1)
             {
                 DataGridViewColumn column = _historyGrid.Columns[e.ColumnIndex];
-                if (column.SortMode == DataGridViewColumnSortMode.Programmatic)
-                    PaintSortableHistoryHeader(e, column);
+                bool active = column.SortMode == DataGridViewColumnSortMode.Programmatic
+                    && string.Equals(_historySortColumn, column.Name, StringComparison.Ordinal)
+                    && _historySortOrder != SortOrder.None;
+                PaintDarkGridHeader(
+                    e,
+                    active ? _historySortOrder : SortOrder.None,
+                    column.DisplayIndex == 0,
+                    !string.Equals(column.Name, "result", StringComparison.Ordinal));
                 return;
             }
 
@@ -2001,9 +2045,11 @@ namespace TarkovServerReporter
                 PaintConnectionActionCell(e);
         }
 
-        private void PaintSortableHistoryHeader(
+        private static void PaintDarkGridHeader(
             DataGridViewCellPaintingEventArgs e,
-            DataGridViewColumn column)
+            SortOrder sortOrder,
+            bool drawLeftBorder,
+            bool drawRightBorder)
         {
             Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
             if (clip.Width <= 0 || clip.Height <= 0) { e.Handled = true; return; }
@@ -2011,10 +2057,36 @@ namespace TarkovServerReporter
             try
             {
                 e.Graphics.SetClip(clip);
-                e.Paint(e.ClipBounds, e.PaintParts & ~DataGridViewPaintParts.ContentForeground);
+                using (var background = new SolidBrush(SurfaceAlt))
+                    e.Graphics.FillRectangle(background, e.CellBounds);
+                using (var border = new Pen(Border))
+                {
+                    int right = e.CellBounds.Right - 1;
+                    int bottom = e.CellBounds.Bottom - 1;
+                    e.Graphics.DrawLine(
+                        border,
+                        e.CellBounds.Left,
+                        e.CellBounds.Top,
+                        right,
+                        e.CellBounds.Top);
+                    e.Graphics.DrawLine(
+                        border,
+                        e.CellBounds.Left,
+                        bottom,
+                        right,
+                        bottom);
+                    if (drawRightBorder)
+                        e.Graphics.DrawLine(border, right, e.CellBounds.Top, right, bottom);
+                    if (drawLeftBorder)
+                        e.Graphics.DrawLine(
+                            border,
+                            e.CellBounds.Left,
+                            e.CellBounds.Top,
+                            e.CellBounds.Left,
+                            bottom);
+                }
 
-                bool active = string.Equals(_historySortColumn, column.Name, StringComparison.Ordinal)
-                    && _historySortOrder != SortOrder.None;
+                bool active = sortOrder != SortOrder.None;
                 float scale = Math.Max(1F, e.Graphics.DpiX / 96F);
                 int edgePadding = Math.Max(4, (int)Math.Round(4F * scale));
                 int arrowWidth = Math.Max(7, (int)Math.Round(7F * scale));
@@ -2067,7 +2139,7 @@ namespace TarkovServerReporter
                 if (active)
                 {
                     Point[] points;
-                    if (_historySortOrder == SortOrder.Ascending)
+                    if (sortOrder == SortOrder.Ascending)
                     {
                         points = new[]
                         {
@@ -2087,20 +2159,6 @@ namespace TarkovServerReporter
                     }
                     using (var arrowBrush = new SolidBrush(Accent))
                         e.Graphics.FillPolygon(arrowBrush, points);
-                }
-
-                // The fixed action overlay begins immediately after this column.
-                // Cover the native header's raised right edge so it cannot appear
-                // as a left divider on the first (block) action column.
-                if (string.Equals(column.Name, "result", StringComparison.Ordinal))
-                {
-                    using (var edgeBrush = new SolidBrush(SurfaceAlt))
-                        e.Graphics.FillRectangle(
-                            edgeBrush,
-                            e.CellBounds.Right - 1,
-                            e.CellBounds.Top,
-                            1,
-                            Math.Max(0, e.CellBounds.Height - 1));
                 }
             }
             finally
@@ -2294,10 +2352,10 @@ namespace TarkovServerReporter
             string[] keys =
             {
                 "작전시간",
-                "서버배정 / 입장시간",
+                "서버배정/입장시간",
                 "서버연결 결과",
                 "게임버전",
-                "포트 / 데이터센터",
+                "포트/데이터센터",
                 "shortId",
                 "SID"
             };
@@ -2341,7 +2399,13 @@ namespace TarkovServerReporter
                 valueLabel.Font = new Font("Malgun Gothic", 8.5F);
                 valueLabel.TextAlign = ContentAlignment.MiddleLeft;
                 valueLabel.Margin = new Padding(0);
-                valueLabel.Padding = new Padding(0);
+                // Custom-painted labels use NoPadding so their glyphs otherwise
+                // start one pixel before the standard Label rows. Match the
+                // shared value baseline without moving the table column itself.
+                valueLabel.Padding = valueLabel is SegmentedDetailLabel
+                    || valueLabel is FittedDetailLabel
+                    ? new Padding(1, 0, 0, 0)
+                    : new Padding(0);
                 valueLabel.AutoEllipsis = !(valueLabel is FittedDetailLabel);
                 layout.Controls.Add(keyLabel, 0, index);
                 layout.Controls.Add(valueLabel, 1, index);

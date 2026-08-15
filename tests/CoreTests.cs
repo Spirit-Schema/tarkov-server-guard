@@ -1465,9 +1465,9 @@ namespace TarkovServerReporter.Tests
             };
             Assert(RaidMetricPresentation.FormatActualRtt(missingServer) == "로그없음"
                 && RaidMetricPresentation.FormatPacketLoss(missingServer) == "로그없음"
-                && RaidMetricPresentation.GetActualRttHelp(missingServer) == "유효한 RTT 로그가 없습니다."
-                && RaidMetricPresentation.GetPacketLossHelp(missingServer) == "유효한 패킷손실 로그가 없습니다.",
-                "missing server samples use one compact label and metric-specific help");
+                && RaidMetricPresentation.GetActualRttHelp(missingServer) == RaidMetricPresentation.MissingLogHelp
+                && RaidMetricPresentation.GetPacketLossHelp(missingServer) == RaidMetricPresentation.MissingLogHelp,
+                "missing server samples use the same compact label and help as a missing connection result");
 
             var local = new ServerSession
             {

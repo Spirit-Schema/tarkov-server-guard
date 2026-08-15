@@ -240,12 +240,6 @@ namespace TarkovServerReporter
         public const string MissingLogHelp =
             "레이드 진행 중 또는 게임의 강제·비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
 
-        public const string MissingActualRttHelp =
-            "유효한 RTT 로그가 없습니다.";
-
-        public const string MissingPacketLossHelp =
-            "유효한 패킷손실 로그가 없습니다.";
-
         public const string LocalRaidHelp =
             "로컬 PvE 레이드는 게임 서버 통계가 적용되지 않습니다.";
 
@@ -273,19 +267,13 @@ namespace TarkovServerReporter
         public static string GetActualRttHelp(ServerSession session)
         {
             double ignored;
-            return GetMetricHelp(
-                session,
-                TryGetActualRtt(session, out ignored),
-                MissingActualRttHelp);
+            return GetMetricHelp(session, TryGetActualRtt(session, out ignored));
         }
 
         public static string GetPacketLossHelp(ServerSession session)
         {
             double ignored;
-            return GetMetricHelp(
-                session,
-                TryGetPacketLoss(session, out ignored),
-                MissingPacketLossHelp);
+            return GetMetricHelp(session, TryGetPacketLoss(session, out ignored));
         }
 
         public static bool TryGetActualRtt(ServerSession session, out double value)
@@ -318,15 +306,12 @@ namespace TarkovServerReporter
                 : "로그없음";
         }
 
-        private static string GetMetricHelp(
-            ServerSession session,
-            bool hasValue,
-            string missingServerHelp)
+        private static string GetMetricHelp(ServerSession session, bool hasValue)
         {
             if (session == null || hasValue) return string.Empty;
             return session.HostingMode == TarkovHostingMode.Local
                 ? LocalRaidHelp
-                : missingServerHelp;
+                : MissingLogHelp;
         }
     }
 
