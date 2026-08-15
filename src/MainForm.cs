@@ -179,6 +179,16 @@ namespace TarkovServerReporter
 
         private sealed class HeaderLinkButton : Button
         {
+            public HeaderLinkButton()
+            {
+                SetStyle(
+                    ControlStyles.AllPaintingInWmPaint
+                    | ControlStyles.OptimizedDoubleBuffer
+                    | ControlStyles.ResizeRedraw
+                    | ControlStyles.UserPaint,
+                    true);
+            }
+
             public override Size GetPreferredSize(Size proposedSize)
             {
                 int dpi = DeviceDpi <= 0 ? 96 : DeviceDpi;
@@ -191,7 +201,42 @@ namespace TarkovServerReporter
                     | TextFormatFlags.SingleLine);
                 return new Size(
                     glyph.Width + ScaleLogical(12, dpi),
-                    glyph.Height + ScaleLogical(4, dpi));
+                    glyph.Height + ScaleLogical(8, dpi));
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.Clear(BackColor);
+                int dpi = DeviceDpi <= 0 ? 96 : DeviceDpi;
+                Size glyph = TextRenderer.MeasureText(
+                    Text ?? string.Empty,
+                    Font,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding
+                    | TextFormatFlags.NoPrefix
+                    | TextFormatFlags.SingleLine);
+                int reservedBottom = ScaleLogical(3, dpi);
+                int availableHeight = Math.Max(1, ClientSize.Height - reservedBottom);
+                int textTop = Math.Max(0, (availableHeight - glyph.Height) / 2);
+                var textBounds = new Rectangle(0, textTop, ClientSize.Width, glyph.Height);
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    Text ?? string.Empty,
+                    Font,
+                    textBounds,
+                    Enabled ? ForeColor : SystemColors.GrayText,
+                    TextFormatFlags.NoPadding
+                    | TextFormatFlags.NoPrefix
+                    | TextFormatFlags.SingleLine
+                    | TextFormatFlags.HorizontalCenter
+                    | TextFormatFlags.VerticalCenter);
+
+                if (Focused && ShowFocusCues)
+                {
+                    Rectangle focusBounds = Rectangle.Inflate(textBounds, -1, -1);
+                    if (focusBounds.Width > 0 && focusBounds.Height > 0)
+                        ControlPaint.DrawFocusRectangle(e.Graphics, focusBounds, ForeColor, BackColor);
+                }
             }
         }
 
@@ -650,12 +695,20 @@ namespace TarkovServerReporter
             rightHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             rightHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
+            var attributionRow = CreateRightAlignedHeaderRow();
+            var copyright = CreateHeaderTextLabel(
+                "© 2026 Spirit-Schema",
+                new Font("Segoe UI", 8.5F),
+                TextMuted);
+            attributionRow.Controls.Add(copyright);
+            rightHeader.Controls.Add(attributionRow, 0, 0);
+
             var updateRow = CreateRightAlignedHeaderRow();
             var version = CreateHeaderTextLabel(
                 "v" + GetApplicationSemanticVersion(),
                 new Font("Segoe UI", 9F, FontStyle.Bold),
                 TextMuted);
-            var updateSeparator = CreateHeaderTextLabel(
+            var versionSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
                 TextMuted);
@@ -665,19 +718,9 @@ namespace TarkovServerReporter
             _manualUpdateButton.AccessibleName = "업데이트확인";
             _manualUpdateButton.AccessibleDescription = "GitHub Releases에서 새 버전을 수동으로 확인합니다.";
             _manualUpdateButton.Click += async delegate { await CheckForUpdatesManuallyAsync(); };
-            updateRow.Controls.Add(_manualUpdateButton);
-            updateRow.Controls.Add(updateSeparator);
-            updateRow.Controls.Add(version);
-            rightHeader.Controls.Add(updateRow, 0, 0);
-
-            var attributionRow = CreateRightAlignedHeaderRow();
-            var copyright = CreateHeaderTextLabel(
-                "© 2026 Spirit-Schema",
-                new Font("Segoe UI", 8.5F),
-                TextMuted);
             var licenseSeparator = CreateHeaderTextLabel(
                 "·",
-                new Font("Segoe UI", 8.5F),
+                new Font("Segoe UI", 9F),
                 TextMuted);
             Button licenseButton = CreateHeaderLinkButton(
                 "라이선스",
@@ -685,10 +728,12 @@ namespace TarkovServerReporter
             licenseButton.AccessibleName = "라이선스";
             licenseButton.AccessibleDescription = "라이선스 및 저작권 안내를 엽니다.";
             licenseButton.Click += delegate { ShowLicenseDialog(); };
-            attributionRow.Controls.Add(licenseButton);
-            attributionRow.Controls.Add(licenseSeparator);
-            attributionRow.Controls.Add(copyright);
-            rightHeader.Controls.Add(attributionRow, 0, 1);
+            updateRow.Controls.Add(licenseButton);
+            updateRow.Controls.Add(licenseSeparator);
+            updateRow.Controls.Add(_manualUpdateButton);
+            updateRow.Controls.Add(versionSeparator);
+            updateRow.Controls.Add(version);
+            rightHeader.Controls.Add(updateRow, 0, 1);
 
             panel.Controls.Add(rightHeader);
             return panel;
@@ -736,10 +781,9 @@ namespace TarkovServerReporter
                 Cursor = Cursors.Hand,
                 TabStop = true,
                 UseVisualStyleBackColor = false,
-                // Preferred-size layout keeps a full glyph box at every DPI. The
-                // extra logical bottom padding/margin provides a two-pixel safety
-                // zone instead of relying on a fragile Y-coordinate adjustment.
-                Margin = new Padding(0, 0, 0, 3),
+                // The custom-painted glyph box reserves logical bottom space at
+                // every DPI, independently of the native flat-button text inset.
+                Margin = new Padding(0),
                 Padding = new Padding(0),
                 TextAlign = ContentAlignment.MiddleCenter
             };
@@ -1573,7 +1617,7 @@ namespace TarkovServerReporter
 
         private static DataGridViewButtonColumn CreateConnectionActionColumn(string name, string text)
         {
-            return new DataGridViewButtonColumn
+            var column = new DataGridViewButtonColumn
             {
                 Name = name,
                 HeaderText = text,
@@ -1593,6 +1637,10 @@ namespace TarkovServerReporter
                     Padding = new Padding(2, 3, 2, 3)
                 }
             };
+            column.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            column.HeaderCell.Style.WrapMode = DataGridViewTriState.False;
+            column.HeaderCell.Style.Padding = new Padding(0);
+            return column;
         }
 
         private static DataGridViewTextBoxColumn CreateTwoLineTextColumn(
@@ -1707,8 +1755,43 @@ namespace TarkovServerReporter
                 e.Graphics.SetClip(clip);
                 if (e.RowIndex < 0)
                 {
-                    e.Paint(e.ClipBounds, e.PaintParts);
-                    PaintStickyActionDivider(e.Graphics, e.CellBounds, e.ColumnIndex);
+                    Rectangle headerPaintBounds = e.CellBounds;
+                    if (e.ColumnIndex == 0 && headerPaintBounds.Left > 0)
+                    {
+                        headerPaintBounds.Width += headerPaintBounds.Left;
+                        headerPaintBounds.X = 0;
+                        e.Graphics.SetClip(
+                            Rectangle.Intersect(headerPaintBounds, grid.ClientRectangle),
+                            CombineMode.Replace);
+                    }
+                    using (var background = new SolidBrush(SurfaceAlt))
+                        e.Graphics.FillRectangle(background, headerPaintBounds);
+                    using (var border = new Pen(Border))
+                    {
+                        e.Graphics.DrawLine(
+                            border,
+                            headerPaintBounds.Left,
+                            e.CellBounds.Bottom - 1,
+                            e.CellBounds.Right - 1,
+                            e.CellBounds.Bottom - 1);
+                        if (e.ColumnIndex > 0)
+                            e.Graphics.DrawLine(
+                                border,
+                                e.CellBounds.Left,
+                                e.CellBounds.Top,
+                                e.CellBounds.Left,
+                                e.CellBounds.Bottom - 1);
+                    }
+                    TextRenderer.DrawText(
+                        e.Graphics,
+                        Convert.ToString(e.FormattedValue) ?? string.Empty,
+                        e.CellStyle.Font,
+                        e.CellBounds,
+                        e.CellStyle.ForeColor,
+                        TextFormatFlags.HorizontalCenter
+                        | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.SingleLine
+                        | TextFormatFlags.NoPrefix);
                     return;
                 }
 
@@ -1780,28 +1863,12 @@ namespace TarkovServerReporter
                                 background);
                     }
                 }
-                PaintStickyActionDivider(e.Graphics, e.CellBounds, e.ColumnIndex);
             }
             finally
             {
                 e.Graphics.Restore(state);
                 e.Handled = true;
             }
-        }
-
-        private static void PaintStickyActionDivider(
-            Graphics graphics,
-            Rectangle cellBounds,
-            int columnIndex)
-        {
-            if (graphics == null || columnIndex != 0) return;
-            using (var divider = new Pen(Color.FromArgb(82, 94, 108), 1F))
-                graphics.DrawLine(
-                    divider,
-                    cellBounds.Left,
-                    cellBounds.Top,
-                    cellBounds.Left,
-                    cellBounds.Bottom - 1);
         }
 
         private void HistoryGridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
@@ -1911,6 +1978,20 @@ namespace TarkovServerReporter
                     }
                     using (var arrowBrush = new SolidBrush(Accent))
                         e.Graphics.FillPolygon(arrowBrush, points);
+                }
+
+                // The fixed action overlay begins immediately after this column.
+                // Cover the native header's raised right edge so it cannot appear
+                // as a left divider on the first (block) action column.
+                if (string.Equals(column.Name, "result", StringComparison.Ordinal))
+                {
+                    using (var edgeBrush = new SolidBrush(SurfaceAlt))
+                        e.Graphics.FillRectangle(
+                            edgeBrush,
+                            e.CellBounds.Right - 1,
+                            e.CellBounds.Top,
+                            1,
+                            Math.Max(0, e.CellBounds.Height - 1));
                 }
             }
             finally
