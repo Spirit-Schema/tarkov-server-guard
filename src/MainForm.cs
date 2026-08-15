@@ -19,6 +19,8 @@ namespace TarkovServerReporter
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);
         private static readonly Color SurfaceAlt = Color.FromArgb(31, 38, 46);
         private static readonly Color Border = Color.FromArgb(54, 63, 74);
+        private static readonly Color HeaderBevelHighlight = Color.FromArgb(72, 82, 94);
+        private static readonly Color HeaderBevelShadow = Color.FromArgb(13, 17, 22);
         private static readonly Color Accent = Color.FromArgb(232, 157, 54);
         private static readonly Color AccentHover = Color.FromArgb(246, 173, 70);
         private static readonly Color TextPrimary = Color.FromArgb(244, 246, 248);
@@ -242,12 +244,13 @@ namespace TarkovServerReporter
             }
         }
 
-        private sealed class SegmentedDetailLabel : Label
+        private sealed class DetailValueLabel : Label
         {
             private string _primaryText = string.Empty;
             private string _suffixText = string.Empty;
 
             public Color SuffixColor { get; set; }
+            public bool FitTextToWidth { get; set; }
 
             public override string Text
             {
@@ -285,22 +288,53 @@ namespace TarkovServerReporter
                 const TextFormatFlags drawFlags = measureFlags
                     | TextFormatFlags.VerticalCenter
                     | TextFormatFlags.EndEllipsis;
+                Font fittedFont = null;
+                Font drawFont = Font;
+                if (FitTextToWidth)
+                {
+                    float fittedSize = Font.Size;
+                    string completeText = _primaryText + _suffixText;
+                    while (TextRenderer.MeasureText(
+                            e.Graphics,
+                            completeText,
+                            drawFont,
+                            Size.Empty,
+                            measureFlags).Width > bounds.Width
+                        && fittedSize > 6F)
+                    {
+                        if (fittedFont != null) fittedFont.Dispose();
+                        fittedSize = Math.Max(6F, fittedSize - 0.25F);
+                        fittedFont = new Font(
+                            Font.FontFamily,
+                            fittedSize,
+                            Font.Style,
+                            GraphicsUnit.Point);
+                        drawFont = fittedFont;
+                    }
+                }
                 int primaryWidth = TextRenderer.MeasureText(
                     e.Graphics,
                     _primaryText,
-                    Font,
+                    drawFont,
                     Size.Empty,
                     measureFlags).Width;
                 int suffixWidth = TextRenderer.MeasureText(
                     e.Graphics,
                     _suffixText,
-                    Font,
+                    drawFont,
                     Size.Empty,
                     measureFlags).Width;
 
                 if (string.IsNullOrEmpty(_suffixText))
                 {
-                    TextRenderer.DrawText(e.Graphics, _primaryText, Font, bounds, ForeColor, drawFlags);
+                    TextRenderer.DrawText(
+                        e.Graphics,
+                        _primaryText,
+                        drawFont,
+                        bounds,
+                        ForeColor,
+                        drawFlags);
+                    if (fittedFont != null) fittedFont.Dispose();
                     return;
                 }
 
@@ -314,7 +348,7 @@ namespace TarkovServerReporter
                     TextRenderer.DrawText(
                         e.Graphics,
                         _primaryText,
-                        Font,
+                        drawFont,
                         new Rectangle(bounds.Left, bounds.Top, primaryBoundsWidth, bounds.Height),
                         ForeColor,
                         drawFlags);
@@ -326,10 +360,11 @@ namespace TarkovServerReporter
                 TextRenderer.DrawText(
                     e.Graphics,
                     _suffixText,
-                    Font,
+                    drawFont,
                     new Rectangle(suffixLeft, bounds.Top, visibleSuffixWidth, bounds.Height),
                     SuffixColor,
                     drawFlags);
+                if (fittedFont != null) fittedFont.Dispose();
             }
         }
 
@@ -1460,6 +1495,10 @@ namespace TarkovServerReporter
                 Padding = new Padding(0, 1, 0, 1)
             };
             _recentPeriodButton = CreatePeriodButton("최근100개", 96);
+            // The toolbar host and the grid share the same three-pixel card
+            // inset. Only the first button's default four-pixel FlowLayout
+            // margin shifted the whole left group past the first grid column.
+            _recentPeriodButton.Margin = new Padding(0);
             _todayPeriodButton = CreatePeriodButton("오늘", 52);
             _sevenDaysPeriodButton = CreatePeriodButton("7일", 52);
             _thirtyDaysPeriodButton = CreatePeriodButton("30일", 52);
@@ -1936,9 +1975,7 @@ namespace TarkovServerReporter
                 {
                     PaintDarkGridHeader(
                         e,
-                        SortOrder.None,
-                        e.ColumnIndex == 0,
-                        true);
+                        SortOrder.None);
                     return;
                 }
 
@@ -2029,9 +2066,7 @@ namespace TarkovServerReporter
                     && _historySortOrder != SortOrder.None;
                 PaintDarkGridHeader(
                     e,
-                    active ? _historySortOrder : SortOrder.None,
-                    column.DisplayIndex == 0,
-                    !string.Equals(column.Name, "result", StringComparison.Ordinal));
+                    active ? _historySortOrder : SortOrder.None);
                 return;
             }
 
@@ -2047,9 +2082,7 @@ namespace TarkovServerReporter
 
         private static void PaintDarkGridHeader(
             DataGridViewCellPaintingEventArgs e,
-            SortOrder sortOrder,
-            bool drawLeftBorder,
-            bool drawRightBorder)
+            SortOrder sortOrder)
         {
             Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
             if (clip.Width <= 0 || clip.Height <= 0) { e.Handled = true; return; }
@@ -2059,31 +2092,34 @@ namespace TarkovServerReporter
                 e.Graphics.SetClip(clip);
                 using (var background = new SolidBrush(SurfaceAlt))
                     e.Graphics.FillRectangle(background, e.CellBounds);
-                using (var border = new Pen(Border))
+                // Recreate the familiar raised header without the native light
+                // theme: each shared boundary is exactly one shadow pixel from
+                // the preceding cell plus one muted-highlight pixel from the
+                // leading edge of the next cell.
+                using (var highlight = new Pen(HeaderBevelHighlight))
+                using (var shadow = new Pen(HeaderBevelShadow))
                 {
                     int right = e.CellBounds.Right - 1;
                     int bottom = e.CellBounds.Bottom - 1;
                     e.Graphics.DrawLine(
-                        border,
+                        highlight,
                         e.CellBounds.Left,
                         e.CellBounds.Top,
                         right,
                         e.CellBounds.Top);
                     e.Graphics.DrawLine(
-                        border,
+                        highlight,
+                        e.CellBounds.Left,
+                        e.CellBounds.Top,
+                        e.CellBounds.Left,
+                        bottom);
+                    e.Graphics.DrawLine(
+                        shadow,
                         e.CellBounds.Left,
                         bottom,
                         right,
                         bottom);
-                    if (drawRightBorder)
-                        e.Graphics.DrawLine(border, right, e.CellBounds.Top, right, bottom);
-                    if (drawLeftBorder)
-                        e.Graphics.DrawLine(
-                            border,
-                            e.CellBounds.Left,
-                            e.CellBounds.Top,
-                            e.CellBounds.Left,
-                            bottom);
+                    e.Graphics.DrawLine(shadow, right, e.CellBounds.Top, right, bottom);
                 }
 
                 bool active = sortOrder != SortOrder.None;
@@ -2352,10 +2388,10 @@ namespace TarkovServerReporter
             string[] keys =
             {
                 "작전시간",
-                "서버배정/입장시간",
+                "서버배정\u202F/\u202F입장시간",
                 "서버연결 결과",
                 "게임버전",
-                "포트/데이터센터",
+                "포트\u202F/\u202F데이터센터",
                 "shortId",
                 "SID"
             };
@@ -2386,11 +2422,11 @@ namespace TarkovServerReporter
                 keyLabel.Margin = new Padding(0);
                 keyLabel.Padding = new Padding(0);
                 keyLabel.AutoEllipsis = false;
-                Label valueLabel = index == 1
-                    ? (Label)new SegmentedDetailLabel { SuffixColor = TextMuted }
-                    : index == 2
-                        ? (Label)new FittedDetailLabel()
-                        : new Label();
+                Label valueLabel = new DetailValueLabel
+                {
+                    SuffixColor = TextMuted,
+                    FitTextToWidth = index == 2
+                };
                 valueLabel.Dock = DockStyle.Fill;
                 valueLabel.AutoSize = false;
                 valueLabel.Text = "-";
@@ -2399,14 +2435,11 @@ namespace TarkovServerReporter
                 valueLabel.Font = new Font("Malgun Gothic", 8.5F);
                 valueLabel.TextAlign = ContentAlignment.MiddleLeft;
                 valueLabel.Margin = new Padding(0);
-                // Custom-painted labels use NoPadding so their glyphs otherwise
-                // start one pixel before the standard Label rows. Match the
-                // shared value baseline without moving the table column itself.
-                valueLabel.Padding = valueLabel is SegmentedDetailLabel
-                    || valueLabel is FittedDetailLabel
-                    ? new Padding(1, 0, 0, 0)
-                    : new Padding(0);
-                valueLabel.AutoEllipsis = !(valueLabel is FittedDetailLabel);
+                // Every value row shares the same owner-draw origin and flags.
+                // This inset preserves the existing visual column while avoiding
+                // per-control native Label padding differences.
+                valueLabel.Padding = new Padding(1, 0, 0, 0);
+                valueLabel.AutoEllipsis = false;
                 layout.Controls.Add(keyLabel, 0, index);
                 layout.Controls.Add(valueLabel, 1, index);
                 if (index == 0)
@@ -4498,9 +4531,9 @@ namespace TarkovServerReporter
             {
                 foreach (Label label in _detailInfoValueLabels)
                 {
-                    SegmentedDetailLabel segmentedLabel = label as SegmentedDetailLabel;
-                    if (segmentedLabel != null)
-                        segmentedLabel.SetTextSegments("-", string.Empty);
+                    DetailValueLabel detailValueLabel = label as DetailValueLabel;
+                    if (detailValueLabel != null)
+                        detailValueLabel.SetTextSegments("-", string.Empty);
                     else
                         label.Text = "-";
                     label.ForeColor = TextMuted;
@@ -4534,10 +4567,12 @@ namespace TarkovServerReporter
             };
             for (int index = 0; index < _detailInfoValueLabels.Length && index < values.Length; index++)
             {
-                SegmentedDetailLabel segmentedLabel =
-                    _detailInfoValueLabels[index] as SegmentedDetailLabel;
-                if (segmentedLabel != null)
-                    segmentedLabel.SetTextSegments(values[index], " 걸림");
+                DetailValueLabel detailValueLabel =
+                    _detailInfoValueLabels[index] as DetailValueLabel;
+                if (detailValueLabel != null)
+                    detailValueLabel.SetTextSegments(
+                        values[index],
+                        index == 1 ? " 걸림" : string.Empty);
                 else
                     _detailInfoValueLabels[index].Text = values[index];
                 _detailInfoValueLabels[index].ForeColor = TextPrimary;
