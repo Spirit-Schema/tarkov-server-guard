@@ -16,6 +16,7 @@ namespace TarkovServerReporter
         public string IpAddress { get; set; }
         public string DataCenter { get; set; }
         public string Location { get; set; }
+        public string Note { get; set; }
         public DateTime? BlockedAtUtc { get; set; }
         public DateTime UpdatedAtUtc { get; set; }
 
@@ -56,11 +57,13 @@ namespace TarkovServerReporter
             public string Ip { get; set; }
             public string DataCenter { get; set; }
             public string Location { get; set; }
+            public string Note { get; set; }
             public string BlockedAtUtc { get; set; }
             public string UpdatedAtUtc { get; set; }
         }
 
         private const int CurrentVersion = 1;
+        public const int MaximumNoteLength = 300;
         private const int MaximumRecordCount = 4096;
         private const int MaximumFileBytes = 2 * 1024 * 1024;
         private static readonly object SyncRoot = new object();
@@ -92,6 +95,35 @@ namespace TarkovServerReporter
         public static bool MarkBlocked(string ipAddress, string dataCenter, string location)
         {
             return Upsert(ipAddress, dataCenter, location, DateTime.UtcNow);
+        }
+
+        public static bool UpdateNote(string ipAddress, string note)
+        {
+            if (!FirewallRuleManager.IsValidIpv4(ipAddress)) return false;
+            string safeNote = NormalizeNote(note);
+
+            lock (SyncRoot)
+            {
+                try
+                {
+                    Dictionary<string, BlockedServerMetadata> records = LoadForMutation();
+                    BlockedServerMetadata metadata;
+                    if (!records.TryGetValue(ipAddress, out metadata))
+                    {
+                        if (safeNote == null) return true;
+                        metadata = new BlockedServerMetadata { IpAddress = ipAddress };
+                        records[ipAddress] = metadata;
+                    }
+
+                    metadata.Note = safeNote;
+                    metadata.UpdatedAtUtc = DateTime.UtcNow;
+                    return SaveCore(records);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
         }
 
         public static bool Upsert(
@@ -208,6 +240,7 @@ namespace TarkovServerReporter
                         IpAddress = item.Ip,
                         DataCenter = NormalizeText(item.DataCenter, 80),
                         Location = NormalizeText(item.Location, 180),
+                        Note = NormalizeNote(item.Note),
                         BlockedAtUtc = nullableBlockedAt,
                         UpdatedAtUtc = updatedAt
                     };
@@ -237,6 +270,7 @@ namespace TarkovServerReporter
                         Ip = item.IpAddress,
                         DataCenter = NormalizeText(item.DataCenter, 80),
                         Location = NormalizeText(item.Location, 180),
+                        Note = NormalizeNote(item.Note),
                         BlockedAtUtc = FormatUtc(item.BlockedAtUtc),
                         UpdatedAtUtc = FormatUtc(item.UpdatedAtUtc == default(DateTime)
                             ? DateTime.UtcNow
@@ -319,6 +353,7 @@ namespace TarkovServerReporter
                     IpAddress = pair.Value.IpAddress,
                     DataCenter = pair.Value.DataCenter,
                     Location = pair.Value.Location,
+                    Note = pair.Value.Note,
                     BlockedAtUtc = pair.Value.BlockedAtUtc,
                     UpdatedAtUtc = pair.Value.UpdatedAtUtc
                 },
@@ -337,6 +372,44 @@ namespace TarkovServerReporter
             string normalized = builder.ToString().Trim();
             if (normalized == "-" || string.Equals(normalized, "확인 안 됨", StringComparison.Ordinal))
                 return null;
+            return normalized.Length == 0 ? null : normalized;
+        }
+
+        private static string NormalizeNote(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            var builder = new StringBuilder(Math.Min(value.Length, MaximumNoteLength));
+            string trimmed = value.Trim();
+            for (int index = 0; index < trimmed.Length; index++)
+            {
+                char character = trimmed[index];
+                if (char.IsHighSurrogate(character))
+                {
+                    if (index + 1 >= trimmed.Length || !char.IsLowSurrogate(trimmed[index + 1]))
+                        continue;
+                    if (builder.Length + 2 > MaximumNoteLength) break;
+                    builder.Append(character);
+                    builder.Append(trimmed[++index]);
+                    continue;
+                }
+                if (char.IsLowSurrogate(character)) continue;
+                UnicodeCategory category = char.GetUnicodeCategory(character);
+                if (character == '\r' || character == '\n' || character == '\t'
+                    || category == UnicodeCategory.LineSeparator
+                    || category == UnicodeCategory.ParagraphSeparator)
+                {
+                    if (builder.Length > 0
+                        && builder[builder.Length - 1] != ' '
+                        && builder.Length < MaximumNoteLength)
+                        builder.Append(' ');
+                    continue;
+                }
+                if (char.IsControl(character))
+                    continue;
+                if (builder.Length >= MaximumNoteLength) break;
+                builder.Append(character);
+            }
+            string normalized = builder.ToString().Trim();
             return normalized.Length == 0 ? null : normalized;
         }
 

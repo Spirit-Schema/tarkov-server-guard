@@ -84,6 +84,10 @@ namespace TarkovServerReporter.Tests
 
             Assert(BlockedServerMetadataStore.MarkBlocked(firstIp, "JP-TK02", "Tokyo, JP"),
                 "metadata mark-blocked succeeds in the temporary store");
+            Assert(BlockedServerMetadataStore.UpdateNote(
+                    firstIp,
+                    "  높은 핑\0\r\n\u2028패킷손실  "),
+                "blocked server note save succeeds");
             Assert(File.Exists(storePath) && File.Exists(backupPath),
                 "metadata save creates both primary and backup files");
 
@@ -94,14 +98,16 @@ namespace TarkovServerReporter.Tests
             Assert(first != null
                 && first.DataCenter == "JP-TK02"
                 && first.Location == "Tokyo, JP"
+                && first.Note == "높은 핑 패킷손실"
                 && first.BlockedAtUtc.HasValue
                 && first.UpdatedAtUtc.Kind == DateTimeKind.Utc,
-                "metadata primary round-trip preserves DC, location, and UTC timestamps");
+                "metadata primary round-trip preserves note, DC, location, and UTC timestamps");
 
             string primaryJson = File.ReadAllText(storePath, Encoding.UTF8);
             Assert(primaryJson.Contains("\"Ip\"")
                 && primaryJson.Contains("\"DataCenter\"")
                 && primaryJson.Contains("\"Location\"")
+                && primaryJson.Contains("\"Note\"")
                 && primaryJson.Contains("\"BlockedAtUtc\"")
                 && primaryJson.Contains("\"UpdatedAtUtc\""),
                 "metadata document contains only the intended record fields");
@@ -121,8 +127,9 @@ namespace TarkovServerReporter.Tests
             first = loaded[firstIp];
             Assert(first.DataCenter == "JP-TK03"
                 && first.Location == "Osaka, JP"
+                && first.Note == "높은 핑 패킷손실"
                 && first.BlockedAtUtc.HasValue,
-                "location update preserves the original block time");
+                "location update preserves the original block time and note");
             Assert(IsValidMetadataFile(storePath) && IsValidMetadataFile(backupPath),
                 "metadata repair leaves valid primary and backup documents");
 
@@ -133,8 +140,28 @@ namespace TarkovServerReporter.Tests
             Assert(BlockedServerMetadataStore.UpdateLocation(firstIp, null, "Osaka, JP"),
                 "metadata update recreates a missing primary from backup");
 
+            string oversizedNote = new string('가', BlockedServerMetadataStore.MaximumNoteLength + 25);
+            Assert(BlockedServerMetadataStore.UpdateNote(secondIp, oversizedNote),
+                "a legacy managed rule can receive a note before location metadata exists");
+            loaded = BlockedServerMetadataStore.LoadAll();
+            Assert(loaded.ContainsKey(secondIp)
+                && loaded[secondIp].Note.Length == BlockedServerMetadataStore.MaximumNoteLength
+                && !loaded[secondIp].BlockedAtUtc.HasValue,
+                "note input is capped at 300 characters without inventing a block time");
+            string surrogateBoundaryNote = new string('a', 299) + "\ud83d\ude00";
+            Assert(BlockedServerMetadataStore.UpdateNote(secondIp, surrogateBoundaryNote),
+                "note normalization accepts valid surrogate pairs at the length boundary");
+            loaded = BlockedServerMetadataStore.LoadAll();
+            Assert(loaded[secondIp].Note.Length == 299
+                && loaded[secondIp].Note.All(character => !char.IsSurrogate(character)),
+                "note normalization never persists half of a surrogate pair");
+            Assert(BlockedServerMetadataStore.UpdateNote(secondIp, oversizedNote),
+                "the maximum-length legacy note can be restored after boundary validation");
             Assert(BlockedServerMetadataStore.MarkBlocked(secondIp, "SGP", "Singapore, SG"),
-                "metadata store accepts a second managed server");
+                "metadata store accepts block details for the legacy managed server");
+            loaded = BlockedServerMetadataStore.LoadAll();
+            Assert(loaded[secondIp].Note.Length == BlockedServerMetadataStore.MaximumNoteLength,
+                "adding block details preserves an existing legacy-rule note");
             Assert(BlockedServerMetadataStore.Remove(new[] { firstIp }),
                 "metadata selective deletion succeeds");
             loaded = BlockedServerMetadataStore.LoadAll();
@@ -148,6 +175,14 @@ namespace TarkovServerReporter.Tests
                     DateTime.UtcNow)
                 && BlockedServerMetadataStore.LoadAll().Count == 1,
                 "metadata store rejects a non-canonical or injectable IP");
+            Assert(!BlockedServerMetadataStore.UpdateNote("203.0.113.42 & whoami", "unsafe"),
+                "note update rejects a non-canonical or injectable IP");
+
+            Assert(BlockedServerMetadataStore.UpdateNote(secondIp, " \r\n\t "),
+                "blank note deletion succeeds");
+            loaded = BlockedServerMetadataStore.LoadAll();
+            Assert(loaded.ContainsKey(secondIp) && loaded[secondIp].Note == null,
+                "blank note deletion preserves the remaining metadata record");
 
             Assert(BlockedServerMetadataStore.Remove(new[] { secondIp }),
                 "metadata final deletion succeeds");
@@ -155,6 +190,24 @@ namespace TarkovServerReporter.Tests
                 "metadata store is empty after deleting all records");
             Assert(IsValidMetadataFile(storePath) && IsValidMetadataFile(backupPath),
                 "empty metadata state is committed to primary and backup");
+
+            const string legacyIp = "192.0.2.55";
+            string legacyTimestamp = DateTime.UtcNow.ToString("o");
+            string legacyJson = "{\"Version\":1,\"Items\":[{\"Ip\":\"" + legacyIp
+                + "\",\"DataCenter\":\"Legacy\",\"Location\":\"Tokyo, JP\","
+                + "\"BlockedAtUtc\":null,\"UpdatedAtUtc\":\"" + legacyTimestamp + "\"}]}";
+            File.WriteAllText(storePath, legacyJson, new UTF8Encoding(false));
+            File.WriteAllText(backupPath, legacyJson, new UTF8Encoding(false));
+            loaded = BlockedServerMetadataStore.LoadAll();
+            Assert(loaded.ContainsKey(legacyIp) && loaded[legacyIp].Note == null,
+                "v1 metadata documents without a Note property remain readable");
+            Assert(BlockedServerMetadataStore.UpdateNote(legacyIp, "반복 끊김"),
+                "a note can be added after loading metadata written by an older version");
+            loaded = BlockedServerMetadataStore.LoadAll();
+            Assert(loaded[legacyIp].Note == "반복 끊김",
+                "the note added to legacy metadata round-trips normally");
+            Assert(BlockedServerMetadataStore.Remove(new[] { legacyIp }),
+                "legacy metadata note cleanup succeeds");
 
             string[] leftovers = Directory.GetFiles(temporaryRoot, "*.tmp.*")
                 .Concat(Directory.GetFiles(temporaryRoot, "*.previous.*"))

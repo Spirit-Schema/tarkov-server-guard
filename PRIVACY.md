@@ -19,7 +19,7 @@ Tarkov Server Guard는 게임 서버 정보를 사용자의 PC에서 분석합�
 | --- | --- |
 | `RaidNotes` | 사용자가 작성한 레이드 메모, 태그와 연결한 스크린샷 경로 |
 | `UserReportMemos` | 사용자가 작성한 유저신고 메모와 보관함 표시용 정보 |
-| `blocked-server-metadata.json` | 차단 서버의 데이터센터·추정 지역·차단 시각 |
+| `blocked-server-metadata.json` | 차단 서버의 데이터센터·추정 지역·차단 시각과 사용자가 선택 입력한 차단 메모 |
 | `usage-guide.shown` | 첫 실행 사용방법을 표시했는지 여부만 기록하는 빈 파일 |
 | `DbIpLite` | 지역 조회용 DB-IP Lite 데이터와 직전 정상본 |
 

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -20,6 +21,7 @@ namespace TarkovServerReporter
         private static readonly Color TextPrimary = Color.FromArgb(232, 235, 238);
         private static readonly Color TextMuted = Color.FromArgb(158, 169, 180);
         private static readonly Color Accent = Color.FromArgb(232, 156, 55);
+        private static readonly Color NoteOrange = Color.FromArgb(205, 132, 48);
         private static readonly Color Success = Color.FromArgb(68, 184, 121);
         private static readonly Color Danger = Color.FromArgb(224, 91, 91);
 
@@ -31,6 +33,13 @@ namespace TarkovServerReporter
         private readonly Button _removeAllButton;
         private readonly Button _closeButton;
         private bool _busy;
+
+        private enum NoteEditorAction
+        {
+            None,
+            Saved,
+            Deleted
+        }
 
         private sealed class ContainedActionButtonColumn : DataGridViewButtonColumn
         {
@@ -123,6 +132,234 @@ namespace TarkovServerReporter
             }
         }
 
+        private sealed class BlockNoteEditorForm : BrandedForm
+        {
+            private const string ExampleText = "높은 핑, 패킷손실, 반복 끊김 등";
+            private readonly string _ipAddress;
+            private readonly CueTextBox _noteTextBox;
+            private readonly Label _statusLabel;
+            private readonly Button _deleteButton;
+
+            private sealed class CueTextBox : TextBox
+            {
+                private const int SetCueBannerMessage = 0x1501;
+                private string _cueText;
+                private bool _dismissed;
+
+                [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+                private static extern IntPtr SendMessage(
+                    IntPtr windowHandle,
+                    int message,
+                    IntPtr wordParameter,
+                    string longParameter);
+
+                public string CueText
+                {
+                    get { return _cueText; }
+                    set
+                    {
+                        _cueText = value ?? string.Empty;
+                        ApplyCueBanner();
+                    }
+                }
+
+                protected override void OnHandleCreated(EventArgs e)
+                {
+                    base.OnHandleCreated(e);
+                    ApplyCueBanner();
+                }
+
+                protected override void OnMouseDown(MouseEventArgs e)
+                {
+                    _dismissed = true;
+                    ApplyCueBanner();
+                    base.OnMouseDown(e);
+                }
+
+                protected override void OnKeyDown(KeyEventArgs e)
+                {
+                    _dismissed = true;
+                    ApplyCueBanner();
+                    base.OnKeyDown(e);
+                }
+
+                protected override void OnLeave(EventArgs e)
+                {
+                    if (TextLength == 0) _dismissed = false;
+                    ApplyCueBanner();
+                    base.OnLeave(e);
+                }
+
+                private void ApplyCueBanner()
+                {
+                    if (!IsHandleCreated) return;
+                    SendMessage(
+                        Handle,
+                        SetCueBannerMessage,
+                        new IntPtr(1),
+                        _dismissed ? string.Empty : _cueText);
+                }
+            }
+
+            public BlockNoteEditorForm(string ipAddress, string note)
+            {
+                _ipAddress = ipAddress;
+                Text = "차단 메모";
+                StartPosition = FormStartPosition.CenterParent;
+                ClientSize = new Size(560, 220);
+                MinimumSize = new Size(480, 210);
+                BackColor = Background;
+                ForeColor = TextPrimary;
+                Font = new Font("Malgun Gothic", 9F, FontStyle.Regular, GraphicsUnit.Point);
+                AutoScaleMode = AutoScaleMode.Dpi;
+                ShowInTaskbar = false;
+                MinimizeBox = false;
+                MaximizeBox = false;
+
+                var root = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Background,
+                    Padding = new Padding(18, 14, 18, 12),
+                    ColumnCount = 1,
+                    RowCount = 4
+                };
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 65F));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+                Controls.Add(root);
+
+                var header = new Panel { Dock = DockStyle.Fill, BackColor = Background };
+                header.Controls.Add(new Label
+                {
+                    AutoSize = true,
+                    Location = new Point(0, 0),
+                    Text = "차단 메모",
+                    Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
+                    ForeColor = TextPrimary
+                });
+                header.Controls.Add(new Label
+                {
+                    AutoSize = true,
+                    Location = new Point(2, 37),
+                    Text = ipAddress + " · 이 PC에만 저장됩니다.",
+                    ForeColor = TextMuted
+                });
+                root.Controls.Add(header, 0, 0);
+
+                var editorHost = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(0, 2, 0, 6),
+                    BackColor = Background,
+                    Padding = new Padding(0)
+                };
+                _noteTextBox = new CueTextBox
+                {
+                    BorderStyle = BorderStyle.FixedSingle,
+                    BackColor = Surface,
+                    ForeColor = TextPrimary,
+                    Font = new Font("Malgun Gothic", 10F),
+                    MaxLength = BlockedServerMetadataStore.MaximumNoteLength,
+                    Multiline = false,
+                    Dock = DockStyle.Top,
+                    Text = note ?? string.Empty,
+                    CueText = ExampleText,
+                    AccessibleName = "차단 메모",
+                    AccessibleDescription = ExampleText,
+                    TabIndex = 0
+                };
+                editorHost.Controls.Add(_noteTextBox);
+                root.Controls.Add(editorHost, 0, 1);
+
+                _statusLabel = new Label
+                {
+                    Dock = DockStyle.Fill,
+                    Text = "선택 입력 · 한 줄, 최대 300자",
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    ForeColor = TextMuted,
+                    AutoEllipsis = true
+                };
+                root.Controls.Add(_statusLabel, 0, 2);
+
+                var actions = new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    FlowDirection = FlowDirection.RightToLeft,
+                    WrapContents = false,
+                    Padding = new Padding(0, 6, 0, 0),
+                    BackColor = Background
+                };
+                Button cancelButton = CreateEditorButton("취소", SurfaceAlt, TextPrimary, Border);
+                Button saveButton = CreateEditorButton(
+                    "저장",
+                    Accent,
+                    Color.FromArgb(43, 29, 13),
+                    Color.FromArgb(185, 116, 38));
+                _deleteButton = CreateEditorButton("삭제", SurfaceAlt, Danger, Danger);
+                _deleteButton.Enabled = !string.IsNullOrWhiteSpace(note);
+                actions.Controls.Add(cancelButton);
+                actions.Controls.Add(saveButton);
+                actions.Controls.Add(_deleteButton);
+                root.Controls.Add(actions, 0, 3);
+
+                AcceptButton = saveButton;
+                CancelButton = cancelButton;
+                cancelButton.DialogResult = DialogResult.Cancel;
+                saveButton.Click += delegate { PersistNote(_noteTextBox.Text, NoteEditorAction.Saved); };
+                _deleteButton.Click += delegate { PersistNote(null, NoteEditorAction.Deleted); };
+                Shown += delegate
+                {
+                    _noteTextBox.SelectionStart = _noteTextBox.TextLength;
+                };
+            }
+
+            public NoteEditorAction Action { get; private set; }
+
+            private static Button CreateEditorButton(
+                string text,
+                Color background,
+                Color foreground,
+                Color border)
+            {
+                var button = new Button
+                {
+                    Text = text,
+                    Size = new Size(78, 32),
+                    Margin = new Padding(8, 0, 0, 0),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = background,
+                    ForeColor = foreground,
+                    Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
+                    Cursor = Cursors.Hand,
+                    TabStop = true
+                };
+                button.FlatAppearance.BorderColor = border;
+                button.FlatAppearance.MouseOverBackColor = background == Accent
+                    ? Color.FromArgb(242, 170, 72)
+                    : Color.FromArgb(45, 54, 64);
+                return button;
+            }
+
+            private void PersistNote(string note, NoteEditorAction action)
+            {
+                if (!BlockedServerMetadataStore.UpdateNote(_ipAddress, note))
+                {
+                    _statusLabel.ForeColor = Danger;
+                    _statusLabel.Text = action == NoteEditorAction.Deleted
+                        ? "차단 메모를 삭제하지 못했습니다."
+                        : "차단 메모를 저장하지 못했습니다.";
+                    return;
+                }
+
+                Action = action;
+                DialogResult = DialogResult.OK;
+                Close();
+            }
+        }
+
         public BlockedServersForm()
         {
             Text = "서버차단현황";
@@ -203,6 +440,11 @@ namespace TarkovServerReporter
             _removeSelectedButton.Click += async delegate { await RemoveSelectedAsync(); };
             _removeAllButton.Click += async delegate { await RemoveAllAsync(); };
             _grid.CellContentClick += GridCellContentClick;
+            _grid.CellMouseClick += GridCellMouseClick;
+            _grid.CellPainting += GridCellPainting;
+            _grid.CellMouseMove += GridCellMouseMove;
+            _grid.MouseLeave += delegate { _grid.Cursor = Cursors.Default; };
+            _grid.KeyDown += GridKeyDown;
             _grid.CurrentCellDirtyStateChanged += delegate
             {
                 if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewCheckBoxCell)
@@ -301,6 +543,26 @@ namespace TarkovServerReporter
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
+                Name = "note",
+                HeaderText = "메모",
+                ReadOnly = true,
+                Width = 58,
+                SortMode = DataGridViewColumnSortMode.NotSortable,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Surface,
+                    ForeColor = NoteOrange,
+                    SelectionBackColor = Color.FromArgb(48, 59, 70),
+                    SelectionForeColor = NoteOrange,
+                    Alignment = DataGridViewContentAlignment.MiddleCenter,
+                    Padding = new Padding(0)
+                }
+            });
+            grid.Columns["note"].HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            grid.Columns["note"].HeaderCell.Style.WrapMode = DataGridViewTriState.False;
+            grid.Columns["note"].HeaderCell.Style.Padding = new Padding(0);
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
                 Name = "kind",
                 HeaderText = "규칙 구분",
                 ReadOnly = true,
@@ -341,6 +603,7 @@ namespace TarkovServerReporter
             int horizontalInset = Math.Max(5, (int)Math.Round(7F * scale));
             int verticalInset = Math.Max(3, (int)Math.Round(5F * scale));
             DataGridViewColumn removeColumn = grid.Columns["remove"];
+            DataGridViewColumn noteColumn = grid.Columns["note"];
             Font headerFont = grid.ColumnHeadersDefaultCellStyle.Font ?? grid.Font;
             Font buttonFont = removeColumn.DefaultCellStyle.Font ?? grid.Font;
             Size headerText;
@@ -357,6 +620,7 @@ namespace TarkovServerReporter
             removeColumn.Width = Math.Max(
                 Math.Max(headerWidth, buttonWidth),
                 (int)Math.Round(88F * scale));
+            noteColumn.Width = Math.Max(58, (int)Math.Round(58F * scale));
 
             int rowHeight = Math.Max(
                 (int)Math.Round(36F * scale),
@@ -417,11 +681,13 @@ namespace TarkovServerReporter
                     server.StatusText,
                     metadata == null ? "-" : metadata.DataCenterLocationText,
                     metadata == null ? "확인 안 됨" : metadata.BlockedAtText,
+                    string.Empty,
                     server.RuleKindText,
                     "해제");
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = server;
                 row.Cells["status"].Style.ForeColor = Danger;
+                UpdateNoteCell(row, metadata == null ? null : metadata.Note);
             }
 
             _summaryLabel.Text = result.Servers.Count == 0
@@ -448,6 +714,155 @@ namespace TarkovServerReporter
                 MessageBoxDefaultButton.Button2);
             if (answer != DialogResult.Yes) return;
             await RemoveAddressesAsync(new[] { server.IpAddress });
+        }
+
+        private void GridCellMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (_busy || e.Button != MouseButtons.Left || e.RowIndex < 0 || e.ColumnIndex < 0)
+                return;
+            if (_grid.Columns[e.ColumnIndex].Name == "note")
+                ShowNoteEditor(_grid.Rows[e.RowIndex]);
+        }
+
+        private void GridKeyDown(object sender, KeyEventArgs e)
+        {
+            if (_busy || _grid.CurrentCell == null
+                || _grid.CurrentCell.RowIndex < 0
+                || _grid.CurrentCell.OwningColumn == null
+                || _grid.CurrentCell.OwningColumn.Name != "note"
+                || (e.KeyCode != Keys.Enter && e.KeyCode != Keys.Space))
+                return;
+
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            ShowNoteEditor(_grid.Rows[_grid.CurrentCell.RowIndex]);
+        }
+
+        private void GridCellMouseMove(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            bool interactive = !_busy && e.RowIndex >= 0 && e.ColumnIndex >= 0
+                && (_grid.Columns[e.ColumnIndex].Name == "note"
+                    || _grid.Columns[e.ColumnIndex].Name == "remove");
+            _grid.Cursor = interactive ? Cursors.Hand : Cursors.Default;
+        }
+
+        private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0
+                || _grid.Columns[e.ColumnIndex].Name != "note")
+                return;
+
+            Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
+            if (clip.Width <= 0 || clip.Height <= 0)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            GraphicsState state = e.Graphics.Save();
+            try
+            {
+                e.Graphics.SetClip(clip);
+                e.Paint(e.ClipBounds, e.PaintParts & ~DataGridViewPaintParts.ContentForeground);
+                DataGridViewCell cell = _grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                bool hasNote = cell.Tag is bool && (bool)cell.Tag;
+                float scale = Math.Max(1F, e.Graphics.DpiX / 96F);
+                int iconWidth = Math.Max(16, (int)Math.Round(18F * scale));
+                int iconHeight = Math.Max(14, (int)Math.Round(16F * scale));
+                Rectangle iconBounds = new Rectangle(
+                    e.CellBounds.Left + (e.CellBounds.Width - iconWidth) / 2,
+                    e.CellBounds.Top + (e.CellBounds.Height - iconHeight) / 2,
+                    iconWidth,
+                    iconHeight);
+                using (GraphicsPath bubble = CreateSpeechBubblePath(iconBounds))
+                {
+                    SmoothingMode oldMode = e.Graphics.SmoothingMode;
+                    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    if (hasNote)
+                    {
+                        using (var brush = new SolidBrush(NoteOrange))
+                            e.Graphics.FillPath(brush, bubble);
+                    }
+                    else
+                    {
+                        using (var pen = new Pen(NoteOrange, Math.Max(1.4F, 1.5F * scale)))
+                            e.Graphics.DrawPath(pen, bubble);
+                    }
+                    e.Graphics.SmoothingMode = oldMode;
+                }
+            }
+            finally
+            {
+                e.Graphics.Restore(state);
+                e.Handled = true;
+            }
+        }
+
+        private static GraphicsPath CreateSpeechBubblePath(Rectangle bounds)
+        {
+            int radius = Math.Max(2, bounds.Width / 6);
+            int tail = Math.Max(3, bounds.Height / 4);
+            int left = bounds.Left;
+            int top = bounds.Top;
+            int right = bounds.Right - 1;
+            int bodyBottom = bounds.Bottom - tail - 1;
+            int diameter = radius * 2;
+            int center = left + bounds.Width / 2;
+
+            var path = new GraphicsPath();
+            path.StartFigure();
+            path.AddLine(left + radius, top, right - radius, top);
+            path.AddArc(right - diameter, top, diameter, diameter, 270, 90);
+            path.AddLine(right, top + radius, right, bodyBottom - radius);
+            path.AddArc(right - diameter, bodyBottom - diameter, diameter, diameter, 0, 90);
+            path.AddLine(right - radius, bodyBottom, center + 2, bodyBottom);
+            path.AddLine(center + 2, bodyBottom, center - 3, bounds.Bottom - 1);
+            path.AddLine(center - 3, bounds.Bottom - 1, center - 4, bodyBottom);
+            path.AddLine(center - 4, bodyBottom, left + radius, bodyBottom);
+            path.AddArc(left, bodyBottom - diameter, diameter, diameter, 90, 90);
+            path.AddLine(left, bodyBottom - radius, left, top + radius);
+            path.AddArc(left, top, diameter, diameter, 180, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        private void ShowNoteEditor(DataGridViewRow row)
+        {
+            ManagedBlockedServer server = row == null ? null : row.Tag as ManagedBlockedServer;
+            if (server == null) return;
+
+            IDictionary<string, BlockedServerMetadata> records = BlockedServerMetadataStore.LoadAll();
+            BlockedServerMetadata metadata;
+            records.TryGetValue(server.IpAddress, out metadata);
+            using (var form = new BlockNoteEditorForm(
+                server.IpAddress,
+                metadata == null ? null : metadata.Note))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK
+                    || form.Action == NoteEditorAction.None)
+                    return;
+            }
+
+            records = BlockedServerMetadataStore.LoadAll();
+            records.TryGetValue(server.IpAddress, out metadata);
+            UpdateNoteCell(row, metadata == null ? null : metadata.Note);
+            _statusLabel.ForeColor = Success;
+            _statusLabel.Text = metadata == null || string.IsNullOrWhiteSpace(metadata.Note)
+                ? server.IpAddress + " 서버의 차단 메모를 삭제했습니다."
+                : server.IpAddress + " 서버의 차단 메모를 저장했습니다.";
+        }
+
+        private void UpdateNoteCell(DataGridViewRow row, string note)
+        {
+            if (row == null || !_grid.Columns.Contains("note")) return;
+            bool hasNote = !string.IsNullOrWhiteSpace(note);
+            DataGridViewCell cell = row.Cells["note"];
+            cell.Value = hasNote ? "저장된 차단 메모" : "차단 메모 추가";
+            cell.Tag = hasNote;
+            cell.ToolTipText = hasNote ? note : "차단 메모를 추가합니다.";
+            cell.Style.ForeColor = NoteOrange;
+            cell.Style.SelectionForeColor = NoteOrange;
+            _grid.InvalidateCell(cell);
         }
 
         private async Task RemoveSelectedAsync()

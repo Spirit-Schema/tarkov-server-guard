@@ -2,13 +2,13 @@
 # Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 param(
-    [string]$Version = '0.7.1',
+    [string]$Version = '0.7.2',
     [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    throw '릴리스 버전은 0.7.1 같은 3자리 SemVer 형식이어야 합니다.'
+    throw '릴리스 버전은 1.2.3 같은 3자리 SemVer 형식이어야 합니다.'
 }
 
 $projectRoot = $PSScriptRoot
@@ -190,8 +190,16 @@ Copy-Item -Force -Path (Join-Path $projectRoot 'tools') `
     -Destination $sourceReviewRoot -Recurse
 $brandingReviewRoot = Join-Path $sourceReviewRoot 'assets\branding'
 New-Item -ItemType Directory -Force -Path $brandingReviewRoot | Out-Null
-Copy-Item -Force -Path (Join-Path $projectRoot 'assets\branding\*') `
-    -Destination $brandingReviewRoot
+$reviewBrandingFiles = @(
+    'tarkov-server-guard-tsg.ico',
+    'tarkov-server-guard-tsg-icon-master.png',
+    'tarkov-server-guard-tsg-icon-size-preview.png'
+)
+foreach ($brandingFile in $reviewBrandingFiles) {
+    Copy-Item -Force -LiteralPath `
+        (Join-Path $projectRoot ('assets\branding\' + $brandingFile)) `
+        -Destination $brandingReviewRoot
+}
 
 $hashFiles = Get-ChildItem -LiteralPath $reviewRoot -File -Recurse |
     Sort-Object FullName

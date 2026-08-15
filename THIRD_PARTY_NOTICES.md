@@ -52,7 +52,7 @@ The application stores the active database and one recovery copy under `%LOCALAP
 
 Before activation, the application enforces compressed and decompressed size limits, validates the MMDB v2 structure and city database type, and commits through a temporary file. A failed or malformed update is discarded and the previous usable database remains available. DB-IP provides the Lite data as-is; a returned city is an estimate and must not be treated as the exact physical server location.
 
-For servers blocked by this application, the server IP, data-center code, returned location, and block timestamp may also be stored locally so that `서버차단현황` remains useful after game logs are deleted. This local metadata is removed when the corresponding managed block is successfully removed.
+For servers blocked by this application, the server IP, data-center code, returned location, block timestamp, and an optional user-written block note may also be stored locally so that `서버차단현황` remains useful after game logs are deleted. This local metadata is removed when the corresponding managed block is successfully removed.
 
 ## Velopack
 
