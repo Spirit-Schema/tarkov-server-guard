@@ -20,7 +20,7 @@ Escape from Tarkov와 Escape from Tarkov: Arena의 최근 접속 서버를 한�
 
 ## 다운로드
 
-[최신 릴리스](https://github.com/Spirit-Schema/tarkov-server-guard/releases/latest)에서 사용 방식에 맞는 파일을 받으세요.
+[[최신 릴리스]](https://github.com/Spirit-Schema/tarkov-server-guard/releases/latest)에서 사용 방식에 맞는 파일을 받으세요.
 
 | 파일 | 용도 |
 | --- | --- |
