@@ -289,6 +289,7 @@ namespace TarkovServerReporter
                     Dock = DockStyle.Fill,
                     FlowDirection = FlowDirection.RightToLeft,
                     WrapContents = false,
+                    Margin = new Padding(0),
                     Padding = new Padding(0, 6, 0, 0),
                     BackColor = Background
                 };

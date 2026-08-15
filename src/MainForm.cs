@@ -577,7 +577,7 @@ namespace TarkovServerReporter
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = false,
                 Margin = new Padding(0),
-                Padding = new Padding(0),
+                Padding = new Padding(0, 0, 0, 2),
                 Location = new Point(1000, 32)
             };
             var copyright = new Label
