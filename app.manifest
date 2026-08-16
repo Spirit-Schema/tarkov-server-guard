@@ -2,7 +2,7 @@
 <!-- Copyright © 2026 Spirit-Schema. All rights reserved. -->
 <!-- Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE. -->
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="0.7.4.0" name="TarkovServerGuard" />
+  <assemblyIdentity version="0.8.0.0" name="TarkovServerGuard" />
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

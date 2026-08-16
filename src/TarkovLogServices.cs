@@ -695,6 +695,109 @@ namespace TarkovServerReporter
         }
     }
 
+    internal sealed class PvpSeasonIdentity
+    {
+        public int Number { get; set; }
+        public string Key { get; set; }
+        public string InternalName { get; set; }
+        public PvpSeasonEvidence Evidence { get; set; }
+    }
+
+    internal static class PvpSeasonCatalog
+    {
+        private sealed class KnownSeason
+        {
+            public int Number { get; set; }
+            public string Key { get; set; }
+            public string InternalName { get; set; }
+            public int VersionMajor { get; set; }
+            public int VersionMinor { get; set; }
+            public int VersionPatch { get; set; }
+        }
+
+        // Names and aliases remain metadata here. The UI intentionally renders only
+        // the stable number (for example, "PvP시즌1") so a renamed season does not
+        // require changes in the presentation layer.
+        private static readonly KnownSeason[] KnownSeasons =
+        {
+            new KnownSeason
+            {
+                Number = 1,
+                Key = "kord-breach",
+                InternalName = "KORD BREACH",
+                VersionMajor = 1,
+                VersionMinor = 1,
+                VersionPatch = 0
+            }
+        };
+
+        internal static PvpSeasonIdentity Resolve(int? explicitNumber, string clientVersion)
+        {
+            if (IsValidNumber(explicitNumber))
+            {
+                KnownSeason known = KnownSeasons.FirstOrDefault(
+                    item => item.Number == explicitNumber.Value);
+                return CreateIdentity(
+                    explicitNumber.Value,
+                    known,
+                    PvpSeasonEvidence.ExplicitLogValue);
+            }
+
+            int[] version;
+            if (!TryParseNumericVersion(clientVersion, out version)) return null;
+            KnownSeason mapped = KnownSeasons.FirstOrDefault(item =>
+                version[0] == item.VersionMajor
+                && version[1] == item.VersionMinor
+                && version[2] == item.VersionPatch);
+            return mapped == null
+                ? null
+                : CreateIdentity(
+                    mapped.Number,
+                    mapped,
+                    PvpSeasonEvidence.VerifiedVersionMapping);
+        }
+
+        internal static bool IsValidNumber(int? number)
+        {
+            return number.HasValue && number.Value > 0 && number.Value <= 999;
+        }
+
+        private static PvpSeasonIdentity CreateIdentity(
+            int number,
+            KnownSeason known,
+            PvpSeasonEvidence evidence)
+        {
+            return new PvpSeasonIdentity
+            {
+                Number = number,
+                Key = known == null ? null : known.Key,
+                InternalName = known == null ? null : known.InternalName,
+                Evidence = evidence
+            };
+        }
+
+        private static bool TryParseNumericVersion(string value, out int[] version)
+        {
+            version = null;
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            string[] parts = value.Trim().Split('.');
+            if (parts.Length < 3 || parts.Length > 8) return false;
+            var parsed = new int[parts.Length];
+            for (int index = 0; index < parts.Length; index++)
+            {
+                if (!int.TryParse(
+                    parts[index],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out parsed[index])
+                    || parsed[index] < 0)
+                    return false;
+            }
+            version = parsed;
+            return true;
+        }
+    }
+
     public static class RaidLogScanner
     {
         private sealed class CachedDirectory
@@ -718,6 +821,10 @@ namespace TarkovServerReporter
         {
             public DateTime Timestamp { get; set; }
             public TarkovProgressionMode Mode { get; set; }
+            public int? PvpSeasonNumber { get; set; }
+            public string PvpSeasonKey { get; set; }
+            public string PvpSeasonName { get; set; }
+            public PvpSeasonEvidence PvpSeasonEvidence { get; set; }
         }
 
         private sealed class MapPresetEvent
@@ -729,6 +836,13 @@ namespace TarkovServerReporter
         private sealed class TimedLogEvent
         {
             public DateTime Timestamp { get; set; }
+        }
+
+        private sealed class GameStartedEvent
+        {
+            public DateTime Timestamp { get; set; }
+            public double? ReportedSeconds { get; set; }
+            public double? RealSeconds { get; set; }
         }
 
         private sealed class UserReportRequest
@@ -752,13 +866,19 @@ namespace TarkovServerReporter
             @"\bMatchingCompleted:(?<reported>-?\d+(?:\.\d+)?)(?:\s+real:(?<real>-?\d+(?:\.\d+)?))?",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex SessionModeRegex = new Regex(
-            @"\bSession mode:\s*(?<mode>Regular|Pve|PvpSeason)\b",
+            @"\bSession mode:\s*(?:(?<mode>Regular|Pve)\b|(?<mode>PvpSeason)(?:\s*(?:Season\s*)?(?:[:=#]\s*)?(?<season>\d{1,3}))?(?![A-Za-z0-9_]))",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex GameCreatedRegex = new Regex(
             @"\bGameCreated:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex GameStartedRegex = new Regex(
             @"\bGameStarted:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex GameStartedReportedSecondsRegex = new Regex(
+            @"\bGameStarted:\s*(?<seconds>[-+]?\d+(?:\.\d+)?)(?=$|\s)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex GameStartedRealSecondsRegex = new Regex(
+            @"\bGameStarted:.*?\breal:\s*(?<seconds>[-+]?\d+(?:\.\d+)?)(?=$|\s)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex EftPostRaidProfileRegex = new Regex(
             @"\bPrepareSelectedProfileLocally\b",
@@ -1088,7 +1208,7 @@ namespace TarkovServerReporter
             var sessionModes = new List<SessionModeEvent>();
             var mapPresets = new List<MapPresetEvent>();
             var gameCreatedEvents = new List<TimedLogEvent>();
-            var gameStartedEvents = new List<TimedLogEvent>();
+            var gameStartedEvents = new List<GameStartedEvent>();
             var eftPostRaidEvents = new List<TimedLogEvent>();
             var arenaMatchEndEvents = new List<TimedLogEvent>();
             FileInfo[] applicationFiles = relevantFiles
@@ -1106,11 +1226,10 @@ namespace TarkovServerReporter
                     Match modeMatch = SessionModeRegex.Match(line);
                     if (game == TarkovGame.Eft && modeMatch.Success)
                     {
-                        sessionModes.Add(new SessionModeEvent
-                        {
-                            Timestamp = timestamp,
-                            Mode = ParseProgressionMode(modeMatch.Groups["mode"].Value)
-                        });
+                        sessionModes.Add(CreateSessionModeEvent(
+                            timestamp,
+                            modeMatch,
+                            GetVersion(line)));
                     }
 
                     Match match = MatchingRegex.Match(line);
@@ -1152,7 +1271,18 @@ namespace TarkovServerReporter
                     }
 
                     if (GameStartedRegex.IsMatch(line))
-                        gameStartedEvents.Add(new TimedLogEvent { Timestamp = timestamp });
+                    {
+                        gameStartedEvents.Add(new GameStartedEvent
+                        {
+                            Timestamp = timestamp,
+                            ReportedSeconds = ParseOptionalSeconds(
+                                GameStartedReportedSecondsRegex,
+                                line),
+                            RealSeconds = ParseOptionalSeconds(
+                                GameStartedRealSecondsRegex,
+                                line)
+                        });
+                    }
 
                     if (game == TarkovGame.Eft)
                     {
@@ -1280,12 +1410,13 @@ namespace TarkovServerReporter
                     Port = legacyPort,
                     MapName = legacyMap,
                     ClientVersion = legacyVersion,
-                    ProgressionMode = FindProgressionMode(sessionModes, legacyTimestamp ?? started),
                     HostingMode = TarkovHostingMode.Server,
                     IpDetectedAt = legacyTimestamp
                 });
-                if (sessions[0].ProgressionMode != TarkovProgressionMode.Unknown)
-                    sessions[0].RaidPurpose = TarkovRaidPurpose.Progression;
+                ApplyEftRaidClassification(
+                    sessions[0],
+                    sessionModes,
+                    TarkovHostingMode.Server);
             }
 
             if (game == TarkovGame.Eft)
@@ -1324,15 +1455,14 @@ namespace TarkovServerReporter
         private static void ApplyOperationTimes(
             IList<ServerSession> sessions,
             TarkovGame game,
-            IEnumerable<TimedLogEvent> gameStartedEvents,
+            IEnumerable<GameStartedEvent> gameStartedEvents,
             IEnumerable<TimedLogEvent> terminalEvents,
             IEnumerable<FileInfo> relevantFiles)
         {
             if (sessions == null || sessions.Count == 0) return;
 
-            List<DateTime> starts = gameStartedEvents
-                .Select(item => item.Timestamp)
-                .OrderBy(timestamp => timestamp)
+            List<GameStartedEvent> starts = gameStartedEvents
+                .OrderBy(item => item.Timestamp)
                 .ToList();
             List<DateTime> terminals = terminalEvents
                 .Select(item => item.Timestamp)
@@ -1350,28 +1480,31 @@ namespace TarkovServerReporter
                 session.OperationStartedAt = null;
                 session.OperationEndedAt = null;
                 session.OperationState = RaidOperationState.Unknown;
+                session.RaidEntryMeasuredSeconds = null;
 
                 DateTime assignment = session.DisplayDetectedAt;
                 DateTime? nextAssignment = index + 1 < ordered.Count
                     ? (DateTime?)ordered[index + 1].DisplayDetectedAt
                     : null;
-                DateTime? started = starts
-                    .Where(timestamp => timestamp >= assignment
-                        && timestamp <= assignment.AddMinutes(30)
-                        && (!nextAssignment.HasValue || timestamp < nextAssignment.Value))
-                    .Select(timestamp => (DateTime?)timestamp)
+                GameStartedEvent startedEvent = starts
+                    .Where(item => item.Timestamp >= assignment
+                        && (item.Timestamp - assignment).TotalSeconds
+                            <= ServerSession.MaximumRaidEntrySeconds
+                        && (!nextAssignment.HasValue || item.Timestamp < nextAssignment.Value))
                     .FirstOrDefault();
-                if (!started.HasValue) continue;
+                if (startedEvent == null) continue;
 
+                DateTime started = startedEvent.Timestamp;
                 session.OperationStartedAt = started;
+                session.RaidEntryMeasuredSeconds = GetPreferredGameStartedSeconds(startedEvent);
                 DateTime? nextGameStart = starts
-                    .Where(timestamp => timestamp > started.Value)
-                    .Select(timestamp => (DateTime?)timestamp)
+                    .Where(item => item.Timestamp > started)
+                    .Select(item => (DateTime?)item.Timestamp)
                     .FirstOrDefault();
                 DateTime? endBoundary = MinTimestamp(nextAssignment, nextGameStart);
 
                 DateTime? explicitTerminal = terminals
-                    .Where(timestamp => timestamp > started.Value
+                    .Where(timestamp => timestamp > started
                         && (!endBoundary.HasValue || timestamp < endBoundary.Value))
                     .Select(timestamp => (DateTime?)timestamp)
                     .FirstOrDefault();
@@ -1383,7 +1516,7 @@ namespace TarkovServerReporter
                 if (game == TarkovGame.Eft
                     && session.DisconnectReason == 0
                     && session.ConnectionEndedAt.HasValue
-                    && session.ConnectionEndedAt.Value > started.Value
+                    && session.ConnectionEndedAt.Value > started
                     && (!endBoundary.HasValue || session.ConnectionEndedAt.Value < endBoundary.Value))
                 {
                     networkTerminal = session.ConnectionEndedAt;
@@ -1392,7 +1525,7 @@ namespace TarkovServerReporter
                 DateTime? ended = MinTimestamp(networkTerminal, explicitTerminal);
                 if (ended.HasValue)
                 {
-                    TimeSpan duration = ended.Value - started.Value;
+                    TimeSpan duration = ended.Value - started;
                     if (duration > TimeSpan.Zero && duration <= TimeSpan.FromHours(6))
                     {
                         session.OperationEndedAt = ended;
@@ -1403,7 +1536,7 @@ namespace TarkovServerReporter
 
                 bool hasOutOfOrderTerminal = terminals.Any(timestamp =>
                     timestamp >= assignment
-                    && timestamp <= started.Value
+                    && timestamp <= started
                     && (!endBoundary.HasValue || timestamp < endBoundary.Value));
                 bool isLastOperation = !nextAssignment.HasValue && !nextGameStart.HasValue;
                 bool hasRecentOperationActivity = HasRecentLogActivity(
@@ -1416,7 +1549,7 @@ namespace TarkovServerReporter
                         && session.CurrentAttemptConnected
                         && !session.HasDisconnectRecord
                         && !session.TimedOut);
-                TimeSpan elapsed = now - started.Value;
+                TimeSpan elapsed = now - started;
                 if (!hasOutOfOrderTerminal
                     && isLastOperation
                     && hasRecentOperationActivity
@@ -1434,6 +1567,38 @@ namespace TarkovServerReporter
             if (!first.HasValue) return second;
             if (!second.HasValue) return first;
             return first.Value <= second.Value ? first : second;
+        }
+
+        private static double? ParseOptionalSeconds(Regex regex, string line)
+        {
+            Match match = regex.Match(line ?? string.Empty);
+            double seconds;
+            if (!match.Success
+                || !double.TryParse(
+                    match.Groups["seconds"].Value,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out seconds))
+            {
+                return null;
+            }
+            return seconds;
+        }
+
+        private static double? GetPreferredGameStartedSeconds(GameStartedEvent startedEvent)
+        {
+            if (startedEvent == null) return null;
+            if (startedEvent.RealSeconds.HasValue
+                && ServerSession.IsValidRaidEntrySeconds(startedEvent.RealSeconds.Value))
+            {
+                return startedEvent.RealSeconds;
+            }
+            if (startedEvent.ReportedSeconds.HasValue
+                && ServerSession.IsValidRaidEntrySeconds(startedEvent.ReportedSeconds.Value))
+            {
+                return startedEvent.ReportedSeconds;
+            }
+            return null;
         }
 
         private static bool HasRecentLogActivity(IEnumerable<FileInfo> relevantFiles, DateTime now)
@@ -1507,14 +1672,56 @@ namespace TarkovServerReporter
             return TarkovProgressionMode.Unknown;
         }
 
+        private static SessionModeEvent CreateSessionModeEvent(
+            DateTime timestamp,
+            Match modeMatch,
+            string clientVersion)
+        {
+            TarkovProgressionMode mode = ParseProgressionMode(
+                modeMatch.Groups["mode"].Value);
+            var result = new SessionModeEvent
+            {
+                Timestamp = timestamp,
+                Mode = mode
+            };
+            if (mode != TarkovProgressionMode.PvpSeason) return result;
+
+            int parsedNumber;
+            int? explicitNumber = modeMatch.Groups["season"].Success
+                && int.TryParse(
+                    modeMatch.Groups["season"].Value,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out parsedNumber)
+                && PvpSeasonCatalog.IsValidNumber(parsedNumber)
+                    ? parsedNumber
+                    : (int?)null;
+            PvpSeasonIdentity identity = PvpSeasonCatalog.Resolve(
+                explicitNumber,
+                clientVersion);
+            if (identity == null) return result;
+            result.PvpSeasonNumber = identity.Number;
+            result.PvpSeasonKey = identity.Key;
+            result.PvpSeasonName = identity.InternalName;
+            result.PvpSeasonEvidence = identity.Evidence;
+            return result;
+        }
+
+        private static SessionModeEvent FindSessionModeEvent(
+            IEnumerable<SessionModeEvent> sessionModes,
+            DateTime timestamp)
+        {
+            return sessionModes
+                .Where(item => item.Timestamp <= timestamp)
+                .OrderByDescending(item => item.Timestamp)
+                .FirstOrDefault();
+        }
+
         private static TarkovProgressionMode FindProgressionMode(
             IEnumerable<SessionModeEvent> sessionModes,
             DateTime timestamp)
         {
-            SessionModeEvent mode = sessionModes
-                .Where(item => item.Timestamp <= timestamp)
-                .OrderByDescending(item => item.Timestamp)
-                .FirstOrDefault();
+            SessionModeEvent mode = FindSessionModeEvent(sessionModes, timestamp);
             return mode == null ? TarkovProgressionMode.Unknown : mode.Mode;
         }
 
@@ -1524,11 +1731,43 @@ namespace TarkovServerReporter
             TarkovHostingMode hostingMode)
         {
             if (session == null) return;
-            session.ProgressionMode = FindProgressionMode(sessionModes, session.DisplayDetectedAt);
+            SessionModeEvent mode = FindSessionModeEvent(
+                sessionModes,
+                session.DisplayDetectedAt);
+            session.ProgressionMode = mode == null
+                ? TarkovProgressionMode.Unknown
+                : mode.Mode;
+            ApplyPvpSeasonIdentity(session, mode);
             session.HostingMode = hostingMode;
             session.RaidPurpose = session.ProgressionMode == TarkovProgressionMode.Unknown
                 ? TarkovRaidPurpose.Unknown
                 : TarkovRaidPurpose.Progression;
+        }
+
+        private static void ApplyPvpSeasonIdentity(
+            ServerSession session,
+            SessionModeEvent mode)
+        {
+            session.PvpSeasonNumber = null;
+            session.PvpSeasonKey = null;
+            session.PvpSeasonName = null;
+            session.PvpSeasonEvidence = PvpSeasonEvidence.None;
+            if (mode == null || mode.Mode != TarkovProgressionMode.PvpSeason) return;
+
+            PvpSeasonIdentity identity = mode.PvpSeasonNumber.HasValue
+                ? new PvpSeasonIdentity
+                {
+                    Number = mode.PvpSeasonNumber.Value,
+                    Key = mode.PvpSeasonKey,
+                    InternalName = mode.PvpSeasonName,
+                    Evidence = mode.PvpSeasonEvidence
+                }
+                : PvpSeasonCatalog.Resolve(null, session.ClientVersion);
+            if (identity == null) return;
+            session.PvpSeasonNumber = identity.Number;
+            session.PvpSeasonKey = identity.Key;
+            session.PvpSeasonName = identity.InternalName;
+            session.PvpSeasonEvidence = identity.Evidence;
         }
 
         private static IList<ServerSession> BuildConfirmedLocalSessions(
@@ -1537,7 +1776,7 @@ namespace TarkovServerReporter
             IEnumerable<SessionModeEvent> sessionModes,
             IEnumerable<MapPresetEvent> mapPresets,
             IEnumerable<TimedLogEvent> gameCreatedEvents,
-            IEnumerable<TimedLogEvent> gameStartedEvents,
+            IEnumerable<GameStartedEvent> gameStartedEvents,
             IEnumerable<ServerSession> serverSessions,
             IEnumerable<FileInfo> networkFiles)
         {
@@ -1564,7 +1803,7 @@ namespace TarkovServerReporter
                     .FirstOrDefault();
                 if (created == null) continue;
 
-                TimedLogEvent started = gameStartedEvents
+                GameStartedEvent started = gameStartedEvents
                     .Where(item => !usedGameStarted.Contains(item.Timestamp.Ticks)
                         && item.Timestamp >= created.Timestamp
                         && item.Timestamp <= created.Timestamp.AddMinutes(3))
@@ -1973,6 +2212,7 @@ namespace TarkovServerReporter
                     continue;
                 }
 
+                bool candidateIsStrictlyLater = candidate.LastUpdated > existing.LastUpdated;
                 bool candidateIsLater = candidate.LastUpdated >= existing.LastUpdated;
                 if (candidate.DisplayDetectedAt < existing.DisplayDetectedAt)
                 {
@@ -2010,6 +2250,17 @@ namespace TarkovServerReporter
                 if (existing.ProgressionMode == TarkovProgressionMode.Unknown
                     && candidate.ProgressionMode != TarkovProgressionMode.Unknown)
                     existing.ProgressionMode = candidate.ProgressionMode;
+                if (existing.ProgressionMode == TarkovProgressionMode.PvpSeason
+                    && candidate.ProgressionMode == TarkovProgressionMode.PvpSeason
+                    && PvpSeasonCatalog.IsValidNumber(candidate.PvpSeasonNumber)
+                    && (!PvpSeasonCatalog.IsValidNumber(existing.PvpSeasonNumber)
+                        || candidate.PvpSeasonEvidence > existing.PvpSeasonEvidence))
+                {
+                    existing.PvpSeasonNumber = candidate.PvpSeasonNumber;
+                    existing.PvpSeasonKey = candidate.PvpSeasonKey;
+                    existing.PvpSeasonName = candidate.PvpSeasonName;
+                    existing.PvpSeasonEvidence = candidate.PvpSeasonEvidence;
+                }
                 if (existing.HostingMode == TarkovHostingMode.Unknown
                     && candidate.HostingMode != TarkovHostingMode.Unknown)
                     existing.HostingMode = candidate.HostingMode;
@@ -2018,14 +2269,35 @@ namespace TarkovServerReporter
                     existing.RaidPurpose = candidate.RaidPurpose;
                 if (!existing.MatchmakingSeconds.HasValue && candidate.MatchmakingSeconds.HasValue)
                     existing.MatchmakingSeconds = candidate.MatchmakingSeconds;
-                if (!existing.OperationStartedAt.HasValue && candidate.OperationStartedAt.HasValue)
-                    existing.OperationStartedAt = candidate.OperationStartedAt;
-                if (GetOperationStatePriority(candidate.OperationState)
-                    > GetOperationStatePriority(existing.OperationState))
+                int candidateOperationPriority = GetOperationStatePriority(candidate.OperationState);
+                int existingOperationPriority = GetOperationStatePriority(existing.OperationState);
+                bool candidateHasOperation = candidate.OperationStartedAt.HasValue;
+                bool sameOperationStart = candidateHasOperation
+                    && existing.OperationStartedAt.HasValue
+                    && candidate.OperationStartedAt.Value == existing.OperationStartedAt.Value;
+                bool replaceOperation = candidateHasOperation
+                    && (candidateOperationPriority > existingOperationPriority
+                        || !existing.OperationStartedAt.HasValue
+                        || (candidateOperationPriority == existingOperationPriority
+                            && candidateIsStrictlyLater));
+                if (replaceOperation)
                 {
+                    double? measuredSeconds = candidate.RaidEntryMeasuredSeconds;
+                    // Two copies of the same GameStarted event may differ only because one
+                    // log was truncated. Reuse its valid measurement only when the event
+                    // timestamp proves that the provenance is identical.
+                    if (!measuredSeconds.HasValue && sameOperationStart)
+                        measuredSeconds = existing.RaidEntryMeasuredSeconds;
                     existing.OperationStartedAt = candidate.OperationStartedAt;
                     existing.OperationEndedAt = candidate.OperationEndedAt;
                     existing.OperationState = candidate.OperationState;
+                    existing.RaidEntryMeasuredSeconds = measuredSeconds;
+                }
+                else if (sameOperationStart
+                    && !existing.RaidEntryMeasuredSeconds.HasValue
+                    && candidate.RaidEntryMeasuredSeconds.HasValue)
+                {
+                    existing.RaidEntryMeasuredSeconds = candidate.RaidEntryMeasuredSeconds;
                 }
                 if (candidate.ActualRttMs.HasValue && (!existing.ActualRttMs.HasValue || candidateIsLater))
                     existing.ActualRttMs = candidate.ActualRttMs;
@@ -2067,6 +2339,10 @@ namespace TarkovServerReporter
                 MapName = source.MapName,
                 GameMode = source.GameMode,
                 ProgressionMode = source.ProgressionMode,
+                PvpSeasonNumber = source.PvpSeasonNumber,
+                PvpSeasonKey = source.PvpSeasonKey,
+                PvpSeasonName = source.PvpSeasonName,
+                PvpSeasonEvidence = source.PvpSeasonEvidence,
                 HostingMode = source.HostingMode,
                 RaidPurpose = source.RaidPurpose,
                 ServerId = source.ServerId,
@@ -2092,6 +2368,7 @@ namespace TarkovServerReporter
                 TimedOut = source.TimedOut,
                 DisconnectReason = source.DisconnectReason,
                 ConnectionEndedAt = source.ConnectionEndedAt,
+                RaidEntryMeasuredSeconds = source.RaidEntryMeasuredSeconds,
                 OperationStartedAt = source.OperationStartedAt,
                 OperationEndedAt = source.OperationEndedAt,
                 OperationState = source.OperationState,

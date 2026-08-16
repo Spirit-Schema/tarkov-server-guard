@@ -497,6 +497,25 @@ internal static class GitHubUpdateTests
         Assert(accessToken != null && accessToken.GetValue(source, null) == null,
             "A GitHub access token was unexpectedly configured.");
 
+        Type appType = manager.GetType().Assembly.GetType("Velopack.VelopackApp", false);
+        Assert(appType != null, "VelopackApp startup dispatcher type is missing.");
+        MethodInfo build = appType.GetMethod("Build", BindingFlags.Public | BindingFlags.Static);
+        Assert(build != null && build.GetParameters().Length == 0,
+            "VelopackApp.Build startup contract is incompatible.");
+        object builder = build.Invoke(null, null);
+        Assert(builder != null, "VelopackApp.Build returned no startup builder.");
+        MethodInfo afterUpdateHook = builder.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .SingleOrDefault(item => item.Name == "OnAfterUpdateFastCallback"
+                && item.GetParameters().Length == 1
+                && typeof(Delegate).IsAssignableFrom(item.GetParameters()[0].ParameterType));
+        Assert(afterUpdateHook != null,
+            "Velopack after-update completion hook contract is incompatible.");
+        MethodInfo startupRun = builder.GetType().GetMethods(
+                BindingFlags.Public | BindingFlags.Instance)
+            .SingleOrDefault(item => item.Name == "Run" && item.GetParameters().Length == 0);
+        Assert(startupRun != null, "VelopackApp.Run startup contract is incompatible.");
+
         MethodInfo check = manager.GetType().GetMethod("CheckForUpdatesAsync", Type.EmptyTypes);
         MethodInfo download = manager.GetType().GetMethods().FirstOrDefault(delegate(MethodInfo item)
         {

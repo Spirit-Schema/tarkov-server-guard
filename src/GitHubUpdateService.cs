@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Net;
 using System.Reflection;
 using System.Threading;
@@ -376,6 +377,20 @@ namespace TarkovServerReporter
             VelopackReflectionUpdateEngine.TryRunStartupHooks();
         }
 
+        internal static bool IsInstalledApplication()
+        {
+            try
+            {
+                return VelopackReflectionUpdateEngine
+                    .CreateGitHub(RepositoryUrl)
+                    .IsAvailable;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         internal async Task<ApplicationUpdate> CheckForUpdateAsync(CancellationToken cancellationToken)
         {
             if (!IsEngineAvailable()) return null;
@@ -615,6 +630,7 @@ namespace TarkovServerReporter
         private readonly bool _isGitHub;
         private readonly Assembly _assembly;
         private object _manager;
+        private static int _startupDispatcherInvoked;
 
         private VelopackReflectionUpdateEngine(string source, bool isGitHub)
         {
@@ -660,6 +676,7 @@ namespace TarkovServerReporter
 
         internal static void TryRunStartupHooks()
         {
+            if (Interlocked.Exchange(ref _startupDispatcherInvoked, 1) != 0) return;
             try
             {
                 Assembly assembly = TryLoadAssembly();
@@ -669,6 +686,10 @@ namespace TarkovServerReporter
                 MethodInfo build = appType.GetMethod("Build", BindingFlags.Public | BindingFlags.Static);
                 if (build == null) return;
                 object builder = build.Invoke(null, null);
+                TryAttachFastHook(
+                    builder,
+                    "OnAfterUpdateFastCallback",
+                    delegate { UpdateCompletionNotice.TryRecordCurrentCompletedUpdate(); });
                 MethodInfo run = builder.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
                     .FirstOrDefault(delegate(MethodInfo method) { return method.Name == "Run"; });
                 if (run == null) return;
@@ -677,6 +698,45 @@ namespace TarkovServerReporter
             catch
             {
                 // A missing or incompatible updater must never prevent the main application from opening.
+            }
+        }
+
+        private static void TryAttachFastHook(
+            object builder,
+            string methodName,
+            Action callback)
+        {
+            if (builder == null || callback == null) return;
+            try
+            {
+                MethodInfo method = builder.GetType().GetMethods(
+                    BindingFlags.Public | BindingFlags.Instance)
+                    .FirstOrDefault(item => string.Equals(
+                        item.Name,
+                        methodName,
+                        StringComparison.Ordinal)
+                        && item.GetParameters().Length == 1
+                        && typeof(Delegate).IsAssignableFrom(
+                            item.GetParameters()[0].ParameterType));
+                if (method == null) return;
+                Type delegateType = method.GetParameters()[0].ParameterType;
+                MethodInfo invoke = delegateType.GetMethod("Invoke");
+                if (invoke == null) return;
+                ParameterExpression[] parameters = invoke.GetParameters()
+                    .Select(parameter => Expression.Parameter(
+                        parameter.ParameterType,
+                        parameter.Name))
+                    .ToArray();
+                MethodCallExpression body = Expression.Call(
+                    Expression.Constant(callback),
+                    typeof(Action).GetMethod("Invoke"));
+                Delegate hook = Expression.Lambda(delegateType, body, parameters).Compile();
+                method.Invoke(builder, new object[] { hook });
+            }
+            catch
+            {
+                // The optional completion marker must never prevent the
+                // mandatory Velopack startup dispatcher from running.
             }
         }
 
@@ -689,7 +749,9 @@ namespace TarkovServerReporter
             object update = await InvokeTaskAsync(manager, method, null, null, cancellationToken);
             if (update == null) return null;
             string version = ReadTargetVersion(update);
-            return string.IsNullOrWhiteSpace(version) ? null : new ApplicationUpdate(version, update);
+            return string.IsNullOrWhiteSpace(version)
+                ? null
+                : new ApplicationUpdate(version, update);
         }
 
         public async Task DownloadAndApplyAsync(
@@ -723,6 +785,9 @@ namespace TarkovServerReporter
         private object GetOrCreateManager()
         {
             if (_manager != null) return _manager;
+            // Program.Main invokes the startup dispatcher before any UI. The
+            // process-wide gate makes this a harmless no-op if a test or a
+            // nonstandard host creates the update manager first.
             TryRunStartupHooks();
             Type managerType = _assembly.GetType("Velopack.UpdateManager", true);
             if (_isGitHub)

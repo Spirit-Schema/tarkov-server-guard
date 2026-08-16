@@ -11,6 +11,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace TarkovServerReporter
@@ -90,8 +91,232 @@ namespace TarkovServerReporter
         public IList<FirewallBatchItemResult> Items { get; set; }
     }
 
+    internal interface IInitialFirewallStateQueryGateway
+    {
+        Dictionary<string, FirewallQueryResult> QueryMany(IEnumerable<string> ipAddresses);
+    }
+
+    internal sealed class SystemInitialFirewallStateQueryGateway
+        : IInitialFirewallStateQueryGateway
+    {
+        public Dictionary<string, FirewallQueryResult> QueryMany(
+            IEnumerable<string> ipAddresses)
+        {
+            return FirewallRuleManager.QueryMany(ipAddresses);
+        }
+    }
+
+    internal sealed class InitialFirewallStateRefreshResult
+    {
+        public InitialFirewallStateRefreshResult()
+        {
+            TargetIpAddresses = new List<string>();
+            States = new Dictionary<string, FirewallQueryResult>(
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        public int Generation { get; set; }
+        public bool Succeeded { get; set; }
+        public IList<string> TargetIpAddresses { get; set; }
+        public IDictionary<string, FirewallQueryResult> States { get; set; }
+    }
+
+    /// <summary>
+    /// Runs the inexpensive, read-only firewall lookup used immediately after raid logs load.
+    /// It is deliberately separate from the user-triggered ping/location query so it never
+    /// controls that button's busy state and can be replaced safely by a newer session load.
+    /// </summary>
+    internal sealed class InitialFirewallStateRefreshCoordinator : IDisposable
+    {
+        private readonly object _sync = new object();
+        private readonly IInitialFirewallStateQueryGateway _gateway;
+        private CancellationTokenSource _currentCancellation;
+        private int _generation;
+        private bool _disposed;
+
+        public InitialFirewallStateRefreshCoordinator(
+            IInitialFirewallStateQueryGateway gateway)
+        {
+            if (gateway == null) throw new ArgumentNullException("gateway");
+            _gateway = gateway;
+        }
+
+        public Task<InitialFirewallStateRefreshResult> RefreshAsync(
+            IEnumerable<string> candidateIpAddresses)
+        {
+            IList<string> targets = InitialFirewallStateRefreshPolicy
+                .GetUniqueValidAddresses(candidateIpAddresses);
+            CancellationTokenSource cancellation;
+            int generation;
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                CancelWithoutDisposing(_currentCancellation);
+                cancellation = new CancellationTokenSource();
+                _currentCancellation = cancellation;
+                generation = ++_generation;
+            }
+            return QueryAsync(generation, targets, cancellation);
+        }
+
+        public void Invalidate()
+        {
+            lock (_sync)
+            {
+                if (_disposed) return;
+                ++_generation;
+                CancellationTokenSource cancellation = _currentCancellation;
+                _currentCancellation = null;
+                CancelWithoutDisposing(cancellation);
+            }
+        }
+
+        public bool IsCurrent(InitialFirewallStateRefreshResult result)
+        {
+            if (result == null) return false;
+            lock (_sync)
+            {
+                return !_disposed && result.Generation == _generation;
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_sync)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                ++_generation;
+                CancellationTokenSource cancellation = _currentCancellation;
+                _currentCancellation = null;
+                CancelWithoutDisposing(cancellation);
+            }
+        }
+
+        private async Task<InitialFirewallStateRefreshResult> QueryAsync(
+            int generation,
+            IList<string> targets,
+            CancellationTokenSource cancellation)
+        {
+            var result = new InitialFirewallStateRefreshResult
+            {
+                Generation = generation,
+                TargetIpAddresses = targets
+            };
+            try
+            {
+                if (targets.Count == 0)
+                {
+                    result.Succeeded = true;
+                    return result;
+                }
+
+                Dictionary<string, FirewallQueryResult> states = await Task.Run(
+                    () => _gateway.QueryMany(targets),
+                    cancellation.Token).ConfigureAwait(false);
+                cancellation.Token.ThrowIfCancellationRequested();
+                result.States = states
+                    ?? new Dictionary<string, FirewallQueryResult>(
+                        StringComparer.OrdinalIgnoreCase);
+                result.Succeeded = true;
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                return result;
+            }
+            catch
+            {
+                // Initial state decoration must never prevent normal log loading or the
+                // explicit query workflow. Unknown rows keep their existing fallback text.
+                return result;
+            }
+            finally
+            {
+                lock (_sync)
+                {
+                    if (ReferenceEquals(_currentCancellation, cancellation))
+                        _currentCancellation = null;
+                }
+                cancellation.Dispose();
+            }
+        }
+
+        private static void CancelWithoutDisposing(
+            CancellationTokenSource cancellation)
+        {
+            if (cancellation == null) return;
+            try { cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed) throw new ObjectDisposedException(
+                "InitialFirewallStateRefreshCoordinator");
+        }
+    }
+
+    internal static class InitialFirewallStateRefreshPolicy
+    {
+        public static IList<string> GetUniqueValidAddresses(
+            IEnumerable<string> candidateIpAddresses)
+        {
+            var result = new List<string>();
+            if (candidateIpAddresses == null) return result;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string candidate in candidateIpAddresses)
+            {
+                string normalized = string.IsNullOrWhiteSpace(candidate)
+                    ? null
+                    : candidate.Trim();
+                if (!FirewallRuleManager.IsValidIpv4(normalized)
+                    || !seen.Add(normalized))
+                    continue;
+                result.Add(normalized);
+            }
+            return result;
+        }
+
+        public static IDictionary<string, FirewallQueryResult>
+            GetApplicableSuccessfulStates(
+                InitialFirewallStateRefreshResult queryResult,
+                IEnumerable<string> currentCandidateIpAddresses)
+        {
+            var applicable = new Dictionary<string, FirewallQueryResult>(
+                StringComparer.OrdinalIgnoreCase);
+            if (queryResult == null || !queryResult.Succeeded
+                || queryResult.States == null)
+                return applicable;
+
+            var requested = new HashSet<string>(
+                GetUniqueValidAddresses(queryResult.TargetIpAddresses),
+                StringComparer.OrdinalIgnoreCase);
+            var current = new HashSet<string>(
+                GetUniqueValidAddresses(currentCandidateIpAddresses),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, FirewallQueryResult> pair in queryResult.States)
+            {
+                FirewallQueryResult state = pair.Value;
+                if (!requested.Contains(pair.Key)
+                    || !current.Contains(pair.Key)
+                    || state == null
+                    || !state.Success)
+                    continue;
+                applicable[pair.Key] = state;
+            }
+            return applicable;
+        }
+    }
+
     public static class FirewallRuleManager
     {
+        internal enum ElevatedHelperWaitOutcome
+        {
+            Completed,
+            TimedOut
+        }
+
         private sealed class ManagedRuleInspection
         {
             public bool QuerySucceeded { get; set; }
@@ -103,7 +328,9 @@ namespace TarkovServerReporter
         internal const string RuleNamePrefix = "TarkovServerGuard_Block_";
         internal const string LegacyRuleNamePrefix = "EFT_ExcludeChinaHighPingServer_";
         private const string BatchRemovePrefix = "batch:";
+        private const string BatchAddPrefix = "batch-add:";
         private const int MaximumBatchAddressCount = 1024;
+        internal const int ElevatedHelperTimeoutMilliseconds = 120 * 1000;
 
         private const int NetFwActionBlock = 0;
         private const int NetFwRuleDirectionOutbound = 2;
@@ -131,6 +358,8 @@ namespace TarkovServerReporter
         public static int ExecuteHelperCommand(bool shouldBlock, string ipAddress)
         {
             IList<string> batchAddresses;
+            if (shouldBlock && TryParseBatchAddToken(ipAddress, out batchAddresses))
+                return ExecuteBatchAddHelper(batchAddresses);
             if (!shouldBlock && TryParseBatchRemoveToken(ipAddress, out batchAddresses))
                 return ExecuteBatchRemoveHelper(batchAddresses);
 
@@ -145,7 +374,10 @@ namespace TarkovServerReporter
                 else
                     RemoveManagedRules(policy, ipAddress);
 
-                FirewallQueryResult verified = QueryWithPolicy(policy, ipAddress);
+                FirewallQueryResult verified = QueryWithPolicy(
+                    policy,
+                    ipAddress,
+                    shouldBlock);
                 return verified.Success && verified.IsBlocked == shouldBlock ? 0 : 3;
             }
             catch
@@ -212,6 +444,12 @@ namespace TarkovServerReporter
             IEnumerable<string> ipAddresses)
         {
             return Task.Run(() => RemoveManyWithElevation(ipAddresses));
+        }
+
+        public static Task<FirewallBatchChangeResult> AddManyWithElevationAsync(
+            IEnumerable<string> ipAddresses)
+        {
+            return Task.Run(() => AddManyWithElevation(ipAddresses));
         }
 
         public static Dictionary<string, FirewallQueryResult> QueryMany(IEnumerable<string> ipAddresses)
@@ -313,6 +551,8 @@ namespace TarkovServerReporter
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
 
+                int exitCode = -1;
+                bool timedOut = false;
                 try
                 {
                     using (Process process = Process.Start(startInfo))
@@ -323,12 +563,10 @@ namespace TarkovServerReporter
                             return result;
                         }
 
-                        process.WaitForExit();
-                        if (process.ExitCode != 0)
-                        {
-                            result.ErrorMessage = "방화벽 작업이 완료되지 않았습니다. (코드 " + process.ExitCode + ")";
-                            return result;
-                        }
+                        ElevatedHelperWaitOutcome waitOutcome = WaitForElevatedHelperExit(
+                            process.WaitForExit);
+                        timedOut = waitOutcome == ElevatedHelperWaitOutcome.TimedOut;
+                        if (!timedOut) exitCode = process.ExitCode;
                     }
                 }
                 catch (Win32Exception ex)
@@ -350,6 +588,25 @@ namespace TarkovServerReporter
                     return result;
                 }
 
+                if (timedOut)
+                {
+                    FirewallQueryResult timeoutState = Query(ipAddress);
+                    result.IsBlocked = timeoutState.IsBlocked;
+                    string stateSummary = timeoutState.Success
+                        ? (timeoutState.IsBlocked
+                            ? "현재 조회에서는 차단 상태가 확인됩니다."
+                            : "현재 조회에서는 차단되지 않은 상태입니다.")
+                        : (timeoutState.ErrorMessage
+                            ?? "현재 방화벽 상태도 확인하지 못했습니다.");
+                    result.ErrorMessage = BuildElevatedHelperTimeoutMessage(stateSummary);
+                    return result;
+                }
+                if (exitCode != 0)
+                {
+                    result.ErrorMessage = "방화벽 작업이 완료되지 않았습니다. (코드 " + exitCode + ")";
+                    return result;
+                }
+
                 FirewallQueryResult verified = Query(ipAddress);
                 result.IsBlocked = verified.IsBlocked;
                 result.Success = verified.Success && verified.IsBlocked == shouldBlock;
@@ -358,6 +615,126 @@ namespace TarkovServerReporter
                     : (verified.ErrorMessage ?? "방화벽 상태를 최종 확인하지 못했습니다.");
                 return result;
             });
+        }
+
+        private static FirewallBatchChangeResult AddManyWithElevation(IEnumerable<string> ipAddresses)
+        {
+            var result = new FirewallBatchChangeResult();
+            IList<string> addresses = NormalizeBatchAddAddresses(ipAddresses);
+            if (addresses.Count == 0)
+            {
+                result.ErrorMessage = "차단할 공인 IPv4 서버를 선택해 주세요.";
+                return result;
+            }
+            if (addresses.Count > MaximumBatchAddressCount)
+            {
+                result.ErrorMessage = "한 번에 차단할 수 있는 서버 수를 초과했습니다.";
+                return result;
+            }
+
+            string executablePath = Assembly.GetExecutingAssembly().Location;
+            if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+            {
+                result.ErrorMessage = "실행 파일 경로를 확인할 수 없습니다.";
+                return result;
+            }
+
+            string token = BatchAddPrefix + string.Join(",", addresses);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                Arguments = "--firewall-add " + token,
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+
+            int exitCode = -1;
+            bool timedOut = false;
+            try
+            {
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                    {
+                        result.ErrorMessage = "관리자 권한 작업을 시작하지 못했습니다.";
+                        return result;
+                    }
+                    ElevatedHelperWaitOutcome waitOutcome = WaitForElevatedHelperExit(
+                        process.WaitForExit);
+                    timedOut = waitOutcome == ElevatedHelperWaitOutcome.TimedOut;
+                    if (!timedOut) exitCode = process.ExitCode;
+                }
+            }
+            catch (Win32Exception ex)
+            {
+                if (ex.NativeErrorCode == 1223)
+                {
+                    result.Cancelled = true;
+                    result.ErrorMessage = "관리자 권한 요청이 취소되었습니다.";
+                }
+                else
+                {
+                    result.ErrorMessage = "관리자 권한 작업 실패: " + ex.Message;
+                }
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.ErrorMessage = "방화벽 작업 실패: " + ex.Message;
+                return result;
+            }
+
+            Dictionary<string, FirewallQueryResult> states = QueryMany(addresses);
+            foreach (string ipAddress in addresses)
+            {
+                FirewallQueryResult state;
+                if (!states.TryGetValue(ipAddress, out state) || state == null || !state.Success)
+                {
+                    result.Items.Add(new FirewallBatchItemResult
+                    {
+                        IpAddress = ipAddress,
+                        ErrorMessage = state == null || string.IsNullOrWhiteSpace(state.ErrorMessage)
+                            ? "방화벽 상태를 최종 확인하지 못했습니다."
+                            : state.ErrorMessage
+                    });
+                }
+                else if (!state.IsBlocked)
+                {
+                    result.Items.Add(new FirewallBatchItemResult
+                    {
+                        IpAddress = ipAddress,
+                        ErrorMessage = "앱 관리 차단 규칙이 확인되지 않았습니다."
+                    });
+                }
+                else
+                {
+                    result.Items.Add(new FirewallBatchItemResult
+                    {
+                        IpAddress = ipAddress,
+                        Success = true
+                    });
+                }
+            }
+
+            result.Success = !timedOut && result.Items.All(item => item.Success);
+            if (timedOut)
+            {
+                int verifiedCount = result.Items.Count(item => item.Success);
+                result.ErrorMessage = BuildElevatedHelperTimeoutMessage(string.Format(
+                    "현재 상태 조회에서 {0}개 중 {1}개의 차단을 확인했습니다.",
+                    result.Items.Count,
+                    verifiedCount));
+                return result;
+            }
+            if (!result.Success)
+            {
+                int succeeded = result.Items.Count(item => item.Success);
+                result.ErrorMessage = exitCode == 0
+                    ? "일부 규칙의 최종 상태를 확인하지 못했습니다."
+                    : string.Format("{0}개 중 {1}개를 차단했습니다.", result.Items.Count, succeeded);
+            }
+            return result;
         }
 
         private static FirewallBatchChangeResult RemoveManyWithElevation(IEnumerable<string> ipAddresses)
@@ -392,7 +769,8 @@ namespace TarkovServerReporter
                 WindowStyle = ProcessWindowStyle.Hidden
             };
 
-            int exitCode;
+            int exitCode = -1;
+            bool timedOut = false;
             try
             {
                 using (Process process = Process.Start(startInfo))
@@ -402,8 +780,10 @@ namespace TarkovServerReporter
                         result.ErrorMessage = "관리자 권한 작업을 시작하지 못했습니다.";
                         return result;
                     }
-                    process.WaitForExit();
-                    exitCode = process.ExitCode;
+                    ElevatedHelperWaitOutcome waitOutcome = WaitForElevatedHelperExit(
+                        process.WaitForExit);
+                    timedOut = waitOutcome == ElevatedHelperWaitOutcome.TimedOut;
+                    if (!timedOut) exitCode = process.ExitCode;
                 }
             }
             catch (Win32Exception ex)
@@ -465,7 +845,16 @@ namespace TarkovServerReporter
                 }
             }
 
-            result.Success = result.Items.All(item => item.Success);
+            result.Success = !timedOut && result.Items.All(item => item.Success);
+            if (timedOut)
+            {
+                int verifiedCount = result.Items.Count(item => item.Success);
+                result.ErrorMessage = BuildElevatedHelperTimeoutMessage(string.Format(
+                    "현재 상태 조회에서 {0}개 중 {1}개의 해제를 확인했습니다.",
+                    result.Items.Count,
+                    verifiedCount));
+                return result;
+            }
             if (!result.Success)
             {
                 int succeeded = result.Items.Count(item => item.Success);
@@ -474,6 +863,65 @@ namespace TarkovServerReporter
                     : string.Format("{0}개 중 {1}개를 해제했습니다.", result.Items.Count, succeeded);
             }
             return result;
+        }
+
+        internal static ElevatedHelperWaitOutcome WaitForElevatedHelperExit(
+            Func<int, bool> waitForExit)
+        {
+            if (waitForExit == null) throw new ArgumentNullException("waitForExit");
+            // A timeout is observational only. The caller releases its Process handle
+            // but deliberately never kills a helper that may still be inside a privileged
+            // Windows Firewall operation, then performs a separate read-only state query.
+            return waitForExit(ElevatedHelperTimeoutMilliseconds)
+                ? ElevatedHelperWaitOutcome.Completed
+                : ElevatedHelperWaitOutcome.TimedOut;
+        }
+
+        internal static string BuildElevatedHelperTimeoutMessage(string stateSummary)
+        {
+            string message = string.Format(
+                "관리자 권한 방화벽 작업이 {0}초 안에 끝나지 않았습니다. "
+                    + "프로세스는 강제 종료하지 않았으며 아직 진행 중일 수 있습니다.",
+                ElevatedHelperTimeoutMilliseconds / 1000);
+            return string.IsNullOrWhiteSpace(stateSummary)
+                ? message
+                : message + " " + stateSummary;
+        }
+
+        private static int ExecuteBatchAddHelper(IList<string> ipAddresses)
+        {
+            if (ipAddresses == null || ipAddresses.Count == 0) return 2;
+
+            bool allSucceeded = true;
+            dynamic policy = null;
+            try
+            {
+                policy = OpenPolicy();
+                foreach (string ipAddress in ipAddresses)
+                {
+                    try
+                    {
+                        AddOrReplaceManagedRule(policy, ipAddress);
+                        FirewallQueryResult verified = QueryWithPolicy(policy, ipAddress);
+                        if (!verified.Success || !verified.IsBlocked) allSucceeded = false;
+                    }
+                    catch
+                    {
+                        // Keep processing independently validated addresses so one collision or
+                        // transient COM error does not discard the rest of the requested restore.
+                        allSucceeded = false;
+                    }
+                }
+                return allSucceeded ? 0 : 4;
+            }
+            catch
+            {
+                return 1;
+            }
+            finally
+            {
+                ReleaseComObject(policy);
+            }
         }
 
         private static int ExecuteBatchRemoveHelper(IList<string> ipAddresses)
@@ -490,7 +938,7 @@ namespace TarkovServerReporter
                     try
                     {
                         RemoveManagedRules(policy, ipAddress);
-                        FirewallQueryResult verified = QueryWithPolicy(policy, ipAddress);
+                        FirewallQueryResult verified = QueryWithPolicy(policy, ipAddress, false);
                         if (!verified.Success || verified.IsBlocked) allSucceeded = false;
                     }
                     catch
@@ -535,6 +983,29 @@ namespace TarkovServerReporter
             return true;
         }
 
+        private static bool TryParseBatchAddToken(string value, out IList<string> addresses)
+        {
+            addresses = null;
+            if (string.IsNullOrWhiteSpace(value)
+                || !value.StartsWith(BatchAddPrefix, StringComparison.Ordinal))
+                return false;
+
+            string payload = value.Substring(BatchAddPrefix.Length);
+            if (payload.Length == 0 || payload.Length > 20000) return false;
+
+            string[] items = payload.Split(',');
+            if (items.Length == 0 || items.Length > MaximumBatchAddressCount) return false;
+            var parsed = new List<string>(items.Length);
+            foreach (string item in items)
+            {
+                if (!IsPublicIpv4(item) || parsed.Contains(item, StringComparer.OrdinalIgnoreCase))
+                    return false;
+                parsed.Add(item);
+            }
+            addresses = parsed;
+            return true;
+        }
+
         private static IList<string> NormalizeBatchAddresses(IEnumerable<string> ipAddresses)
         {
             var addresses = new List<string>();
@@ -542,6 +1013,19 @@ namespace TarkovServerReporter
             foreach (string value in ipAddresses)
             {
                 if (!IsValidIpv4(value) || addresses.Contains(value, StringComparer.OrdinalIgnoreCase))
+                    continue;
+                addresses.Add(value);
+            }
+            return addresses;
+        }
+
+        private static IList<string> NormalizeBatchAddAddresses(IEnumerable<string> ipAddresses)
+        {
+            var addresses = new List<string>();
+            if (ipAddresses == null) return addresses;
+            foreach (string value in ipAddresses)
+            {
+                if (!IsPublicIpv4(value) || addresses.Contains(value, StringComparer.OrdinalIgnoreCase))
                     continue;
                 addresses.Add(value);
             }
@@ -652,6 +1136,37 @@ namespace TarkovServerReporter
                 && bytes[0] < 224;
         }
 
+        internal static bool IsPublicIpv4(string value)
+        {
+            if (!IsValidIpv4(value)) return false;
+            byte[] bytes = IPAddress.Parse(value).GetAddressBytes();
+            int first = bytes[0];
+            int second = bytes[1];
+            int third = bytes[2];
+            int fourth = bytes[3];
+
+            if (first == 10
+                || (first == 100 && second >= 64 && second <= 127)
+                || (first == 169 && second == 254)
+                || (first == 172 && second >= 16 && second <= 31)
+                || (first == 192 && second == 168)
+                || (first == 198 && (second == 18 || second == 19)))
+                return false;
+
+            // IANA special-purpose, documentation, benchmarking, and deprecated relay ranges
+            // are not globally routable server destinations. 192.0.0.9 and .10 are the two
+            // globally reachable anycast exceptions inside 192.0.0.0/24.
+            if (first == 192 && second == 0 && third == 0
+                && !(fourth == 9 || fourth == 10))
+                return false;
+            if ((first == 192 && second == 0 && third == 2)
+                || (first == 192 && second == 88 && third == 99)
+                || (first == 198 && second == 51 && third == 100)
+                || (first == 203 && second == 0 && third == 113))
+                return false;
+            return true;
+        }
+
         private static dynamic OpenPolicy()
         {
             Type policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
@@ -662,6 +1177,14 @@ namespace TarkovServerReporter
 
         private static FirewallQueryResult QueryWithPolicy(dynamic policy, string ipAddress)
         {
+            return QueryWithPolicy(policy, ipAddress, true);
+        }
+
+        private static FirewallQueryResult QueryWithPolicy(
+            dynamic policy,
+            string ipAddress,
+            bool requireEnabled)
+        {
             var result = new FirewallQueryResult { Success = true };
             try
             {
@@ -669,7 +1192,11 @@ namespace TarkovServerReporter
                 {
                     string name = existingRule.Name as string;
                     if (!IsManagedRuleName(name, ipAddress)) continue;
-                    if (IsOwnedBlockingRule(existingRule, name, ipAddress, true))
+                    if (IsOwnedBlockingRule(
+                        existingRule,
+                        name,
+                        ipAddress,
+                        requireEnabled))
                     {
                         result.IsBlocked = true;
                         break;

@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Spirit-Schema")]
 [assembly: AssemblyProduct("Tarkov Server Guard")]
 [assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema. All rights reserved.")]
-[assembly: AssemblyVersion("0.7.4.0")]
-[assembly: AssemblyFileVersion("0.7.4.0")]
+[assembly: AssemblyVersion("0.8.0.0")]
+[assembly: AssemblyFileVersion("0.8.0.0")]
 
 namespace TarkovServerReporter
 {
@@ -39,6 +39,20 @@ namespace TarkovServerReporter
             string previewPath = GetArgumentValue(args, "--preview");
             bool demoMode = HasArgument(args, "--demo") || !string.IsNullOrWhiteSpace(previewPath);
             var form = new MainForm(demoMode);
+            form.Shown += delegate
+            {
+                if (demoMode || !UpdateCompletionNotice.HasPendingNotice())
+                    return;
+                form.BeginInvoke(new Action(delegate
+                {
+                    ReleaseNotesEntry entry;
+                    if (UpdateCompletionNotice.TryClaimCurrentCompletedUpdate(
+                        demoMode,
+                        GitHubUpdateService.IsInstalledApplication(),
+                        out entry))
+                        PatchNotesForm.ShowCompleted(form, entry);
+                }));
+            };
 
             if (!string.IsNullOrWhiteSpace(previewPath))
             {

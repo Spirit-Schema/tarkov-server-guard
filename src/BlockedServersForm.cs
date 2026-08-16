@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -12,6 +13,17 @@ using System.Windows.Forms;
 
 namespace TarkovServerReporter
 {
+    internal static class FirewallPersistenceNotice
+    {
+        internal const string ProcessExitLine =
+            "창을 닫으면 TSG는 완전히 종료됩니다. 백그라운드에 상주하지 않아 "
+            + "TSG 프로세스가 CPU·메모리·네트워크를 추가로 사용하지 않습니다.";
+        internal const string RulesPersistLine =
+            "차단 리스트는 Windows 방화벽에 저장되므로 해당 앱 종료·PC 재부팅 후에도 유지되며, "
+            + "앱에서 해제할 때까지 계속 적용됩니다.";
+        internal const string FullText = ProcessExitLine + "\r\n" + RulesPersistLine;
+    }
+
     public sealed class BlockedServersForm : BrandedForm
     {
         private static readonly Color Background = Color.FromArgb(22, 27, 33);
@@ -31,6 +43,8 @@ namespace TarkovServerReporter
         private readonly Button _refreshButton;
         private readonly Button _removeSelectedButton;
         private readonly Button _removeAllButton;
+        private readonly Button _exportButton;
+        private readonly Button _importButton;
         private readonly Button _closeButton;
         private bool _busy;
 
@@ -381,7 +395,7 @@ namespace TarkovServerReporter
                 ColumnCount = 1,
                 RowCount = 4
             };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
@@ -404,6 +418,19 @@ namespace TarkovServerReporter
                 ForeColor = TextMuted
             };
             header.Controls.Add(_summaryLabel);
+            header.Controls.Add(new Label
+            {
+                Name = "firewallPersistenceNotice",
+                Dock = DockStyle.Bottom,
+                Height = 38,
+                Text = FirewallPersistenceNotice.FullText,
+                Font = new Font("Malgun Gothic", 8F),
+                ForeColor = TextMuted,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = false,
+                AccessibleName = "앱 종료와 차단 리스트 유지 안내",
+                AccessibleDescription = FirewallPersistenceNotice.FullText
+            });
             root.Controls.Add(header, 0, 0);
 
             _grid = BuildGrid();
@@ -430,16 +457,22 @@ namespace TarkovServerReporter
             _removeAllButton = CreateButton("전체 해제", true);
             _removeSelectedButton = CreateButton("선택 해제", false);
             _refreshButton = CreateButton("새로고침", false);
+            _exportButton = CreateButton("내보내기", false);
+            _importButton = CreateButton("불러오기", false);
             actions.Controls.Add(_closeButton);
             actions.Controls.Add(_removeAllButton);
             actions.Controls.Add(_removeSelectedButton);
             actions.Controls.Add(_refreshButton);
+            actions.Controls.Add(_exportButton);
+            actions.Controls.Add(_importButton);
             root.Controls.Add(actions, 0, 3);
 
             _closeButton.Click += delegate { Close(); };
             _refreshButton.Click += async delegate { await RefreshRulesAsync(); };
             _removeSelectedButton.Click += async delegate { await RemoveSelectedAsync(); };
             _removeAllButton.Click += async delegate { await RemoveAllAsync(); };
+            _exportButton.Click += async delegate { await ExportBackupAsync(); };
+            _importButton.Click += async delegate { await ImportBackupAsync(); };
             _grid.CellContentClick += GridCellContentClick;
             _grid.CellMouseClick += GridCellMouseClick;
             _grid.CellPainting += GridCellPainting;
@@ -452,6 +485,13 @@ namespace TarkovServerReporter
                     _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
             _grid.CellValueChanged += delegate { UpdateButtons(); };
+            FormClosing += delegate(object sender, FormClosingEventArgs e)
+            {
+                if (!_busy || e.CloseReason != CloseReason.UserClosing) return;
+                e.Cancel = true;
+                _statusLabel.ForeColor = Color.FromArgb(231, 184, 73);
+                _statusLabel.Text = "방화벽·파일 작업과 최종 확인이 끝난 뒤 창을 닫을 수 있습니다.";
+            };
             Shown += async delegate { await RefreshRulesAsync(); };
         }
 
@@ -866,6 +906,279 @@ namespace TarkovServerReporter
             _grid.InvalidateCell(cell);
         }
 
+        private async Task ExportBackupAsync()
+        {
+            if (_busy) return;
+            string selectedPath;
+            using (var dialog = new SaveFileDialog
+            {
+                Title = "차단 목록 내보내기",
+                Filter = "Tarkov Server Guard 차단 목록 (*.json)|*.json|모든 파일 (*.*)|*.*",
+                DefaultExt = "json",
+                AddExtension = true,
+                OverwritePrompt = true,
+                FileName = "TarkovServerGuard-blocked-servers-"
+                    + DateTime.Now.ToString("yyyyMMdd") + ".json"
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                selectedPath = dialog.FileName;
+            }
+
+            SetBusy(true, "Windows 방화벽의 실제 관리 규칙을 확인하는 중…");
+            ManagedBlockedServerQueryResult query = await Task.Run(
+                () => FirewallRuleManager.QueryManagedBlockedServers());
+            if (IsDisposed) return;
+            if (!query.Success)
+            {
+                SetBusy(false, query.ErrorMessage ?? "현재 차단 규칙을 확인하지 못했습니다.");
+                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            IDictionary<string, BlockedServerMetadata> metadata = await Task.Run(
+                () => BlockedServerMetadataStore.LoadAll());
+            BlockedServerBackupExportResult export = await Task.Run(
+                () => BlockedServerBackupService.CreateExport(query.Servers, metadata));
+            if (IsDisposed) return;
+            if (!export.Success)
+            {
+                SetBusy(false, export.ErrorMessage ?? "차단 목록 백업을 만들지 못했습니다.");
+                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (export.Entries.Count == 0)
+            {
+                SetBusy(false, "현재 백업할 복원 가능한 앱 관리 차단 규칙이 없어 파일을 저장하지 않았습니다.");
+                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                byte[] bytes = export.Utf8Bytes;
+                await Task.Run(() => BlockedServerBackupFile.WriteAtomic(selectedPath, bytes));
+            }
+            catch (Exception ex)
+            {
+                SetBusy(false, "백업 파일 저장 실패: " + ex.Message);
+                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (IsDisposed) return;
+
+            string status = string.Format("차단 서버 {0}개를 백업 파일로 저장했습니다.", export.Entries.Count);
+            if (export.ExcludedAddresses.Count > 0)
+                status += string.Format(" 공인 IPv4가 아닌 관리 규칙 {0}개는 제외했습니다.",
+                    export.ExcludedAddresses.Count);
+            SetBusy(false, status);
+            _statusLabel.ForeColor = export.ExcludedAddresses.Count == 0 ? Success : Color.FromArgb(231, 184, 73);
+        }
+
+        private async Task ImportBackupAsync()
+        {
+            if (_busy) return;
+            string selectedPath;
+            using (var dialog = new OpenFileDialog
+            {
+                Title = "차단 목록 불러오기",
+                Filter = "Tarkov Server Guard 차단 목록 (*.json)|*.json|모든 파일 (*.*)|*.*",
+                DefaultExt = "json",
+                CheckFileExists = true,
+                Multiselect = false
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                selectedPath = dialog.FileName;
+            }
+
+            SetBusy(true, "백업 파일의 형식·크기·주소를 검증하는 중…");
+            BlockedServerBackupParseResult parsed;
+            try
+            {
+                parsed = await Task.Run(() =>
+                    BlockedServerBackupService.Parse(ReadBackupFileBytes(selectedPath)));
+            }
+            catch (Exception ex)
+            {
+                SetBusy(false, "백업 파일을 읽지 못했습니다: " + ex.Message);
+                MessageBox.Show(this, _statusLabel.Text, "차단 목록 불러오기",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (IsDisposed) return;
+            if (!parsed.Success)
+            {
+                SetBusy(false, parsed.ErrorMessage ?? "지원하지 않는 차단 목록 백업입니다.");
+                MessageBox.Show(this, _statusLabel.Text, "차단 목록 불러오기",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string[] eligibleAddresses = parsed.Items
+                .Where(item => item.IsEligible)
+                .Select(item => item.Entry.IpAddress)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            Dictionary<string, FirewallQueryResult> states = eligibleAddresses.Length == 0
+                ? new Dictionary<string, FirewallQueryResult>(StringComparer.OrdinalIgnoreCase)
+                : await Task.Run(() => FirewallRuleManager.QueryMany(eligibleAddresses));
+            if (IsDisposed) return;
+
+            IList<BlockedServerRestoreItem> preview = BlockedServerBackupService.CreateRestorePreview(
+                parsed,
+                states);
+            int newCount = preview.Count(item => item.Status == BlockedServerRestoreStatus.NewBlock);
+            int existingCount = preview.Count(
+                item => item.Status == BlockedServerRestoreStatus.AlreadyBlocked);
+            int excludedCount = preview.Count(item => item.Status == BlockedServerRestoreStatus.Excluded);
+            SetBusy(false, string.Format(
+                "새로 차단 {0}개 · 이미 차단됨 {1}개 · 적용 제외 {2}개를 확인했습니다.",
+                newCount,
+                existingCount,
+                excludedCount));
+
+            IList<BlockedServerRestoreItem> selected;
+            using (var form = new BlockedServerRestorePreviewForm(preview))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK) return;
+                selected = form.SelectedItems.ToList();
+            }
+            if (selected.Count == 0) return;
+            await ApplyRestoreAsync(selected);
+        }
+
+        private async Task ApplyRestoreAsync(IList<BlockedServerRestoreItem> selected)
+        {
+            IList<BlockedServerRestoreItem> newItems = selected
+                .Where(item => item.Status == BlockedServerRestoreStatus.NewBlock)
+                .ToList();
+            SetBusy(true, newItems.Count == 0
+                ? "이미 차단된 서버의 백업 정보를 최종 확인하는 중…"
+                : string.Format("선택한 {0}개 서버를 한 번의 관리자 권한 요청으로 차단하는 중…",
+                    newItems.Count));
+
+            var batch = new FirewallBatchChangeResult { Success = true };
+            if (newItems.Count > 0)
+            {
+                batch = await FirewallRuleManager.AddManyWithElevationAsync(
+                    newItems.Select(item => item.Entry.IpAddress));
+                if (IsDisposed) return;
+                if (batch.Cancelled)
+                {
+                    SetBusy(false, batch.ErrorMessage ?? "관리자 권한 요청이 취소되었습니다.");
+                    return;
+                }
+            }
+
+            string[] selectedAddresses = selected
+                .Select(item => item.Entry.IpAddress)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            Dictionary<string, FirewallQueryResult> finalStates = await Task.Run(
+                () => FirewallRuleManager.QueryMany(selectedAddresses));
+            if (IsDisposed) return;
+
+            var verified = new List<BlockedServerRestoreItem>();
+            var failures = new List<KeyValuePair<string, string>>();
+            var batchErrors = batch.Items
+                .Where(item => item != null && !item.Success)
+                .GroupBy(item => item.IpAddress, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.First().ErrorMessage,
+                    StringComparer.OrdinalIgnoreCase);
+            foreach (BlockedServerRestoreItem item in selected)
+            {
+                FirewallQueryResult state;
+                if (finalStates.TryGetValue(item.Entry.IpAddress, out state)
+                    && state != null
+                    && state.Success
+                    && state.IsBlocked)
+                {
+                    verified.Add(item);
+                    continue;
+                }
+
+                string error;
+                if (!batchErrors.TryGetValue(item.Entry.IpAddress, out error))
+                    error = state == null || string.IsNullOrWhiteSpace(state.ErrorMessage)
+                        ? "최종 앱 관리 차단 규칙이 확인되지 않았습니다."
+                        : state.ErrorMessage;
+                failures.Add(new KeyValuePair<string, string>(item.Entry.IpAddress, error));
+            }
+
+            bool metadataSaved = await Task.Run(() =>
+                BlockedServerMetadataStore.MergeMissingFromBackup(
+                    verified.Where(item => item.Entry.HasMetadata).Select(item => item.Entry)));
+            int newSucceeded = verified.Count(
+                item => item.Status == BlockedServerRestoreStatus.NewBlock);
+            if (newSucceeded > 0)
+            {
+                FirewallStateChanged = true;
+                EventHandler handler = FirewallRulesChanged;
+                if (handler != null) handler(this, EventArgs.Empty);
+            }
+
+            await RefreshRulesAfterChangeAsync();
+            if (IsDisposed) return;
+            _statusLabel.ForeColor = failures.Count == 0 && metadataSaved
+                ? Success
+                : Color.FromArgb(231, 184, 73);
+            _statusLabel.Text = string.Format(
+                "새 차단 {0}개 · 최종 확인 {1}개 · 실패 {2}개",
+                newSucceeded,
+                verified.Count,
+                failures.Count);
+            if (!metadataSaved) _statusLabel.Text += " · 백업 정보 저장 실패";
+
+            if (failures.Count > 0)
+            {
+                using (var form = new BlockedServerRestoreFailuresForm(failures))
+                    form.ShowDialog(this);
+            }
+            else if (!metadataSaved)
+            {
+                MessageBox.Show(
+                    this,
+                    "방화벽 차단은 최종 확인했지만 비어 있던 지역·메모·차단시각 일부를 저장하지 못했습니다.",
+                    "차단 목록 복원 결과",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
+        private static byte[] ReadBackupFileBytes(string path)
+        {
+            using (var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read))
+            {
+                if (stream.Length < 2)
+                    throw new InvalidDataException("비어 있거나 올바르지 않은 백업 파일입니다.");
+                if (stream.Length > BlockedServerBackupService.MaximumFileBytes)
+                    throw new InvalidDataException("백업 파일 크기 한도를 초과했습니다.");
+
+                var bytes = new byte[(int)stream.Length];
+                int offset = 0;
+                while (offset < bytes.Length)
+                {
+                    int read = stream.Read(bytes, offset, bytes.Length - offset);
+                    if (read <= 0) throw new EndOfStreamException("백업 파일을 끝까지 읽지 못했습니다.");
+                    offset += read;
+                }
+                if (stream.ReadByte() >= 0)
+                    throw new InvalidDataException("읽는 동안 백업 파일 크기가 변경되었습니다.");
+                return bytes;
+            }
+        }
+
         private async Task RemoveSelectedAsync()
         {
             IList<string> addresses = GetSelectedAddresses();
@@ -1013,6 +1326,8 @@ namespace TarkovServerReporter
             _removeAllButton.FlatAppearance.BorderColor = canRemoveAll
                 ? Color.FromArgb(42, 137, 87)
                 : Border;
+            _exportButton.Enabled = !_busy && count > 0;
+            _importButton.Enabled = !_busy;
             _closeButton.Enabled = !_busy;
         }
     }

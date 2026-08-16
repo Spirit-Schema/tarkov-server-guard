@@ -232,7 +232,7 @@ namespace TarkovServerReporter
                     visibleCount);
             }
             return string.Format(
-                "성공 확인된 신고 {0}건 · 일반 레이드 메모와 별도로 로컬에 저장됩니다.",
+                "성공 확인된 신고 {0}건 · 일반 레이드 메모와 함께 메모보관함에 저장됩니다.",
                 reportCount);
         }
 
