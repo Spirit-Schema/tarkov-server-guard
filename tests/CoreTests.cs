@@ -5,8 +5,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace TarkovServerReporter.Tests
 {
@@ -26,6 +28,7 @@ namespace TarkovServerReporter.Tests
                 TestRootLogScanning(tempRoot);
                 TestRichEftRaidScanning(tempRoot);
                 TestEftRaidTypesAndUserReports(tempRoot);
+                TestPvpSeasonNumberClassification(tempRoot);
                 TestNetworkEventBoundariesAndDuplicateMerge(tempRoot);
                 TestArenaRaidScanning(tempRoot);
                 TestRaidOperationDuration(tempRoot);
@@ -43,6 +46,7 @@ namespace TarkovServerReporter.Tests
                 TestGeoFormatting();
                 TestDataCenterRegionClassification();
                 TestFirewallCommandValidation();
+                TestInitialFirewallStateRefresh();
             }
             finally
             {
@@ -326,9 +330,10 @@ namespace TarkovServerReporter.Tests
                 "the current Regular + Online sample is classified as PvP server progression");
             Assert(season.ProgressionMode == TarkovProgressionMode.PvpSeason
                 && season.HostingMode == TarkovHostingMode.Server
-                && season.ProgressionModeText == "PvP시즌"
-                && season.RaidTypeText == "PvP시즌",
-                "PvpSeason is classified independently from regular PvP");
+                && season.PvpSeasonNumber == 1
+                && season.ProgressionModeText == "PvP시즌1"
+                && season.RaidTypeText == "PvP시즌1",
+                "PvpSeason is numbered and classified independently from regular PvP");
             Assert(pveServer.ProgressionMode == TarkovProgressionMode.Pve
                 && pveServer.HostingMode == TarkovHostingMode.Server
                 && pveServer.ProgressionModeText == "PvE(서버)"
@@ -361,6 +366,124 @@ namespace TarkovServerReporter.Tests
                 "a successful report after a confirmed local raid is attached to that raid");
             Assert(zeroPveServer.UserReportCount == 0,
                 "wrong routes and response-only records do not create user-report counts");
+        }
+
+        private static void TestPvpSeasonNumberClassification(string tempRoot)
+        {
+            string logs = Path.Combine(tempRoot, "PvpSeasonNumberLogs");
+            string folder = Path.Combine(logs, "log_2026.08.15_15-00-00");
+            Directory.CreateDirectory(folder);
+
+            File.WriteAllText(
+                Path.Combine(folder, "application.log"),
+                string.Join("\r\n", new[]
+                {
+                    // Exact numeric log tokens are authoritative even when the client
+                    // version has no season mapping.
+                    "2026.08.15 15:00:00.000|9.9.9.9.99999|Info|application|Session mode: PvpSeason1",
+                    "2026.08.15 15:00:05.000|9.9.9.9.99999|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.151, Port: 17151, Location: Woods, Sid: SG-SIN01G001_season-one, GameMode: deathmatch, shortId: SEASON001'",
+                    // A conflicting older client-version mapping must not replace the
+                    // explicit PvpSeason2 token with season 1.
+                    "2026.08.15 16:00:00.000|1.1.0.1.46777|Info|application|Session mode: PvpSeason2",
+                    "2026.08.15 16:00:05.000|1.1.0.1.46777|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.152, Port: 17152, Location: Shoreline, Sid: JP-TK02G005_season-two, GameMode: deathmatch, shortId: SEASON002'",
+                    // Unknown future versions are never guessed to be the latest known season.
+                    "2026.08.15 17:00:00.000|9.9.9.9.99999|Info|application|Session mode: PvpSeason",
+                    "2026.08.15 17:00:05.000|9.9.9.9.99999|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.153, Port: 17153, Location: Customs, Sid: KR-SEL01G001_season-unknown, GameMode: deathmatch, shortId: SEASON999'",
+                    "2026.08.15 18:00:00.000|1.1.0.1.46777|Info|application|Session mode: Regular",
+                    "2026.08.15 18:00:05.000|1.1.0.1.46777|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.154, Port: 17154, Location: Factory, Sid: KR-SEL01G001_regular, GameMode: deathmatch, shortId: REGULAR001'",
+                    "2026.08.15 19:00:00.000|1.1.0.1.46777|Info|application|Session mode: Pve",
+                    "2026.08.15 19:00:05.000|1.1.0.1.46777|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.155, Port: 17155, Location: Interchange, Sid: KR-SEL01G001_pve, GameMode: deathmatch, shortId: PVE001'",
+                    string.Empty
+                }),
+                Encoding.UTF8);
+
+            RaidLogScanResult firstScan = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = logs },
+                100);
+            ServerSession seasonOne = firstScan.Sessions.Single(
+                item => item.ShortId == "SEASON001");
+            ServerSession seasonTwo = firstScan.Sessions.Single(
+                item => item.ShortId == "SEASON002");
+            ServerSession unknownFuture = firstScan.Sessions.Single(
+                item => item.ShortId == "SEASON999");
+            ServerSession regular = firstScan.Sessions.Single(
+                item => item.ShortId == "REGULAR001");
+            ServerSession pve = firstScan.Sessions.Single(
+                item => item.ShortId == "PVE001");
+
+            Assert(seasonOne.ProgressionMode == TarkovProgressionMode.PvpSeason
+                && seasonOne.PvpSeasonNumber == 1
+                && seasonOne.PvpSeasonEvidence == PvpSeasonEvidence.ExplicitLogValue
+                && seasonOne.PvpSeasonKey == "kord-breach"
+                && seasonOne.PvpSeasonName == "KORD BREACH"
+                && seasonOne.ProgressionModeText == "PvP시즌1"
+                && seasonOne.RaidTypeText == "PvP시즌1",
+                "the exact PvpSeason1 token renders as PvP시즌1 independently of client version");
+            Assert(seasonTwo.ProgressionMode == TarkovProgressionMode.PvpSeason
+                && seasonTwo.PvpSeasonNumber == 2
+                && seasonTwo.PvpSeasonEvidence == PvpSeasonEvidence.ExplicitLogValue
+                && string.IsNullOrEmpty(seasonTwo.PvpSeasonKey)
+                && string.IsNullOrEmpty(seasonTwo.PvpSeasonName)
+                && seasonTwo.ProgressionModeText == "PvP시즌2"
+                && seasonTwo.RaidTypeText == "PvP시즌2",
+                "the exact PvpSeason2 token wins over a conflicting season-1 client version");
+            Assert(unknownFuture.ProgressionMode == TarkovProgressionMode.PvpSeason
+                && !unknownFuture.PvpSeasonNumber.HasValue
+                && unknownFuture.PvpSeasonEvidence == PvpSeasonEvidence.None
+                && unknownFuture.ProgressionModeText == "PvP시즌",
+                "an unknown future version safely falls back to the unnumbered PvP season label");
+            Assert(regular.ProgressionMode == TarkovProgressionMode.Pvp
+                && !regular.PvpSeasonNumber.HasValue
+                && regular.ProgressionModeText == "PvP"
+                && pve.ProgressionMode == TarkovProgressionMode.Pve
+                && !pve.PvpSeasonNumber.HasValue
+                && pve.ProgressionModeText == "PvE(서버)",
+                "season-number evidence does not leak into regular PvP or PvE raids");
+
+            ServerSession cachedSeasonOne = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = logs },
+                100).Sessions.Single(item => item.ShortId == "SEASON001");
+            Assert(cachedSeasonOne.PvpSeasonNumber == 1
+                && cachedSeasonOne.PvpSeasonKey == "kord-breach"
+                && cachedSeasonOne.PvpSeasonName == "KORD BREACH"
+                && cachedSeasonOne.ProgressionModeText == "PvP시즌1",
+                "the cache clone preserves the historical season identity and display value");
+
+            MethodInfo mergeMethod = typeof(RaidLogScanner).GetMethod(
+                "MergeDuplicateSessions",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var duplicateCandidates = new[]
+            {
+                new ServerSession
+                {
+                    Game = TarkovGame.Eft,
+                    SessionKey = "EFT|sid|season-evidence",
+                    SessionStarted = new DateTime(2026, 8, 15, 20, 0, 0),
+                    LastUpdated = new DateTime(2026, 8, 15, 20, 1, 0),
+                    ProgressionMode = TarkovProgressionMode.PvpSeason,
+                    PvpSeasonNumber = 1,
+                    PvpSeasonKey = "kord-breach",
+                    PvpSeasonName = "KORD BREACH",
+                    PvpSeasonEvidence = PvpSeasonEvidence.VerifiedVersionMapping
+                },
+                new ServerSession
+                {
+                    Game = TarkovGame.Eft,
+                    SessionKey = "EFT|sid|season-evidence",
+                    SessionStarted = new DateTime(2026, 8, 15, 20, 0, 0),
+                    LastUpdated = new DateTime(2026, 8, 15, 20, 2, 0),
+                    ProgressionMode = TarkovProgressionMode.PvpSeason,
+                    PvpSeasonNumber = 2,
+                    PvpSeasonEvidence = PvpSeasonEvidence.ExplicitLogValue
+                }
+            };
+            ServerSession merged = ((IEnumerable<ServerSession>)mergeMethod.Invoke(
+                null,
+                new object[] { duplicateCandidates })).Single();
+            Assert(merged.PvpSeasonNumber == 2
+                && merged.PvpSeasonEvidence == PvpSeasonEvidence.ExplicitLogValue
+                && merged.ProgressionModeText == "PvP시즌2",
+                "duplicate merging preserves the strongest season evidence atomically");
         }
 
         private static void TestNetworkEventBoundariesAndDuplicateMerge(string tempRoot)
@@ -421,7 +544,8 @@ namespace TarkovServerReporter.Tests
 
             File.WriteAllText(
                 Path.Combine(folder, "2026.08.14 application.log"),
-                "2026.08.14 12:00:05|1.1.0.1.46699|Info|MatchingCompleted:22.25\r\n",
+                "2026.08.14 12:00:00|1.1.0.1.46699|Info|Session mode: PvpSeason1\r\n"
+                + "2026.08.14 12:00:05|1.1.0.1.46699|Info|MatchingCompleted:22.25\r\n",
                 Encoding.UTF8);
             File.WriteAllText(
                 Path.Combine(folder, "2026.08.14 lifecycle.log"),
@@ -455,8 +579,9 @@ namespace TarkovServerReporter.Tests
                 "Arena scanner parses map, mode, and server identifiers");
             Assert(session != null
                 && session.ProgressionMode == TarkovProgressionMode.Unknown
+                && !session.PvpSeasonNumber.HasValue
                 && session.RaidTypeText == "미확인",
-                "EFT progression labels do not alter Arena sessions");
+                "EFT season labels and numbers do not alter Arena sessions");
             Assert(session != null
                 && session.DataCenterCode == "JP-TK02"
                 && session.ClientVersion == "1.1.0.1.46699"
@@ -480,10 +605,10 @@ namespace TarkovServerReporter.Tests
             File.WriteAllText(
                 Path.Combine(eftFolder, "application.log"),
                 "2026.08.14 08:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.61, Port: 17001, Location: Shoreline, Sid: SG-SIN01G001_operation-one, GameMode: deathmatch, shortId: OP001'\r\n"
-                + "2026.08.14 08:01:00|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n"
+                + "2026.08.14 08:01:00|1.1.0.1.46699|Info|GameStarted:54.5 real:75.25 diff:20.75\r\n"
                 + "2026.08.14 08:20:10|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n"
                 + "2026.08.14 09:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.62, Port: 17002, Location: Woods, Sid: JP-TK02G005_operation-reconnect, GameMode: deathmatch, shortId: OP002'\r\n"
-                + "2026.08.14 09:01:00|1.1.0.1.46699|Info|GameStarted:60 real:60 diff:0\r\n"
+                + "2026.08.14 09:01:00|1.1.0.1.46699|Info|GameStarted:72.5\r\n"
                 + "2026.08.14 09:21:10|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n"
                 + "2026.08.14 10:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.63, Port: 17003, Location: Factory, Sid: KR-SEL01G001_operation-no-start, GameMode: deathmatch, shortId: OP003'\r\n"
                 + "2026.08.14 10:10:00|1.1.0.1.46699|Info|PrepareSelectedProfileLocally ProfileId:redacted\r\n",
@@ -512,15 +637,15 @@ namespace TarkovServerReporter.Tests
             Assert(completed.OperationState == RaidOperationState.Completed
                 && completed.OperationStartedAt == new DateTime(2026, 8, 14, 8, 1, 0)
                 && completed.OperationEndedAt == new DateTime(2026, 8, 14, 8, 20, 0)
-                && completed.RaidEntryDuration == TimeSpan.FromMinutes(1)
+                && completed.RaidEntryDuration == TimeSpan.FromSeconds(75.25)
                 && completed.OperationDuration == TimeSpan.FromMinutes(19),
-                "EFT entry and operation times use server assignment, GameStarted, and the final normal disconnect");
+                "EFT entry time prefers GameStarted real while operation time keeps the event timestamp");
             Assert(reconnected.OperationState == RaidOperationState.Completed
                 && reconnected.ReconnectCount == 1
-                && reconnected.RaidEntryDuration == TimeSpan.FromMinutes(1)
+                && reconnected.RaidEntryDuration == TimeSpan.FromSeconds(72.5)
                 && reconnected.OperationEndedAt == new DateTime(2026, 8, 14, 9, 21, 0)
                 && reconnected.OperationDuration == TimeSpan.FromMinutes(20),
-                "an intermediate reason-zero disconnect followed by reconnect does not end the operation");
+                "a reconnect keeps the raid and falls back to the reported GameStarted duration");
             Assert(missingStart.OperationState == RaidOperationState.Unknown
                 && !missingStart.OperationStartedAt.HasValue
                 && !missingStart.RaidEntryDuration.HasValue
@@ -530,7 +655,7 @@ namespace TarkovServerReporter.Tests
                 new TarkovLogPaths { EftPath = eftLogs },
                 100).Sessions.Single(item => item.ShortId == "OP001");
             Assert(cachedCompleted.OperationState == RaidOperationState.Completed
-                && cachedCompleted.RaidEntryDuration == TimeSpan.FromMinutes(1)
+                && cachedCompleted.RaidEntryDuration == TimeSpan.FromSeconds(75.25)
                 && cachedCompleted.OperationDuration == TimeSpan.FromMinutes(19),
                 "directory cache clones preserve entry and completed operation evidence");
 
@@ -631,6 +756,98 @@ namespace TarkovServerReporter.Tests
                 && !outOfOrder.OperationDuration.HasValue,
                 "an end event before GameStarted is rejected instead of producing a negative or active duration");
 
+            string entryAccuracyLogs = Path.Combine(tempRoot, "OperationDurationEntryAccuracyLogs");
+            string entryAccuracyFolder = Path.Combine(entryAccuracyLogs, "log_multiple_raids");
+            Directory.CreateDirectory(entryAccuracyFolder);
+            File.WriteAllText(
+                Path.Combine(entryAccuracyFolder, "application.log"),
+                "2026.08.14 11:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.71, Port: 17101, Location: Woods, Sid: JP-TK02G005_entry-before-boundary, GameMode: deathmatch, shortId: ENT001'\r\n"
+                + "2026.08.14 11:01:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.72, Port: 17102, Location: Shoreline, Sid: SG-SIN01G001_entry-after-boundary, GameMode: deathmatch, shortId: ENT002'\r\n"
+                + "2026.08.14 11:01:30|1.1.0.1.46699|Info|GameStarted:28 real:31.5 diff:3.5\r\n"
+                + "2026.08.14 12:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.73, Port: 17103, Location: Factory, Sid: KR-SEL01G001_entry-reported, GameMode: deathmatch, shortId: ENT003'\r\n"
+                + "2026.08.14 12:00:40|1.1.0.1.46699|Info|GameStarted:44 real:1800.01 diff:1756.01\r\n"
+                + "2026.08.14 13:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.74, Port: 17104, Location: Customs, Sid: JP-TK02G005_entry-missing, GameMode: deathmatch, shortId: ENT004'\r\n"
+                + "2026.08.14 13:00:50|1.1.0.1.46699|Info|GameStarted:\r\n"
+                + "2026.08.14 13:30:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.75, Port: 17105, Location: Customs, Sid: JP-TK02G005_entry-invalid, GameMode: deathmatch, shortId: ENT005'\r\n"
+                + "2026.08.14 13:30:40|1.1.0.1.46699|Info|GameStarted:-2 real:20oops diff:22\r\n"
+                + "2026.08.14 14:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.76, Port: 17106, Location: Customs, Sid: JP-TK02G005_entry-too-late, GameMode: deathmatch, shortId: ENT006'\r\n"
+                + "2026.08.14 14:30:01|1.1.0.1.46699|Info|GameStarted:10 real:10 diff:0\r\n"
+                + "2026.08.14 15:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.77, Port: 17107, Location: Customs, Sid: JP-TK02G005_entry-zero, GameMode: deathmatch, shortId: ENT007'\r\n"
+                + "2026.08.14 15:00:40|1.1.0.1.46699|Info|GameStarted:12 real:0 diff:-12\r\n"
+                + "2026.08.14 15:10:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.79, Port: 17109, Location: Customs, Sid: JP-TK02G005_entry-reported-zero, GameMode: deathmatch, shortId: ENT008'\r\n"
+                + "2026.08.14 15:10:20|1.1.0.1.46699|Info|GameStarted:0\r\n",
+                Encoding.UTF8);
+            RaidLogScanResult entryAccuracy = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = entryAccuracyLogs },
+                100);
+            ServerSession beforeBoundary = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT001");
+            ServerSession afterBoundary = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT002");
+            ServerSession reportedFallback = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT003");
+            ServerSession timestampFallback = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT004");
+            ServerSession invalidFallback = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT005");
+            ServerSession tooLate = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT006");
+            ServerSession zeroReal = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT007");
+            ServerSession zeroReported = entryAccuracy.Sessions.Single(item => item.ShortId == "ENT008");
+            Assert(!beforeBoundary.OperationStartedAt.HasValue
+                && !beforeBoundary.RaidEntryDuration.HasValue
+                && afterBoundary.OperationStartedAt == new DateTime(2026, 8, 14, 11, 1, 30)
+                && afterBoundary.RaidEntryDuration == TimeSpan.FromSeconds(31.5),
+                "a GameStarted event cannot cross the next server-allocation boundary");
+            Assert(reportedFallback.RaidEntryDuration == TimeSpan.FromSeconds(44),
+                "an out-of-range real duration falls back to the valid reported duration");
+            Assert(timestampFallback.RaidEntryDuration == TimeSpan.FromSeconds(50)
+                && invalidFallback.RaidEntryDuration == TimeSpan.FromSeconds(40),
+                "missing or invalid GameStarted durations fall back to the bounded timestamp difference");
+            Assert(!tooLate.OperationStartedAt.HasValue && !tooLate.RaidEntryDuration.HasValue,
+                "a GameStarted event beyond the maximum entry window is not associated with the raid");
+            Assert(zeroReal.RaidEntryDuration == TimeSpan.Zero
+                && zeroReported.RaidEntryDuration == TimeSpan.Zero,
+                "authoritative real and reported zero-second GameStarted values are preserved");
+
+            MethodInfo mergeMethod = typeof(RaidLogScanner).GetMethod(
+                "MergeDuplicateSessions",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(mergeMethod != null, "duplicate-session merge helper is available for regression coverage");
+            DateTime duplicateBase = new DateTime(2026, 8, 14, 16, 0, 0);
+            var duplicateCandidates = new[]
+            {
+                new ServerSession
+                {
+                    Game = TarkovGame.Eft,
+                    SessionKey = "EFT|sid|duplicate-entry",
+                    SessionStarted = duplicateBase,
+                    LastUpdated = duplicateBase.AddMinutes(1),
+                    IpAddress = "203.0.113.78",
+                    IpDetectedAt = duplicateBase,
+                    OperationStartedAt = duplicateBase.AddMinutes(1),
+                    RaidEntryMeasuredSeconds = 10,
+                    OperationState = RaidOperationState.InProgress
+                },
+                new ServerSession
+                {
+                    Game = TarkovGame.Eft,
+                    SessionKey = "EFT|sid|duplicate-entry",
+                    SessionStarted = duplicateBase,
+                    LastUpdated = duplicateBase.AddMinutes(3),
+                    IpAddress = "203.0.113.78",
+                    IpDetectedAt = duplicateBase,
+                    OperationStartedAt = duplicateBase.AddMinutes(2),
+                    OperationEndedAt = duplicateBase.AddMinutes(20),
+                    RaidEntryMeasuredSeconds = 20,
+                    OperationState = RaidOperationState.Completed
+                }
+            };
+            var mergedDuplicates = (IEnumerable<ServerSession>)mergeMethod.Invoke(
+                null,
+                new object[] { duplicateCandidates });
+            ServerSession mergedDuplicate = mergedDuplicates.Single();
+            Assert(mergedDuplicate.OperationState == RaidOperationState.Completed
+                && mergedDuplicate.OperationStartedAt == duplicateBase.AddMinutes(2)
+                && mergedDuplicate.OperationEndedAt == duplicateBase.AddMinutes(20)
+                && mergedDuplicate.RaidEntryMeasuredSeconds == 20
+                && mergedDuplicate.RaidEntryDuration == TimeSpan.FromSeconds(20),
+                "duplicate-session merge replaces operation timestamps and measured entry evidence atomically");
+
             string localLogs = Path.Combine(tempRoot, "OperationDurationLocalLogs");
             string localFolder = Path.Combine(localLogs, "log_local_pve");
             Directory.CreateDirectory(localFolder);
@@ -657,7 +874,7 @@ namespace TarkovServerReporter.Tests
             Directory.CreateDirectory(arenaFolder);
             File.WriteAllText(
                 Path.Combine(arenaFolder, "application.log"),
-                "2026.08.14 12:01:00|0.5.3.0.46662|Info|application|GameStarted:60 real:60 diff:0\r\n",
+                "2026.08.14 12:01:00|0.5.3.0.46662|Info|application|GameStarted:52 real:83.25 diff:31.25\r\n",
                 Encoding.UTF8);
             File.WriteAllText(
                 Path.Combine(arenaFolder, "lifecycle.log"),
@@ -668,9 +885,9 @@ namespace TarkovServerReporter.Tests
                 new TarkovLogPaths { ArenaPath = arenaLogs },
                 100).Sessions.Single();
             Assert(arena.OperationState == RaidOperationState.Completed
-                && arena.RaidEntryDuration == TimeSpan.FromMinutes(1)
+                && arena.RaidEntryDuration == TimeSpan.FromSeconds(83.25)
                 && arena.OperationDuration == TimeSpan.FromMinutes(10),
-                "Arena entry and operation times use server assignment, application GameStarted, and lifecycle MatchEnd");
+                "Arena also prefers the GameStarted real duration without shifting its operation start");
 
             string longArenaLogs = Path.Combine(tempRoot, "OperationDurationLongArenaLogs");
             string longArenaFolder = Path.Combine(longArenaLogs, "log_too_long");
@@ -1292,8 +1509,8 @@ namespace TarkovServerReporter.Tests
 
         private static void TestProductUserAgent()
         {
-            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.7.4",
-                "network requests use the v0.7.4 product user agent");
+            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.0",
+                "network requests use the v0.8.0 product user agent");
         }
 
         private static void TestGeoFormatting()
@@ -1521,6 +1738,88 @@ namespace TarkovServerReporter.Tests
             }
         }
 
+        private static void TestInitialFirewallStateRefresh()
+        {
+            var gateway = new RecordingInitialFirewallStateGateway();
+            gateway.States["203.0.113.42"] = new FirewallQueryResult
+                { Success = true, IsBlocked = true };
+            gateway.States["198.51.100.18"] = new FirewallQueryResult
+                { Success = true, IsBlocked = false };
+            using (var coordinator = new InitialFirewallStateRefreshCoordinator(gateway))
+            {
+                InitialFirewallStateRefreshResult result = coordinator.RefreshAsync(new[]
+                    {
+                        "203.0.113.42",
+                        "203.0.113.42",
+                        "not-an-ip",
+                        "198.51.100.18"
+                    })
+                    .GetAwaiter()
+                    .GetResult();
+                Assert(result.Succeeded
+                    && coordinator.IsCurrent(result)
+                    && gateway.CallCount == 1
+                    && gateway.LastAddresses.SequenceEqual(new[]
+                        { "203.0.113.42", "198.51.100.18" }),
+                    "initial firewall decoration queries valid duplicate IPs in one read-only batch without a manual query");
+
+                IDictionary<string, FirewallQueryResult> applicable =
+                    InitialFirewallStateRefreshPolicy.GetApplicableSuccessfulStates(
+                        result,
+                        new[] { "203.0.113.42", "192.0.2.77" });
+                Assert(applicable.Count == 1
+                    && applicable.ContainsKey("203.0.113.42")
+                    && applicable["203.0.113.42"].IsBlocked,
+                    "initial firewall results apply only to the current session target intersection");
+            }
+
+            var failedGateway = new RecordingInitialFirewallStateGateway
+                { ThrowOnQuery = true };
+            using (var coordinator = new InitialFirewallStateRefreshCoordinator(failedGateway))
+            {
+                InitialFirewallStateRefreshResult failed = coordinator.RefreshAsync(
+                    new[] { "203.0.113.42" })
+                    .GetAwaiter()
+                    .GetResult();
+                IDictionary<string, FirewallQueryResult> fallback =
+                    InitialFirewallStateRefreshPolicy.GetApplicableSuccessfulStates(
+                        failed,
+                        new[] { "203.0.113.42" });
+                Assert(!failed.Succeeded && fallback.Count == 0,
+                    "an initial firewall read failure preserves the existing unknown-state fallback");
+            }
+
+            var delayedGateway = new RecordingInitialFirewallStateGateway
+            {
+                QueryEntered = new ManualResetEventSlim(false),
+                QueryRelease = new ManualResetEventSlim(false)
+            };
+            delayedGateway.States["203.0.113.42"] = new FirewallQueryResult
+                { Success = true, IsBlocked = true };
+            try
+            {
+                using (var coordinator = new InitialFirewallStateRefreshCoordinator(delayedGateway))
+                {
+                    Task<InitialFirewallStateRefreshResult> pending = coordinator.RefreshAsync(
+                        new[] { "203.0.113.42" });
+                    Assert(delayedGateway.QueryEntered.Wait(5000),
+                        "delayed initial firewall fixture entered its read-only gateway");
+                    coordinator.Invalidate();
+                    delayedGateway.QueryRelease.Set();
+                    InitialFirewallStateRefreshResult stale = pending
+                        .GetAwaiter()
+                        .GetResult();
+                    Assert(!coordinator.IsCurrent(stale),
+                        "a superseded initial firewall result is rejected by generation");
+                }
+            }
+            finally
+            {
+                delayedGateway.QueryEntered.Dispose();
+                delayedGateway.QueryRelease.Dispose();
+            }
+        }
+
         private static void TestFirewallCommandValidation()
         {
             Assert(FirewallRuleManager.IsValidIpv4("203.0.113.42"),
@@ -1596,6 +1895,41 @@ namespace TarkovServerReporter.Tests
                     out shouldBlock,
                     out ipAddress),
                 "firewall helper rejects extra arguments");
+        }
+
+        private sealed class RecordingInitialFirewallStateGateway
+            : IInitialFirewallStateQueryGateway
+        {
+            public RecordingInitialFirewallStateGateway()
+            {
+                States = new Dictionary<string, FirewallQueryResult>(
+                    StringComparer.OrdinalIgnoreCase);
+                LastAddresses = new List<string>();
+            }
+
+            public int CallCount { get { return Volatile.Read(ref _callCount); } }
+            public bool ThrowOnQuery { get; set; }
+            public ManualResetEventSlim QueryEntered { get; set; }
+            public ManualResetEventSlim QueryRelease { get; set; }
+            public IDictionary<string, FirewallQueryResult> States { get; private set; }
+            public IList<string> LastAddresses { get; private set; }
+
+            public Dictionary<string, FirewallQueryResult> QueryMany(
+                IEnumerable<string> ipAddresses)
+            {
+                Interlocked.Increment(ref _callCount);
+                LastAddresses = (ipAddresses ?? Enumerable.Empty<string>()).ToList();
+                if (QueryEntered != null) QueryEntered.Set();
+                if (QueryRelease != null && !QueryRelease.Wait(5000))
+                    throw new TimeoutException("Delayed firewall fixture timed out.");
+                if (ThrowOnQuery) throw new InvalidOperationException("Synthetic query failure.");
+                return States.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value,
+                    StringComparer.OrdinalIgnoreCase);
+            }
+
+            private int _callCount;
         }
 
         private static void Assert(bool condition, string name)

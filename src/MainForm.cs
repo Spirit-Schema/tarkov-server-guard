@@ -45,6 +45,9 @@ namespace TarkovServerReporter
         private readonly HashSet<string> _firewallBusyIpAddresses =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly RaidNoteStore _noteStore = new RaidNoteStore();
+        private readonly InitialFirewallStateRefreshCoordinator
+            _initialFirewallStateRefresh = new InitialFirewallStateRefreshCoordinator(
+                new SystemInitialFirewallStateQueryGateway());
 
         private TextBox _eftPathTextBox;
         private TextBox _arenaPathTextBox;
@@ -637,6 +640,7 @@ namespace TarkovServerReporter
         {
             if (disposing)
             {
+                _initialFirewallStateRefresh.Dispose();
                 StopLauncherSelectionMonitoring();
                 CancellationTokenSource cancellation = _queryCancellation;
                 if (cancellation != null)
@@ -885,6 +889,9 @@ namespace TarkovServerReporter
                 "v" + GetApplicationSemanticVersion(),
                 new Font("Segoe UI", 9F, FontStyle.Bold),
                 TextMuted);
+            version.AccessibleName = "프로그램 버전";
+            version.AccessibleDescription = "현재 프로그램 버전 " + version.Text;
+            _toolTip.SetToolTip(version, version.AccessibleDescription);
             var versionSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
@@ -1697,12 +1704,11 @@ namespace TarkovServerReporter
             _historyGrid.Columns.Add(CreateTextColumn("ip", "서버 IP", 124));
             _historyGrid.Columns.Add(CreateTextColumn("location", "데이터센터 / 지역", 172));
             _historyGrid.Columns.Add(CreateTextColumn("ping", "현재 핑", 92));
-            _historyGrid.Columns.Add(CreateTwoLineTextColumn("actualRtt", "실게임\r\nRTT", 96, 88));
+            _historyGrid.Columns.Add(CreateTwoLineTextColumn("actualRtt", "실게임\r\nRTT", 96));
             _historyGrid.Columns.Add(CreateTwoLineTextColumn(
                 "packetLoss",
                 "실게임\r\n패킷손실",
-                96,
-                92));
+                96));
             DataGridViewButtonColumn blockActionColumn = CreateConnectionActionColumn("blockAction", "차단");
             DataGridViewButtonColumn unblockActionColumn = CreateConnectionActionColumn("unblockAction", "해제");
             // The action state remains on the main row. A small native DataGridView
@@ -1866,12 +1872,10 @@ namespace TarkovServerReporter
         private static DataGridViewTextBoxColumn CreateTwoLineTextColumn(
             string name,
             string header,
-            int width,
-            int minimumWidth)
+            int width)
         {
             var column = CreateTextColumn(name, header, width);
-            column.MinimumWidth = minimumWidth;
-            column.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            column.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleLeft;
             column.HeaderCell.Style.WrapMode = DataGridViewTriState.True;
             column.HeaderCell.Style.Padding = new Padding(0);
             return column;
@@ -2130,7 +2134,14 @@ namespace TarkovServerReporter
                 int arrowWidth = Math.Max(7, (int)Math.Round(7F * scale));
                 int arrowHeight = Math.Max(5, (int)Math.Round(5F * scale));
                 int arrowGap = Math.Max(4, (int)Math.Round(4F * scale));
-                Rectangle textBounds = Rectangle.Inflate(e.CellBounds, -edgePadding, -2);
+                int horizontalInset = Math.Min(
+                    edgePadding,
+                    Math.Max(0, (e.CellBounds.Width - 1) / 2));
+                Rectangle textBounds = new Rectangle(
+                    e.CellBounds.Left + horizontalInset,
+                    e.CellBounds.Top + 2,
+                    Math.Max(1, e.CellBounds.Width - horizontalInset * 2),
+                    Math.Max(1, e.CellBounds.Height - 4));
                 Rectangle arrowBounds = Rectangle.Empty;
                 if (active)
                 {
@@ -2146,10 +2157,6 @@ namespace TarkovServerReporter
                     | TextFormatFlags.EndEllipsis
                     | TextFormatFlags.VerticalCenter
                     | TextFormatFlags.PreserveGraphicsClipping;
-                if (e.CellStyle.WrapMode == DataGridViewTriState.True)
-                    flags |= TextFormatFlags.WordBreak;
-                else
-                    flags |= TextFormatFlags.SingleLine;
                 switch (e.CellStyle.Alignment)
                 {
                     case DataGridViewContentAlignment.BottomCenter:
@@ -2166,13 +2173,55 @@ namespace TarkovServerReporter
                         flags |= TextFormatFlags.Left;
                         break;
                 }
-                TextRenderer.DrawText(
-                    e.Graphics,
-                    Convert.ToString(e.FormattedValue),
-                    e.CellStyle.Font,
-                    textBounds,
-                    e.CellStyle.ForeColor,
-                    flags);
+                string headerText = Convert.ToString(e.FormattedValue) ?? string.Empty;
+                // Explicit line breaks are layout, not wrapping hints. Paint each
+                // declared line separately so narrowing a column cannot create a
+                // third line inside the fixed-height header.
+                string[] fixedLines = headerText
+                    .Replace("\r\n", "\n")
+                    .Replace('\r', '\n')
+                    .Split(new[] { '\n' }, StringSplitOptions.None);
+                if (fixedLines.Length > 1)
+                {
+                    TextFormatFlags lineFlags = flags | TextFormatFlags.SingleLine;
+                    int lineHeight = Math.Max(1, TextRenderer.MeasureText(
+                        e.Graphics,
+                        "가A",
+                        e.CellStyle.Font,
+                        Size.Empty,
+                        TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height);
+                    int blockHeight = Math.Min(textBounds.Height, lineHeight * fixedLines.Length);
+                    int lineTop = textBounds.Top + Math.Max(0, (textBounds.Height - blockHeight) / 2);
+                    for (int lineIndex = 0; lineIndex < fixedLines.Length; lineIndex++)
+                    {
+                        int top = lineTop + lineIndex * lineHeight;
+                        if (top >= textBounds.Bottom) break;
+                        TextRenderer.DrawText(
+                            e.Graphics,
+                            fixedLines[lineIndex],
+                            e.CellStyle.Font,
+                            new Rectangle(
+                                textBounds.Left,
+                                top,
+                                textBounds.Width,
+                                Math.Min(lineHeight, textBounds.Bottom - top)),
+                            e.CellStyle.ForeColor,
+                            lineFlags);
+                    }
+                }
+                else
+                {
+                    TextFormatFlags singleLineFlags = e.CellStyle.WrapMode == DataGridViewTriState.True
+                        ? flags | TextFormatFlags.WordBreak
+                        : flags | TextFormatFlags.SingleLine;
+                    TextRenderer.DrawText(
+                        e.Graphics,
+                        headerText,
+                        e.CellStyle.Font,
+                        textBounds,
+                        e.CellStyle.ForeColor,
+                        singleLineFlags);
+                }
 
                 if (active)
                 {
@@ -2761,9 +2810,14 @@ namespace TarkovServerReporter
             TarkovLogPaths paths = GetPathsFromInputs();
             if (string.IsNullOrWhiteSpace(paths.EftPath) && string.IsNullOrWhiteSpace(paths.ArenaPath)) return;
 
+            // A new log scan invalidates any read-only firewall lookup that still belongs
+            // to the previously displayed session list.
+            _initialFirewallStateRefresh.Invalidate();
+
             SessionPeriodPreset requestedPeriod = _sessionPeriod;
             DateTime? requestedStart = _customPeriodStart;
             DateTime? requestedEnd = _customPeriodEnd;
+            IList<ServerSession> initialFirewallCandidates = null;
 
             _isRefreshing = true;
             UpdateActionButtons();
@@ -2779,6 +2833,11 @@ namespace TarkovServerReporter
                 _dateRangeScanIncomplete = requestedPeriod != SessionPeriodPreset.Recent100
                     && (!scan.TotalMatchingSessionsIsExact || _logScanIncomplete);
                 _allSessions = scan.Sessions.ToList();
+                initialFirewallCandidates = _allSessions.ToList();
+                // A previous period/path may contain the same IP, but its cached state is
+                // not proof of the current Windows Firewall configuration. Render the
+                // safe unknown fallback until this load's read-only batch succeeds.
+                _firewallStates.Clear();
                 RefreshVisibleSessions();
                 await RefreshLauncherSelectionAsync();
 
@@ -2808,7 +2867,71 @@ namespace TarkovServerReporter
             {
                 _isRefreshing = false;
                 UpdateActionButtons();
+                if (initialFirewallCandidates != null)
+                    StartInitialFirewallStateRefresh(initialFirewallCandidates);
             }
+        }
+
+        private async void StartInitialFirewallStateRefresh(
+            IEnumerable<ServerSession> sessions)
+        {
+            if (_demoMode || IsDisposed || Disposing) return;
+            IList<string> candidates = sessions == null
+                ? new List<string>()
+                : sessions.Where(session => session != null && session.HasServerIp)
+                    .Select(session => session.IpAddress)
+                    .ToList();
+            InitialFirewallStateRefreshResult result;
+            try
+            {
+                result = await _initialFirewallStateRefresh
+                    .RefreshAsync(candidates)
+                    .ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            if (!_initialFirewallStateRefresh.IsCurrent(result))
+                return;
+
+            try
+            {
+                if (!IsHandleCreated || IsDisposed || Disposing) return;
+                BeginInvoke(new Action(() => ApplyInitialFirewallStateRefresh(result)));
+            }
+            catch (ObjectDisposedException)
+            {
+                // The form closed between the handle check and the UI dispatch.
+            }
+            catch (InvalidOperationException)
+            {
+                // The form closed between the handle check and the UI dispatch.
+            }
+        }
+
+        private void ApplyInitialFirewallStateRefresh(
+            InitialFirewallStateRefreshResult result)
+        {
+            if (IsDisposed || Disposing
+                || !_initialFirewallStateRefresh.IsCurrent(result))
+                return;
+
+            IList<string> currentCandidates = _allSessions
+                .Where(session => session != null && session.HasServerIp)
+                .Select(session => session.IpAddress)
+                .ToList();
+            IDictionary<string, FirewallQueryResult> applicable =
+                InitialFirewallStateRefreshPolicy.GetApplicableSuccessfulStates(
+                    result,
+                    currentCandidates);
+            foreach (KeyValuePair<string, FirewallQueryResult> pair in applicable)
+            {
+                _firewallStates[pair.Key] = pair.Value;
+                UpdateServerRowsFromCache(pair.Key);
+            }
+            if (applicable.Count > 0) RefreshActionCells();
         }
 
         private static RaidLogScanResult ScanSessionsForPeriod(
@@ -4618,6 +4741,10 @@ namespace TarkovServerReporter
         {
             if (_isMeasuring || _isRefreshing || _isFirewallChanging) return;
 
+            // The explicit query performs its own firewall read after refreshing logs.
+            // Prevent an older startup decoration from racing with that authoritative pass.
+            _initialFirewallStateRefresh.Invalidate();
+
             var queryCancellation = new CancellationTokenSource();
             _queryCancellation = queryCancellation;
             CancellationToken cancellationToken = queryCancellation.Token;
@@ -5273,10 +5400,7 @@ namespace TarkovServerReporter
                     BlockedServerMetadataStore.Remove(new[] { ipAddress });
                 UpdateServerRowsFromCache(ipAddress);
                 SetStatus(
-                    string.Format(
-                        "{0} 서버 차단을 {1}했습니다. 핑은 다시 조회해 주세요.",
-                        ipAddress,
-                        shouldBlock ? "적용" : "해제"),
+                    GetFirewallChangeSuccessMessage(ipAddress, shouldBlock),
                     shouldBlock ? Danger : Success);
             }
             finally
@@ -5287,6 +5411,15 @@ namespace TarkovServerReporter
                 UpdateServerRowsFromCache(ipAddress);
                 if (_historySortColumn == "ping") ReapplyHistorySort();
             }
+        }
+
+        private static string GetFirewallChangeSuccessMessage(string ipAddress, bool shouldBlock)
+        {
+            if (!shouldBlock)
+                return ipAddress + " 서버 차단을 해제했습니다. 핑은 다시 조회해 주세요.";
+
+            return ipAddress + " 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n"
+                + FirewallPersistenceNotice.RulesPersistLine;
         }
 
         private void UpdateServerRowsFromCache(string ipAddress)
@@ -5439,6 +5572,8 @@ namespace TarkovServerReporter
             }
             if (!changed) return;
 
+            _initialFirewallStateRefresh.Invalidate();
+
             IList<string> ipAddresses = PingBatchPlanner.GetUniqueServerIps(_visibleSessions);
             _isRefreshing = true;
             UpdateActionButtons();
@@ -5566,8 +5701,11 @@ namespace TarkovServerReporter
         private void SetStatus(string message, Color color)
         {
             if (_statusLabel == null) return;
+            message = message ?? string.Empty;
             _statusLabel.Text = message;
             _statusLabel.ForeColor = color;
+            _statusLabel.AccessibleDescription = message;
+            _toolTip.SetToolTip(_statusLabel, message);
         }
 
         private static string GetApplicationSemanticVersion()
@@ -5601,6 +5739,7 @@ namespace TarkovServerReporter
                     MapName = "Streets of Tarkov",
                     GameMode = "Online",
                     ProgressionMode = TarkovProgressionMode.PvpSeason,
+                    PvpSeasonNumber = 1,
                     HostingMode = TarkovHostingMode.Server,
                     RaidPurpose = TarkovRaidPurpose.Progression,
                     ServerId = "SG-SIN01G001_demo",

@@ -46,6 +46,13 @@ namespace TarkovServerReporter
 
     public static class BlockedServerMetadataStore
     {
+        private enum MetadataFileLoadState
+        {
+            Missing,
+            Valid,
+            Invalid
+        }
+
         private sealed class MetadataDocument
         {
             public int Version { get; set; }
@@ -81,8 +88,10 @@ namespace TarkovServerReporter
             lock (SyncRoot)
             {
                 Dictionary<string, BlockedServerMetadata> records;
-                if (TryLoadFile(StorePath, out records)) return CloneRecords(records);
-                if (TryLoadFile(BackupPath, out records)) return CloneRecords(records);
+                if (LoadFile(StorePath, out records) == MetadataFileLoadState.Valid)
+                    return CloneRecords(records);
+                if (LoadFile(BackupPath, out records) == MetadataFileLoadState.Valid)
+                    return CloneRecords(records);
                 return new Dictionary<string, BlockedServerMetadata>(StringComparer.OrdinalIgnoreCase);
             }
         }
@@ -106,7 +115,8 @@ namespace TarkovServerReporter
             {
                 try
                 {
-                    Dictionary<string, BlockedServerMetadata> records = LoadForMutation();
+                    Dictionary<string, BlockedServerMetadata> records;
+                    if (!TryLoadForMutation(out records)) return false;
                     BlockedServerMetadata metadata;
                     if (!records.TryGetValue(ipAddress, out metadata))
                     {
@@ -140,7 +150,8 @@ namespace TarkovServerReporter
             {
                 try
                 {
-                    Dictionary<string, BlockedServerMetadata> records = LoadForMutation();
+                    Dictionary<string, BlockedServerMetadata> records;
+                    if (!TryLoadForMutation(out records)) return false;
                     BlockedServerMetadata metadata;
                     if (!records.TryGetValue(ipAddress, out metadata))
                     {
@@ -164,6 +175,78 @@ namespace TarkovServerReporter
             }
         }
 
+        public static bool MergeMissingFromBackup(IEnumerable<BlockedServerBackupEntry> entries)
+        {
+            if (entries == null) return true;
+            var candidates = entries.ToList();
+            if (candidates.Count > MaximumRecordCount) return false;
+            foreach (BlockedServerBackupEntry entry in candidates)
+            {
+                if (entry == null || !FirewallRuleManager.IsPublicIpv4(entry.IpAddress))
+                    return false;
+            }
+
+            lock (SyncRoot)
+            {
+                try
+                {
+                    Dictionary<string, BlockedServerMetadata> records;
+                    if (!TryLoadForMutation(out records)) return false;
+                    bool changed = false;
+                    foreach (BlockedServerBackupEntry entry in candidates)
+                    {
+                        string dataCenter = NormalizeText(entry.DataCenter, 80);
+                        string location = NormalizeText(entry.Location, 180);
+                        string note = NormalizeNote(entry.Note);
+                        DateTime? blockedAtUtc = entry.BlockedAtUtc.HasValue
+                            ? (DateTime?)NormalizeUtc(entry.BlockedAtUtc.Value)
+                            : null;
+                        if (dataCenter == null && location == null && note == null
+                            && !blockedAtUtc.HasValue)
+                            continue;
+
+                        BlockedServerMetadata metadata;
+                        if (!records.TryGetValue(entry.IpAddress, out metadata))
+                        {
+                            metadata = new BlockedServerMetadata { IpAddress = entry.IpAddress };
+                            records[entry.IpAddress] = metadata;
+                        }
+
+                        bool itemChanged = false;
+                        if (string.IsNullOrWhiteSpace(metadata.DataCenter) && dataCenter != null)
+                        {
+                            metadata.DataCenter = dataCenter;
+                            itemChanged = true;
+                        }
+                        if (string.IsNullOrWhiteSpace(metadata.Location) && location != null)
+                        {
+                            metadata.Location = location;
+                            itemChanged = true;
+                        }
+                        if (string.IsNullOrWhiteSpace(metadata.Note) && note != null)
+                        {
+                            metadata.Note = note;
+                            itemChanged = true;
+                        }
+                        if (!metadata.BlockedAtUtc.HasValue && blockedAtUtc.HasValue)
+                        {
+                            metadata.BlockedAtUtc = blockedAtUtc;
+                            itemChanged = true;
+                        }
+                        if (!itemChanged) continue;
+
+                        metadata.UpdatedAtUtc = DateTime.UtcNow;
+                        changed = true;
+                    }
+                    return !changed || SaveCore(records);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
         public static bool Remove(IEnumerable<string> ipAddresses)
         {
             if (ipAddresses == null) return true;
@@ -177,7 +260,8 @@ namespace TarkovServerReporter
             {
                 try
                 {
-                    Dictionary<string, BlockedServerMetadata> records = LoadForMutation();
+                    Dictionary<string, BlockedServerMetadata> records;
+                    if (!TryLoadForMutation(out records)) return false;
                     bool changed = false;
                     foreach (string ipAddress in addresses)
                         changed |= records.Remove(ipAddress);
@@ -190,15 +274,36 @@ namespace TarkovServerReporter
             }
         }
 
-        private static Dictionary<string, BlockedServerMetadata> LoadForMutation()
+        private static bool TryLoadForMutation(
+            out Dictionary<string, BlockedServerMetadata> records)
         {
-            Dictionary<string, BlockedServerMetadata> records;
-            if (TryLoadFile(StorePath, out records)) return records;
-            if (TryLoadFile(BackupPath, out records)) return records;
-            return new Dictionary<string, BlockedServerMetadata>(StringComparer.OrdinalIgnoreCase);
+            MetadataFileLoadState primaryState = LoadFile(StorePath, out records);
+            if (primaryState == MetadataFileLoadState.Valid) return true;
+
+            Dictionary<string, BlockedServerMetadata> backupRecords;
+            MetadataFileLoadState backupState = LoadFile(BackupPath, out backupRecords);
+            if (backupState == MetadataFileLoadState.Valid)
+            {
+                records = backupRecords;
+                return true;
+            }
+
+            if (primaryState == MetadataFileLoadState.Missing
+                && backupState == MetadataFileLoadState.Missing)
+            {
+                records = new Dictionary<string, BlockedServerMetadata>(
+                    StringComparer.OrdinalIgnoreCase);
+                return true;
+            }
+
+            // Existing metadata that cannot be validated must never be replaced by
+            // a newly-created partial document. The caller can report failure while
+            // leaving both recovery artifacts byte-for-byte untouched.
+            records = null;
+            return false;
         }
 
-        private static bool TryLoadFile(
+        private static MetadataFileLoadState LoadFile(
             string path,
             out Dictionary<string, BlockedServerMetadata> records)
         {
@@ -206,35 +311,59 @@ namespace TarkovServerReporter
             try
             {
                 var info = new FileInfo(path);
-                if (!info.Exists || info.Length < 2 || info.Length > MaximumFileBytes) return false;
+                if (!info.Exists)
+                    return Directory.Exists(path)
+                        ? MetadataFileLoadState.Invalid
+                        : MetadataFileLoadState.Missing;
+                if (info.Length < 2 || info.Length > MaximumFileBytes)
+                    return MetadataFileLoadState.Invalid;
 
-                string json;
+                byte[] bytes;
                 using (var stream = new FileStream(
                     path,
                     FileMode.Open,
                     FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    FileShare.Read))
                 {
-                    json = reader.ReadToEnd();
+                    if (stream.Length < 2 || stream.Length > MaximumFileBytes)
+                        return MetadataFileLoadState.Invalid;
+                    bytes = new byte[(int)stream.Length];
+                    int offset = 0;
+                    while (offset < bytes.Length)
+                    {
+                        int read = stream.Read(bytes, offset, bytes.Length - offset);
+                        if (read <= 0) return MetadataFileLoadState.Invalid;
+                        offset += read;
+                    }
+                    if (stream.ReadByte() >= 0) return MetadataFileLoadState.Invalid;
                 }
+                string json = new UTF8Encoding(false, true).GetString(bytes);
+                if (json.Length > 0 && json[0] == '\ufeff') json = json.Substring(1);
 
                 var serializer = new JavaScriptSerializer { MaxJsonLength = MaximumFileBytes };
                 MetadataDocument document = serializer.Deserialize<MetadataDocument>(json);
                 if (document == null || document.Version != CurrentVersion || document.Items == null
                     || document.Items.Count > MaximumRecordCount)
-                    return false;
+                    return MetadataFileLoadState.Invalid;
 
                 var parsed = new Dictionary<string, BlockedServerMetadata>(StringComparer.OrdinalIgnoreCase);
                 foreach (MetadataItem item in document.Items)
                 {
-                    if (item == null || !FirewallRuleManager.IsValidIpv4(item.Ip)) continue;
+                    if (item == null
+                        || !FirewallRuleManager.IsValidIpv4(item.Ip)
+                        || parsed.ContainsKey(item.Ip))
+                        return MetadataFileLoadState.Invalid;
                     DateTime updatedAt;
-                    if (!TryParseUtc(item.UpdatedAtUtc, out updatedAt)) continue;
-                    DateTime blockedAt;
-                    DateTime? nullableBlockedAt = TryParseUtc(item.BlockedAtUtc, out blockedAt)
-                        ? (DateTime?)blockedAt
-                        : null;
+                    if (!TryParseUtc(item.UpdatedAtUtc, out updatedAt))
+                        return MetadataFileLoadState.Invalid;
+                    DateTime? nullableBlockedAt = null;
+                    if (item.BlockedAtUtc != null)
+                    {
+                        DateTime blockedAt;
+                        if (!TryParseUtc(item.BlockedAtUtc, out blockedAt))
+                            return MetadataFileLoadState.Invalid;
+                        nullableBlockedAt = blockedAt;
+                    }
                     parsed[item.Ip] = new BlockedServerMetadata
                     {
                         IpAddress = item.Ip,
@@ -246,24 +375,25 @@ namespace TarkovServerReporter
                     };
                 }
                 records = parsed;
-                return true;
+                return MetadataFileLoadState.Valid;
             }
             catch
             {
-                return false;
+                return MetadataFileLoadState.Invalid;
             }
         }
 
         private static bool SaveCore(IDictionary<string, BlockedServerMetadata> records)
         {
             if (records == null || records.Count > MaximumRecordCount) return false;
+            if (records.Values.Any(item => item == null
+                || !FirewallRuleManager.IsValidIpv4(item.IpAddress))) return false;
             if (!Directory.Exists(StoreDirectory)) Directory.CreateDirectory(StoreDirectory);
 
             var document = new MetadataDocument
             {
                 Version = CurrentVersion,
                 Items = records.Values
-                    .Where(item => item != null && FirewallRuleManager.IsValidIpv4(item.IpAddress))
                     .OrderBy(item => item.IpAddress, StringComparer.OrdinalIgnoreCase)
                     .Select(item => new MetadataItem
                     {

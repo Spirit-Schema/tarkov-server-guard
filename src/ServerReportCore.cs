@@ -33,6 +33,13 @@ namespace TarkovServerReporter
         PvpSeason
     }
 
+    internal enum PvpSeasonEvidence
+    {
+        None,
+        VerifiedVersionMapping,
+        ExplicitLogValue
+    }
+
     public enum TarkovHostingMode
     {
         Unknown,
@@ -56,6 +63,8 @@ namespace TarkovServerReporter
 
     public sealed class ServerSession
     {
+        internal const double MaximumRaidEntrySeconds = 30 * 60;
+
         public TarkovGame Game { get; set; }
         public DateTime SessionStarted { get; set; }
         public DateTime LastUpdated { get; set; }
@@ -67,6 +76,10 @@ namespace TarkovServerReporter
         public string MapName { get; set; }
         public string GameMode { get; set; }
         public TarkovProgressionMode ProgressionMode { get; set; }
+        public int? PvpSeasonNumber { get; set; }
+        internal string PvpSeasonKey { get; set; }
+        internal string PvpSeasonName { get; set; }
+        internal PvpSeasonEvidence PvpSeasonEvidence { get; set; }
         public TarkovHostingMode HostingMode { get; set; }
         public TarkovRaidPurpose RaidPurpose { get; set; }
         public string ServerId { get; set; }
@@ -89,6 +102,7 @@ namespace TarkovServerReporter
         public int? DisconnectReason { get; set; }
         public DateTime? ConnectionEndedAt { get; set; }
         public DateTime? IpDetectedAt { get; set; }
+        public double? RaidEntryMeasuredSeconds { get; set; }
         public DateTime? OperationStartedAt { get; set; }
         public DateTime? OperationEndedAt { get; set; }
         public RaidOperationState OperationState { get; set; }
@@ -126,15 +140,30 @@ namespace TarkovServerReporter
             get
             {
                 if (!HasServerIp
-                    || !IpDetectedAt.HasValue
                     || !OperationStartedAt.HasValue)
                     return null;
 
+                if (RaidEntryMeasuredSeconds.HasValue
+                    && IsValidRaidEntrySeconds(RaidEntryMeasuredSeconds.Value))
+                {
+                    return TimeSpan.FromSeconds(RaidEntryMeasuredSeconds.Value);
+                }
+
+                if (!IpDetectedAt.HasValue) return null;
+
                 TimeSpan duration = OperationStartedAt.Value - IpDetectedAt.Value;
-                if (duration < TimeSpan.Zero || duration > TimeSpan.FromMinutes(30))
+                if (duration < TimeSpan.Zero || duration.TotalSeconds > MaximumRaidEntrySeconds)
                     return null;
                 return duration;
             }
+        }
+
+        internal static bool IsValidRaidEntrySeconds(double seconds)
+        {
+            return !double.IsNaN(seconds)
+                && !double.IsInfinity(seconds)
+                && seconds >= 0
+                && seconds <= MaximumRaidEntrySeconds;
         }
 
         public string GameDisplayName
@@ -161,7 +190,14 @@ namespace TarkovServerReporter
             get
             {
                 if (ProgressionMode == TarkovProgressionMode.Pvp) return "PvP";
-                if (ProgressionMode == TarkovProgressionMode.PvpSeason) return "PvP시즌";
+                if (ProgressionMode == TarkovProgressionMode.PvpSeason)
+                {
+                    return PvpSeasonNumber.HasValue
+                        && PvpSeasonNumber.Value > 0
+                        && PvpSeasonNumber.Value <= 999
+                        ? "PvP시즌" + PvpSeasonNumber.Value.ToString(CultureInfo.InvariantCulture)
+                        : "PvP시즌";
+                }
                 if (ProgressionMode == TarkovProgressionMode.Pve)
                 {
                     if (HostingMode == TarkovHostingMode.Server) return "PvE(서버)";
@@ -983,6 +1019,7 @@ namespace TarkovServerReporter
                 LogFilePath = session.LogFilePath,
                 IpAddress = session.IpAddress,
                 MapName = session.MapName,
+                RaidEntryMeasuredSeconds = session.RaidEntryMeasuredSeconds,
                 OperationStartedAt = session.OperationStartedAt,
                 OperationEndedAt = session.OperationEndedAt,
                 OperationState = session.OperationState,
@@ -1018,7 +1055,7 @@ namespace TarkovServerReporter
 
     public static class NetworkServices
     {
-        internal const string ProductUserAgent = "TarkovServerGuard/0.7.4";
+        internal const string ProductUserAgent = "TarkovServerGuard/0.8.0";
         private static readonly DbIpLiteGeoService GeoService = CreateGeoService();
 
         private static DbIpLiteGeoService CreateGeoService()

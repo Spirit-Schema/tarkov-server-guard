@@ -33,6 +33,16 @@ if (-not $compiler) {
     throw '.NET Framework C# compiler(csc.exe)를 찾지 못했습니다.'
 }
 
+function Invoke-CSharpCompiler([string[]]$Arguments) {
+    & $compiler $Arguments
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+function Invoke-TestExecutable([string]$Path, [string[]]$Arguments = @()) {
+    & $Path $Arguments
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 New-Item -ItemType Directory -Force -Path $distRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 
@@ -42,6 +52,10 @@ $commonReferences = @(
     '/reference:Microsoft.CSharp.dll',
     '/reference:System.Net.Http.dll',
     '/reference:System.Web.Extensions.dll'
+)
+$windowsFormsReferences = @(
+    '/reference:System.Drawing.dll',
+    '/reference:System.Windows.Forms.dll'
 )
 
 $appOutput = Join-Path $distRoot 'TarkovServerGuard.exe'
@@ -55,21 +69,23 @@ $appArguments = @(
     ('/win32manifest:' + (Join-Path $projectRoot 'app.manifest')),
     ('/win32icon:' + $appIcon),
     ('/resource:' + (Join-Path $projectRoot 'LICENSE') + ',TarkovServerReporter.LICENSE.txt'),
-    ('/resource:' + (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') + ',TarkovServerReporter.THIRD_PARTY_NOTICES.md'),
-    '/reference:System.Drawing.dll',
-    '/reference:System.Windows.Forms.dll'
-) + $commonReferences + @(
+    ('/resource:' + (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') + ',TarkovServerReporter.THIRD_PARTY_NOTICES.md')
+) + $windowsFormsReferences + $commonReferences + @(
     (Join-Path $sourceRoot 'AppBranding.cs'),
     (Join-Path $sourceRoot 'DataGridViewScrollCorner.cs'),
     (Join-Path $sourceRoot 'Program.cs'),
     (Join-Path $sourceRoot 'MainForm.cs'),
     (Join-Path $sourceRoot 'GitHubUpdateService.cs'),
+    (Join-Path $sourceRoot 'ReleaseNotesService.cs'),
     (Join-Path $sourceRoot 'UpdatePromptForm.cs'),
+    (Join-Path $sourceRoot 'PatchNotesForm.cs'),
     (Join-Path $sourceRoot 'UsageNoticeForm.cs'),
     (Join-Path $sourceRoot 'LicenseForm.cs'),
     (Join-Path $sourceRoot 'ArenaBlockWarningForm.cs'),
     (Join-Path $sourceRoot 'FirewallRuleManager.cs'),
     (Join-Path $sourceRoot 'BlockedServerMetadataStore.cs'),
+    (Join-Path $sourceRoot 'BlockedServerBackup.cs'),
+    (Join-Path $sourceRoot 'BlockedServerRestorePreviewForm.cs'),
     (Join-Path $sourceRoot 'BlockedServersForm.cs'),
     (Join-Path $sourceRoot 'PingKickActionCell.cs'),
     (Join-Path $sourceRoot 'RaidNoteStore.cs'),
@@ -83,19 +99,14 @@ $appArguments = @(
     (Join-Path $sourceRoot 'TarkovLogServices.cs')
 )
 
-& $compiler $appArguments
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-CSharpCompiler $appArguments
 Copy-Item -Force (Join-Path $projectRoot 'app.config') ($appOutput + '.config')
 
 if (-not $SkipTests) {
-    $testOutput = Join-Path $buildRoot 'CoreTests.exe'
-    $testArguments = @(
-        '/nologo',
-        '/target:exe',
-        '/platform:anycpu',
-        '/optimize+',
-        '/warn:4',
-        ('/out:' + $testOutput)
+    $coreTestOutput = Join-Path $buildRoot 'CoreTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $coreTestOutput)
     ) + $commonReferences + @(
         (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
         (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
@@ -103,63 +114,38 @@ if (-not $SkipTests) {
         (Join-Path $sourceRoot 'FirewallRuleManager.cs'),
         (Join-Path $sourceRoot 'TarkovLogServices.cs'),
         (Join-Path $testRoot 'CoreTests.cs')
-    )
-
-    & $compiler $testArguments
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $testOutput
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    ))
+    Invoke-TestExecutable $coreTestOutput
 
     $dbIpTestOutput = Join-Path $buildRoot 'DbIpLiteGeoTests.exe'
-    $dbIpTestArguments = @(
-        '/nologo',
-        '/target:exe',
-        '/platform:anycpu',
-        '/optimize+',
-        '/warn:4',
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
         ('/out:' + $dbIpTestOutput)
     ) + $commonReferences + @(
         (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
         (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
         (Join-Path $sourceRoot 'ServerReportCore.cs'),
         (Join-Path $testRoot 'DbIpLiteGeoTests.cs')
-    )
-
-    & $compiler $dbIpTestArguments
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $dbIpTestOutput
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    ))
+    Invoke-TestExecutable $dbIpTestOutput
 
     $storageTestOutput = Join-Path $buildRoot 'StorageAndBatchTests.exe'
-    $storageTestArguments = @(
-        '/nologo',
-        '/target:exe',
-        '/platform:anycpu',
-        '/optimize+',
-        '/warn:4',
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
         ('/out:' + $storageTestOutput)
     ) + $commonReferences + @(
         (Join-Path $sourceRoot 'FirewallRuleManager.cs'),
         (Join-Path $sourceRoot 'BlockedServerMetadataStore.cs'),
+        (Join-Path $sourceRoot 'BlockedServerBackup.cs'),
         (Join-Path $testRoot 'StorageAndBatchTests.cs')
-    )
+    ))
+    Invoke-TestExecutable $storageTestOutput
 
-    & $compiler $storageTestArguments
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $storageTestOutput
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-    $reportMemoTestOutput = Join-Path $buildRoot 'UserReportMemoTests.exe'
-    $reportMemoTestArguments = @(
-        '/nologo',
-        '/target:exe',
-        '/platform:anycpu',
-        '/optimize+',
-        '/warn:4',
-        ('/out:' + $reportMemoTestOutput),
-        '/reference:System.Drawing.dll',
-        '/reference:System.Windows.Forms.dll'
-    ) + $commonReferences + @(
+    $memoTestOutput = Join-Path $buildRoot 'UserReportMemoTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $memoTestOutput)
+    ) + $windowsFormsReferences + $commonReferences + @(
         (Join-Path $sourceRoot 'AppBranding.cs'),
         (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
         (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
@@ -170,34 +156,55 @@ if (-not $SkipTests) {
         (Join-Path $sourceRoot 'UserReportMemoStore.cs'),
         (Join-Path $sourceRoot 'UserReportMemoForm.cs'),
         (Join-Path $testRoot 'UserReportMemoTests.cs')
-    )
-
-    & $compiler $reportMemoTestArguments
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $reportMemoTestOutput
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    ))
+    Invoke-TestExecutable $memoTestOutput
 
     $githubUpdateTestOutput = Join-Path $buildRoot 'GitHubUpdateTests.exe'
-    $githubUpdateTestArguments = @(
-        '/nologo',
-        '/target:exe',
-        '/platform:anycpu',
-        '/optimize+',
-        '/warn:4',
-        ('/out:' + $githubUpdateTestOutput),
-        '/reference:System.Drawing.dll',
-        '/reference:System.Windows.Forms.dll'
-    ) + $commonReferences + @(
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $githubUpdateTestOutput)
+    ) + $windowsFormsReferences + $commonReferences + @(
         (Join-Path $sourceRoot 'AppBranding.cs'),
         (Join-Path $sourceRoot 'GitHubUpdateService.cs'),
+        (Join-Path $sourceRoot 'ReleaseNotesService.cs'),
         (Join-Path $sourceRoot 'UpdatePromptForm.cs'),
+        (Join-Path $sourceRoot 'PatchNotesForm.cs'),
         (Join-Path $testRoot 'GitHubUpdateTests.cs')
-    )
+    ))
+    Invoke-TestExecutable $githubUpdateTestOutput
 
-    & $compiler $githubUpdateTestArguments
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $githubUpdateTestOutput
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $releaseNotesTestOutput = Join-Path $buildRoot 'ReleaseNotesTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $releaseNotesTestOutput)
+    ) + $windowsFormsReferences + $commonReferences + @(
+        (Join-Path $sourceRoot 'AppBranding.cs'),
+        (Join-Path $sourceRoot 'ReleaseNotesService.cs'),
+        (Join-Path $sourceRoot 'PatchNotesForm.cs'),
+        (Join-Path $sourceRoot 'UpdatePromptForm.cs'),
+        (Join-Path $testRoot 'ReleaseNotesTests.cs')
+    ))
+    Invoke-TestExecutable $releaseNotesTestOutput
+
+    $programSource = Get-Content -Raw -LiteralPath (Join-Path $sourceRoot 'Program.cs')
+    $versionMatch = [regex]::Match(
+        $programSource,
+        'AssemblyVersion\("(?<version>\d+\.\d+\.\d+)\.\d+"\)')
+    if (-not $versionMatch.Success) {
+        throw 'Program.cs에서 3자리 애플리케이션 버전을 찾지 못했습니다.'
+    }
+
+    $v080UiTestOutput = Join-Path $buildRoot 'V080UiTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        '/main:TarkovServerReporter.Tests.V080UiTests',
+        ('/out:' + $v080UiTestOutput)
+    ) + $windowsFormsReferences + $commonReferences + @(
+        (Join-Path $testRoot 'V080UiTests.cs')
+    ))
+    Invoke-TestExecutable $v080UiTestOutput @(
+        $appOutput,
+        $versionMatch.Groups['version'].Value)
 }
 
 Write-Host ('완료: ' + $appOutput)

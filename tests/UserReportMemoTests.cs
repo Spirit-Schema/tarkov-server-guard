@@ -27,6 +27,7 @@ namespace TarkovServerReporter.Tests
                 TestStableSeparateKeyAndTemplate();
                 TestStorageBoundaries(testRoot);
                 TestArchiveAndLegacyPlaceholder(testRoot);
+                TestArchiveBatchSelection(testRoot);
                 TestStructuredEditorAndEntryLimit(testRoot);
                 TestSaveButtonBehavior(testRoot);
                 Console.WriteLine("UserReportMemoTests: PASS");
@@ -231,6 +232,17 @@ namespace TarkovServerReporter.Tests
             {
                 ShowOffScreen(archive);
                 DataGridView grid = GetPrivateField<DataGridView>(archive, "_grid");
+                Assert(grid.ColumnHeadersBorderStyle == DataGridViewHeaderBorderStyle.Single,
+                    "메모 보관함 헤더는 서버차단현황과 같은 단일 경계선을 사용해야 합니다.");
+                FieldInfo headerBorderField = typeof(RaidNoteArchiveForm).GetField(
+                    "HeaderBorder",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert(headerBorderField != null
+                    && (System.Drawing.Color)headerBorderField.GetValue(null)
+                        == System.Drawing.Color.FromArgb(57, 68, 80),
+                    "메모 보관함 헤더 경계색은 서버차단현황 헤더와 같아야 합니다.");
+                Assert(grid.GridColor == System.Drawing.Color.FromArgb(54, 63, 74),
+                    "헤더 테두리 통일이 메모 보관함 본문 행 경계색까지 바꾸면 안 됩니다.");
                 var kinds = grid.Rows.Cast<DataGridViewRow>()
                     .Select(row => Convert.ToString(row.Cells["kind"].Value))
                     .ToList();
@@ -296,6 +308,161 @@ namespace TarkovServerReporter.Tests
             }
         }
 
+        private static void TestArchiveBatchSelection(string testRoot)
+        {
+            string raidFolder = Path.Combine(testRoot, "batch-archive-raids");
+            string reportFolder = Path.Combine(testRoot, "batch-archive-reports");
+            var raidStore = new RaidNoteStore(raidFolder);
+            var reportStore = new UserReportMemoStore(reportFolder);
+
+            ServerSession raidSession = CreateSensitiveSession(1, "batch-raid");
+            raidSession.MapName = "BatchRaid";
+            RaidNoteRecord raid = raidStore.CreateFor(raidSession);
+            raid.NoteText = "batch raid note";
+            raidStore.Save(raidSession, raid);
+
+            ServerSession reportSession = CreateSensitiveSession(1, "batch-report");
+            reportSession.MapName = "BatchReport";
+            UserReportMemoRecord report = reportStore.CreateFor(reportSession);
+            report.MemoText = "batch report memo";
+            reportStore.Save(reportSession, report);
+
+            ServerSession staleSession = CreateSensitiveSession(1, "stale-report");
+            staleSession.MapName = "StaleReport";
+            UserReportMemoRecord staleReport = reportStore.CreateFor(staleSession);
+            staleReport.MemoText = "stale report memo";
+            reportStore.Save(staleSession, staleReport);
+
+            ServerSession collisionSession = CreateSensitiveSession(1, "collision-raid");
+            collisionSession.MapName = "CollisionRaid";
+            RaidNoteRecord collisionRaid = raidStore.CreateFor(collisionSession);
+            collisionRaid.NoteText = "same key, other store";
+            raidStore.Save(staleReport.Key, collisionRaid);
+
+            using (var archive = new RaidNoteArchiveForm(raidStore, reportStore))
+            {
+                ShowOffScreen(archive);
+                DataGridView grid = GetPrivateField<DataGridView>(archive, "_grid");
+                Button selectedDelete = GetPrivateField<Button>(archive, "_deleteSelectedButton");
+                Button currentDelete = GetPrivateField<Button>(archive, "_deleteButton");
+                Button refresh = GetPrivateField<Button>(archive, "_refreshButton");
+                Assert(grid.Columns[0].Name == "selected"
+                    && grid.Columns[0] is DataGridViewCheckBoxColumn,
+                    "메모 보관함의 첫 열은 선택 체크박스여야 합니다.");
+                Assert(!grid.ReadOnly && !grid.Columns["selected"].ReadOnly,
+                    "선택 체크박스는 편집 가능해야 합니다.");
+                Assert(grid.Columns.Cast<DataGridViewColumn>()
+                    .Where(column => column.Name != "selected")
+                    .All(column => column.ReadOnly),
+                    "선택 열을 제외한 메모 본문 열은 읽기 전용이어야 합니다.");
+                Assert(currentDelete.Text == "삭제" && selectedDelete.Text == "선택 삭제",
+                    "현재행 삭제와 선택 삭제는 별도 버튼으로 유지되어야 합니다.");
+                Assert(!selectedDelete.Enabled, "체크한 메모가 없으면 선택 삭제가 비활성화되어야 합니다.");
+
+                var selectAllKeys = new KeyEventArgs(Keys.Control | Keys.A);
+                InvokePrivate(archive, "GridKeyDown", grid, selectAllKeys);
+                Assert(grid.Rows.Cast<DataGridViewRow>().All(IsChecked),
+                    "Ctrl+A는 모든 메모 행을 체크해야 합니다.");
+                Assert(selectAllKeys.Handled && selectAllKeys.SuppressKeyPress && selectedDelete.Enabled,
+                    "Ctrl+A를 처리한 뒤 선택 삭제가 활성화되어야 합니다.");
+
+                InvokePrivate(archive, "SetAllRowsChecked", false);
+                var headerClick = new DataGridViewCellMouseEventArgs(
+                    grid.Columns["selected"].Index,
+                    -1,
+                    2,
+                    2,
+                    new MouseEventArgs(MouseButtons.Left, 1, 2, 2, 0));
+                InvokePrivate(archive, "GridColumnHeaderMouseClick", grid, headerClick);
+                Assert(grid.Rows.Cast<DataGridViewRow>().All(IsChecked),
+                    "선택 헤더를 누르면 모든 메모 행을 체크해야 합니다.");
+                InvokePrivate(archive, "GridColumnHeaderMouseClick", grid, headerClick);
+                Assert(grid.Rows.Cast<DataGridViewRow>().All(row => !IsChecked(row)),
+                    "모두 체크된 상태에서 선택 헤더를 다시 누르면 전체 체크를 해제해야 합니다.");
+                DataGridViewRow collisionRow = FindRowByMap(grid, "CollisionRaid");
+                grid.CurrentCell = collisionRow.Cells["kind"];
+                var spaceKey = new KeyEventArgs(Keys.Space);
+                InvokePrivate(archive, "GridKeyDown", grid, spaceKey);
+                Assert(IsChecked(collisionRow) && spaceKey.Handled && spaceKey.SuppressKeyPress,
+                    "Space는 현재행 체크 상태를 토글해야 합니다.");
+                refresh.PerformClick();
+                Application.DoEvents();
+                Assert(IsChecked(FindRowByMap(grid, "CollisionRaid")),
+                    "새로고침 뒤에도 동일 identity의 체크 상태를 보존해야 합니다.");
+
+                InvokePrivate(archive, "SetBusy", true, "테스트 중");
+                Assert(!grid.Enabled && !refresh.Enabled && !selectedDelete.Enabled,
+                    "busy 상태에서는 표·새로고침·선택 삭제를 비활성화해야 합니다.");
+                InvokePrivate(archive, "SetBusy", false, null);
+
+                InvokePrivate(archive, "SetAllRowsChecked", false);
+                FindRowByMap(grid, "BatchRaid").Cells["selected"].Value = true;
+                FindRowByMap(grid, "BatchReport").Cells["selected"].Value = true;
+                FindRowByMap(grid, "StaleReport").Cells["selected"].Value = true;
+                Application.DoEvents();
+                object targets = InvokePrivate(archive, "GetCheckedDeleteTargets");
+
+                reportStore.Delete(staleReport.Key);
+                object result = InvokePrivate(archive, "DeleteRevalidatedTargets", targets);
+                Assert(GetProperty<int>(result, "RequestedCount") == 3
+                    && GetProperty<int>(result, "SucceededCount") == 2
+                    && GetProperty<int>(result, "MissingCount") == 1
+                    && GetProperty<int>(result, "FailedCount") == 0,
+                    "혼합 저장소 선택 삭제는 성공·이미 없음 결과를 항목별로 집계해야 합니다.");
+                Assert(!raidStore.Exists(raid.Key) && !reportStore.Exists(report.Key),
+                    "현재 존재하는 선택 메모만 각 저장소에서 삭제해야 합니다.");
+                Assert(raidStore.Exists(staleReport.Key),
+                    "유저신고 메모의 stale 키가 같은 키의 레이드 메모를 삭제하면 안 됩니다.");
+
+                refresh.PerformClick();
+                Application.DoEvents();
+                Assert(grid.Rows.Cast<DataGridViewRow>().All(row =>
+                    Convert.ToString(row.Cells["map"].Value) != "BatchRaid"
+                    && Convert.ToString(row.Cells["map"].Value) != "BatchReport"),
+                    "선택 삭제 후 새로고침에서는 삭제된 행이 사라져야 합니다.");
+
+                ServerSession partialRaidSession = CreateSensitiveSession(1, "partial-raid");
+                partialRaidSession.MapName = "PartialRaid";
+                RaidNoteRecord partialRaid = raidStore.CreateFor(partialRaidSession);
+                partialRaid.NoteText = "partial success";
+                raidStore.Save(partialRaidSession, partialRaid);
+                ServerSession partialReportSession = CreateSensitiveSession(1, "partial-report");
+                partialReportSession.MapName = "PartialReport";
+                UserReportMemoRecord partialReport = reportStore.CreateFor(partialReportSession);
+                partialReport.MemoText = "partial failure";
+                reportStore.Save(partialReportSession, partialReport);
+                refresh.PerformClick();
+                Application.DoEvents();
+                InvokePrivate(archive, "SetAllRowsChecked", false);
+                FindRowByMap(grid, "PartialRaid").Cells["selected"].Value = true;
+                FindRowByMap(grid, "PartialReport").Cells["selected"].Value = true;
+                object partialTargets = InvokePrivate(archive, "GetCheckedDeleteTargets");
+                string heldReportFolder = reportFolder + "-held";
+                Directory.Move(reportFolder, heldReportFolder);
+                File.WriteAllText(reportFolder, "This file temporarily blocks the report store.");
+                object partialResult;
+                try
+                {
+                    partialResult = InvokePrivate(
+                        archive,
+                        "DeleteRevalidatedTargets",
+                        partialTargets);
+                }
+                finally
+                {
+                    File.Delete(reportFolder);
+                    Directory.Move(heldReportFolder, reportFolder);
+                }
+                Assert(GetProperty<int>(partialResult, "SucceededCount") == 1
+                    && GetProperty<int>(partialResult, "FailedCount") == 1
+                    && GetProperty<int>(partialResult, "MissingCount") == 0,
+                    "한 저장소 확인 실패가 다른 저장소의 유효한 선택 삭제를 막으면 안 됩니다.");
+                Assert(!raidStore.Exists(partialRaid.Key) && reportStore.Exists(partialReport.Key),
+                    "부분 실패 시 성공 항목만 삭제하고 실패 저장소의 메모는 보존해야 합니다.");
+                archive.Close();
+            }
+        }
+
         private static void TestStructuredEditorAndEntryLimit(string testRoot)
         {
             string folder = Path.Combine(testRoot, "structured-ui");
@@ -308,6 +475,12 @@ namespace TarkovServerReporter.Tests
             using (var form = new UserReportMemoForm(legacySession, store))
             {
                 ShowOffScreen(form);
+                Assert(FindLabelContaining(
+                    form,
+                    "일반 레이드 메모와 함께 메모보관함에 저장됩니다.") != null,
+                    "유저신고 메모 안내는 일반 레이드 메모와 함께 보관됨을 설명해야 합니다.");
+                Assert(FindLabelContaining(form, "별도로 로컬에 저장됩니다.") == null,
+                    "유저신고 메모를 별도 보관함에 저장한다고 오해할 수 있는 안내가 남으면 안 됩니다.");
                 Assert(FindLabel(form, "1. 유저네임:") != null
                     && FindLabel(form, "신고사유:") != null,
                     "순번·유저네임·신고사유는 지울 수 없는 고정 라벨이어야 합니다.");
@@ -438,6 +611,41 @@ namespace TarkovServerReporter.Tests
             T value = field.GetValue(instance) as T;
             Assert(value != null, "테스트할 필드 값이 없습니다: " + name);
             return value;
+        }
+
+        private static object InvokePrivate(object instance, string name, params object[] arguments)
+        {
+            MethodInfo method = instance.GetType().GetMethod(
+                name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(method != null, "테스트할 메서드를 찾을 수 없습니다: " + name);
+            return method.Invoke(instance, arguments);
+        }
+
+        private static T GetProperty<T>(object instance, string name)
+        {
+            Assert(instance != null, "속성을 읽을 테스트 결과가 없습니다: " + name);
+            PropertyInfo property = instance.GetType().GetProperty(
+                name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert(property != null, "테스트할 속성을 찾을 수 없습니다: " + name);
+            return (T)property.GetValue(instance, null);
+        }
+
+        private static DataGridViewRow FindRowByMap(DataGridView grid, string mapName)
+        {
+            DataGridViewRow row = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(candidate =>
+                string.Equals(
+                    Convert.ToString(candidate.Cells["map"].Value),
+                    mapName,
+                    StringComparison.Ordinal));
+            Assert(row != null, "테스트할 메모 행을 찾을 수 없습니다: " + mapName);
+            return row;
+        }
+
+        private static bool IsChecked(DataGridViewRow row)
+        {
+            return row != null
+                && row.Cells["selected"].Value is bool
+                && (bool)row.Cells["selected"].Value;
         }
 
         private static bool IsLowerHex(char character)
