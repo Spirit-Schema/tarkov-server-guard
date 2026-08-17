@@ -1509,8 +1509,8 @@ namespace TarkovServerReporter.Tests
 
         private static void TestProductUserAgent()
         {
-            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.0",
-                "network requests use the v0.8.0 product user agent");
+            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.2",
+                "network requests use the v0.8.2 product user agent");
         }
 
         private static void TestGeoFormatting()
@@ -1672,6 +1672,11 @@ namespace TarkovServerReporter.Tests
 
         private static void TestRaidMetricPresentation()
         {
+            const string expectedMissingLogHelp =
+                "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
+            Assert(RaidMetricPresentation.MissingLogHelp == expectedMissingLogHelp,
+                "the missing-log help keeps the exact user-approved wording");
+
             Assert(RaidMetricPresentation.FormatActualRtt(null) == "-"
                 && RaidMetricPresentation.FormatPacketLoss(null) == "-",
                 "an unselected record keeps the neutral metric placeholder");

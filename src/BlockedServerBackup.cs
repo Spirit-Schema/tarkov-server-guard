@@ -12,6 +12,37 @@ using System.Web.Script.Serialization;
 
 namespace TarkovServerReporter
 {
+    internal static class BlockedServerBackupPresentation
+    {
+        internal static string CreateDefaultFileName(DateTime localTimestamp)
+        {
+            return "TarkovServerGuard-blocked-servers-"
+                + localTimestamp.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
+                + ".json";
+        }
+
+        internal static string CreateExportSuccessStatus(
+            int exportedCount,
+            int excludedCount,
+            string savedPath)
+        {
+            string fileName = Path.GetFileName(savedPath ?? string.Empty);
+            string status = string.Format(
+                CultureInfo.CurrentCulture,
+                "차단 서버 {0}개를 {1} 파일로 저장했습니다.",
+                exportedCount,
+                fileName);
+            if (excludedCount > 0)
+            {
+                status += string.Format(
+                    CultureInfo.CurrentCulture,
+                    " 공인 IPv4가 아닌 관리 규칙 {0}개는 제외했습니다.",
+                    excludedCount);
+            }
+            return status;
+        }
+    }
+
     public sealed class BlockedServerBackupEntry
     {
         public string IpAddress { get; set; }

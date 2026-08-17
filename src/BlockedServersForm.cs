@@ -2,6 +2,7 @@
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -30,9 +31,12 @@ namespace TarkovServerReporter
         private static readonly Color Surface = Color.FromArgb(30, 37, 45);
         private static readonly Color SurfaceAlt = Color.FromArgb(37, 45, 55);
         private static readonly Color Border = Color.FromArgb(57, 68, 80);
+        private static readonly Color HeaderBevelHighlight = Color.FromArgb(72, 82, 94);
+        private static readonly Color HeaderBevelShadow = Color.FromArgb(13, 17, 22);
         private static readonly Color TextPrimary = Color.FromArgb(232, 235, 238);
         private static readonly Color TextMuted = Color.FromArgb(158, 169, 180);
         private static readonly Color Accent = Color.FromArgb(232, 156, 55);
+        private static readonly Color SortArrowOrange = Color.FromArgb(232, 157, 54);
         private static readonly Color NoteOrange = Color.FromArgb(205, 132, 48);
         private static readonly Color Success = Color.FromArgb(68, 184, 121);
         private static readonly Color Danger = Color.FromArgb(224, 91, 91);
@@ -40,6 +44,7 @@ namespace TarkovServerReporter
         private readonly DataGridView _grid;
         private readonly Label _summaryLabel;
         private readonly Label _statusLabel;
+        private readonly Label _selectedCountLabel;
         private readonly Button _refreshButton;
         private readonly Button _removeSelectedButton;
         private readonly Button _removeAllButton;
@@ -47,12 +52,24 @@ namespace TarkovServerReporter
         private readonly Button _importButton;
         private readonly Button _closeButton;
         private bool _busy;
+        private bool _updatingSelections;
+        private string _blockedServerSortColumn;
+        private SortOrder _blockedServerSortOrder = SortOrder.None;
+        private readonly Dictionary<DataGridViewRow, int> _blockedServerOriginalOrder =
+            new Dictionary<DataGridViewRow, int>();
 
         private enum NoteEditorAction
         {
             None,
             Saved,
             Deleted
+        }
+
+        private enum HeaderSelectionState
+        {
+            None,
+            Partial,
+            All
         }
 
         private sealed class ContainedActionButtonColumn : DataGridViewButtonColumn
@@ -62,6 +79,140 @@ namespace TarkovServerReporter
                 CellTemplate = new ContainedActionButtonCell();
                 FlatStyle = FlatStyle.Flat;
                 SortMode = DataGridViewColumnSortMode.NotSortable;
+            }
+        }
+
+        private sealed class SelectionColumnHeaderCell : DataGridViewColumnHeaderCell
+        {
+            private int _selectedCount;
+            private int _totalCount;
+
+            internal void UpdateSelectionState(int selectedCount, int totalCount)
+            {
+                int normalizedSelected = Math.Max(0, selectedCount);
+                int normalizedTotal = Math.Max(0, totalCount);
+                bool changed = _selectedCount != normalizedSelected
+                    || _totalCount != normalizedTotal;
+                _selectedCount = normalizedSelected;
+                _totalCount = normalizedTotal;
+                if (changed && DataGridView != null)
+                    DataGridView.InvalidateCell(this);
+            }
+
+            internal HeaderSelectionState VisualState
+            {
+                get
+                {
+                    if (_totalCount > 0 && _selectedCount == _totalCount)
+                        return HeaderSelectionState.All;
+                    return _selectedCount > 0
+                        ? HeaderSelectionState.Partial
+                        : HeaderSelectionState.None;
+                }
+            }
+
+            internal string SelectionDescription
+            {
+                get
+                {
+                    string nextAction = _totalCount > 0 && _selectedCount == _totalCount
+                        ? "전체 해제"
+                        : "전체 선택";
+                    return string.Format(
+                        "차단 해제 대상을 고르는 체크박스 열입니다. 헤더를 누르면 {0}합니다. "
+                            + "현재 {1}개 중 {2}개가 선택되어 있습니다.",
+                        nextAction,
+                        _totalCount,
+                        _selectedCount);
+                }
+            }
+
+            internal string SelectionDefaultAction
+            {
+                get
+                {
+                    return _totalCount > 0 && _selectedCount == _totalCount
+                        ? "전체 해제"
+                        : "전체 선택";
+                }
+            }
+
+            internal AccessibleStates SelectionState
+            {
+                get
+                {
+                    if (_totalCount > 0 && _selectedCount == _totalCount)
+                        return AccessibleStates.Checked;
+                    if (_selectedCount > 0)
+                        return AccessibleStates.Mixed;
+                    return AccessibleStates.None;
+                }
+            }
+
+            protected override AccessibleObject CreateAccessibilityInstance()
+            {
+                return new SelectionColumnHeaderAccessibleObject(this);
+            }
+
+            private sealed class SelectionColumnHeaderAccessibleObject
+                : DataGridViewCellAccessibleObject
+            {
+                private readonly SelectionColumnHeaderCell _owner;
+
+                internal SelectionColumnHeaderAccessibleObject(SelectionColumnHeaderCell owner)
+                    : base(owner)
+                {
+                    _owner = owner;
+                }
+
+                public override string Name
+                {
+                    get { return "차단 서버 선택 열 헤더"; }
+                }
+
+                public override string Description
+                {
+                    get { return _owner.SelectionDescription; }
+                }
+
+                public override string DefaultAction
+                {
+                    get { return _owner.SelectionDefaultAction; }
+                }
+
+                public override AccessibleRole Role
+                {
+                    get { return AccessibleRole.ColumnHeader; }
+                }
+
+                public override AccessibleStates State
+                {
+                    get { return base.State | _owner.SelectionState; }
+                }
+            }
+        }
+
+        private sealed class BlockedServerRowComparer : IComparer
+        {
+            private readonly BlockedServersForm _owner;
+
+            internal BlockedServerRowComparer(BlockedServersForm owner)
+            {
+                _owner = owner;
+            }
+
+            public int Compare(object leftValue, object rightValue)
+            {
+                var left = leftValue as DataGridViewRow;
+                var right = rightValue as DataGridViewRow;
+                if (ReferenceEquals(left, right)) return 0;
+                if (left == null) return 1;
+                if (right == null) return -1;
+
+                int primary = _owner.CompareBlockedServerRows(left, right);
+                if (primary != 0) return primary;
+                return _owner.GetBlockedServerOriginalOrder(left)
+                    .CompareTo(_owner.GetBlockedServerOriginalOrder(right));
             }
         }
 
@@ -459,12 +610,30 @@ namespace TarkovServerReporter
             _refreshButton = CreateButton("새로고침", false);
             _exportButton = CreateButton("내보내기", false);
             _importButton = CreateButton("불러오기", false);
+            _selectedCountLabel = new Label
+            {
+                AutoSize = false,
+                Size = new Size(90, 32),
+                Margin = new Padding(8, 0, 0, 0),
+                Text = "선택 0개",
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = TextMuted,
+                AccessibleName = "선택된 차단 서버 수: 0개",
+                AccessibleDescription = "현재 차단 서버 0개 중 0개가 선택되어 있습니다."
+            };
+            _removeSelectedButton.AccessibleName = "선택 해제";
+            _removeSelectedButton.AccessibleDescription =
+                "선택한 서버의 Windows 방화벽 차단만 해제합니다.";
+            _removeAllButton.AccessibleName = "전체 해제";
+            _removeAllButton.AccessibleDescription =
+                "목록에 있는 모든 서버의 Windows 방화벽 차단을 해제합니다.";
             actions.Controls.Add(_closeButton);
             actions.Controls.Add(_removeAllButton);
             actions.Controls.Add(_removeSelectedButton);
             actions.Controls.Add(_refreshButton);
             actions.Controls.Add(_exportButton);
             actions.Controls.Add(_importButton);
+            actions.Controls.Add(_selectedCountLabel);
             root.Controls.Add(actions, 0, 3);
 
             _closeButton.Click += delegate { Close(); };
@@ -475,6 +644,7 @@ namespace TarkovServerReporter
             _importButton.Click += async delegate { await ImportBackupAsync(); };
             _grid.CellContentClick += GridCellContentClick;
             _grid.CellMouseClick += GridCellMouseClick;
+            _grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
             _grid.CellPainting += GridCellPainting;
             _grid.CellMouseMove += GridCellMouseMove;
             _grid.MouseLeave += delegate { _grid.Cursor = Cursors.Default; };
@@ -484,7 +654,10 @@ namespace TarkovServerReporter
                 if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewCheckBoxCell)
                     _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
-            _grid.CellValueChanged += delegate { UpdateButtons(); };
+            _grid.CellValueChanged += delegate
+            {
+                if (!_updatingSelections) UpdateButtons();
+            };
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
                 if (!_busy || e.CloseReason != CloseReason.UserClosing) return;
@@ -523,7 +696,12 @@ namespace TarkovServerReporter
                 MultiSelect = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 AutoGenerateColumns = false,
-                ReadOnly = false
+                ReadOnly = false,
+                AccessibleName = "차단 서버 목록",
+                AccessibleDescription =
+                    "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
+                        + "현재 차단 서버 0개 중 0개가 선택되어 있습니다. "
+                        + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다."
             };
             grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
@@ -547,9 +725,14 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewCheckBoxColumn
             {
                 Name = "selected",
-                HeaderText = "선택",
+                HeaderCell = new SelectionColumnHeaderCell
+                {
+                    ToolTipText = "차단 해제 대상을 전체 선택하거나 전체 해제합니다."
+                },
+                HeaderText = string.Empty,
                 Width = 54,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+                SortMode = DataGridViewColumnSortMode.NotSortable,
                 FlatStyle = FlatStyle.Flat
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
@@ -632,6 +815,16 @@ namespace TarkovServerReporter
             removeColumn.HeaderCell.Style.WrapMode = DataGridViewTriState.False;
             removeColumn.HeaderCell.Style.Padding = new Padding(0);
             grid.Columns.Add(removeColumn);
+            foreach (string sortableColumn in new[]
+            {
+                "ip", "status", "location", "blockedAt", "note", "kind"
+            })
+            {
+                DataGridViewColumn column = grid.Columns[sortableColumn];
+                column.SortMode = DataGridViewColumnSortMode.Programmatic;
+                column.HeaderCell.ToolTipText =
+                    "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.";
+            }
             grid.HandleCreated += delegate { ApplyGridDpiMetrics(grid); };
             grid.DpiChangedAfterParent += delegate { ApplyGridDpiMetrics(grid); };
             return grid;
@@ -704,6 +897,7 @@ namespace TarkovServerReporter
                 () => BlockedServerMetadataStore.LoadAll());
             if (IsDisposed) return;
 
+            _blockedServerOriginalOrder.Clear();
             _grid.Rows.Clear();
             if (!result.Success)
             {
@@ -727,9 +921,12 @@ namespace TarkovServerReporter
                     "해제");
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = server;
+                _blockedServerOriginalOrder[row] = index;
                 row.Cells["status"].Style.ForeColor = Danger;
                 UpdateNoteCell(row, metadata == null ? null : metadata.Note);
             }
+
+            ApplyBlockedServerSort();
 
             _summaryLabel.Text = result.Servers.Count == 0
                 ? "현재 앱이 관리하는 차단 서버가 없습니다."
@@ -765,8 +962,53 @@ namespace TarkovServerReporter
                 ShowNoteEditor(_grid.Rows[e.RowIndex]);
         }
 
+        private void GridColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (_busy || e.Button != MouseButtons.Left || e.ColumnIndex < 0) return;
+            DataGridViewColumn column = _grid.Columns[e.ColumnIndex];
+            if (column.Name == "selected")
+            {
+                bool allSelected = _grid.Rows.Count > 0
+                    && _grid.Rows.Cast<DataGridViewRow>().All(IsRowSelected);
+                SetAllSelections(!allSelected);
+                return;
+            }
+            if (column.SortMode != DataGridViewColumnSortMode.Programmatic) return;
+
+            if (string.Equals(
+                _blockedServerSortColumn,
+                column.Name,
+                StringComparison.Ordinal))
+            {
+                if (_blockedServerSortOrder == SortOrder.Ascending)
+                {
+                    _blockedServerSortOrder = SortOrder.Descending;
+                }
+                else
+                {
+                    _blockedServerSortColumn = null;
+                    _blockedServerSortOrder = SortOrder.None;
+                }
+            }
+            else
+            {
+                _blockedServerSortColumn = column.Name;
+                _blockedServerSortOrder = SortOrder.Ascending;
+            }
+
+            ApplyBlockedServerSort();
+        }
+
         private void GridKeyDown(object sender, KeyEventArgs e)
         {
+            if (!_busy && e.Control && e.KeyCode == Keys.A)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                SetAllSelections(true);
+                return;
+            }
+
             if (_busy || _grid.CurrentCell == null
                 || _grid.CurrentCell.RowIndex < 0
                 || _grid.CurrentCell.OwningColumn == null
@@ -779,19 +1021,184 @@ namespace TarkovServerReporter
             ShowNoteEditor(_grid.Rows[_grid.CurrentCell.RowIndex]);
         }
 
+        private static bool IsRowSelected(DataGridViewRow row)
+        {
+            return row != null
+                && Convert.ToBoolean(row.Cells["selected"].Value ?? false);
+        }
+
+        private void SetAllSelections(bool selected)
+        {
+            if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewCheckBoxCell)
+                _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            _grid.EndEdit();
+
+            _updatingSelections = true;
+            try
+            {
+                foreach (DataGridViewRow row in _grid.Rows)
+                {
+                    DataGridViewCell cell = row.Cells["selected"];
+                    if (Convert.ToBoolean(cell.Value ?? false) != selected)
+                        cell.Value = selected;
+                }
+            }
+            finally
+            {
+                _updatingSelections = false;
+            }
+
+            _grid.InvalidateColumn(_grid.Columns["selected"].Index);
+            if (_grid.CurrentCell != null)
+                _grid.InvalidateCell(_grid.CurrentCell);
+            UpdateButtons();
+        }
+
+        private void ApplyBlockedServerSort()
+        {
+            if (_grid == null) return;
+            if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewCheckBoxCell)
+                _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            _grid.EndEdit();
+            CaptureMissingBlockedServerOriginalOrder();
+            if (_grid.Rows.Count > 1)
+                _grid.Sort(new BlockedServerRowComparer(this));
+            UpdateBlockedServerSortGlyph();
+        }
+
+        private void CaptureMissingBlockedServerOriginalOrder()
+        {
+            int nextOrder = _blockedServerOriginalOrder.Count == 0
+                ? 0
+                : _blockedServerOriginalOrder.Values.Max() + 1;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                if (_blockedServerOriginalOrder.ContainsKey(row)) continue;
+                _blockedServerOriginalOrder[row] = nextOrder++;
+            }
+        }
+
+        private int GetBlockedServerOriginalOrder(DataGridViewRow row)
+        {
+            int order;
+            return row != null && _blockedServerOriginalOrder.TryGetValue(row, out order)
+                ? order
+                : int.MaxValue;
+        }
+
+        private int CompareBlockedServerRows(DataGridViewRow left, DataGridViewRow right)
+        {
+            if (string.IsNullOrWhiteSpace(_blockedServerSortColumn)
+                || _blockedServerSortOrder == SortOrder.None)
+                return 0;
+
+            bool leftKnown;
+            bool rightKnown;
+            int primary;
+            if (_blockedServerSortColumn == "note")
+            {
+                leftKnown = true;
+                rightKnown = true;
+                bool leftHasNote = left.Cells["note"].Tag is bool
+                    && (bool)left.Cells["note"].Tag;
+                bool rightHasNote = right.Cells["note"].Tag is bool
+                    && (bool)right.Cells["note"].Tag;
+                primary = leftHasNote.CompareTo(rightHasNote);
+            }
+            else if (_blockedServerSortColumn == "blockedAt")
+            {
+                DateTime leftDate;
+                DateTime rightDate;
+                leftKnown = DateTime.TryParse(
+                    Convert.ToString(left.Cells["blockedAt"].Value),
+                    out leftDate);
+                rightKnown = DateTime.TryParse(
+                    Convert.ToString(right.Cells["blockedAt"].Value),
+                    out rightDate);
+                primary = leftDate.CompareTo(rightDate);
+            }
+            else
+            {
+                string leftText = GetBlockedServerSortText(left, _blockedServerSortColumn);
+                string rightText = GetBlockedServerSortText(right, _blockedServerSortColumn);
+                leftKnown = !string.IsNullOrEmpty(leftText);
+                rightKnown = !string.IsNullOrEmpty(rightText);
+                primary = StringComparer.CurrentCultureIgnoreCase.Compare(leftText, rightText);
+            }
+
+            if (leftKnown != rightKnown) return leftKnown ? -1 : 1;
+            if (!leftKnown || primary == 0) return 0;
+            int normalized = primary < 0 ? -1 : 1;
+            return _blockedServerSortOrder == SortOrder.Descending
+                ? -normalized
+                : normalized;
+        }
+
+        private static string GetBlockedServerSortText(
+            DataGridViewRow row,
+            string columnName)
+        {
+            if (row == null || string.IsNullOrWhiteSpace(columnName)
+                || !row.DataGridView.Columns.Contains(columnName))
+                return string.Empty;
+            string value = Convert.ToString(row.Cells[columnName].Value);
+            if (string.IsNullOrWhiteSpace(value)
+                || value == "-"
+                || value == "확인 안 됨")
+                return string.Empty;
+            return value.Trim();
+        }
+
+        private void UpdateBlockedServerSortGlyph()
+        {
+            foreach (DataGridViewColumn column in _grid.Columns)
+                column.HeaderCell.SortGlyphDirection = SortOrder.None;
+            if (!string.IsNullOrWhiteSpace(_blockedServerSortColumn)
+                && _blockedServerSortOrder != SortOrder.None
+                && _grid.Columns.Contains(_blockedServerSortColumn))
+            {
+                _grid.Columns[_blockedServerSortColumn].HeaderCell.SortGlyphDirection =
+                    _blockedServerSortOrder;
+            }
+            _grid.Invalidate();
+        }
+
         private void GridCellMouseMove(object sender, DataGridViewCellMouseEventArgs e)
         {
-            bool interactive = !_busy && e.RowIndex >= 0 && e.ColumnIndex >= 0
+            bool interactiveBodyCell = !_busy
+                && e.RowIndex >= 0
+                && e.ColumnIndex >= 0
                 && (_grid.Columns[e.ColumnIndex].Name == "note"
                     || _grid.Columns[e.ColumnIndex].Name == "remove");
-            _grid.Cursor = interactive ? Cursors.Hand : Cursors.Default;
+            _grid.Cursor = interactiveBodyCell ? Cursors.Hand : Cursors.Default;
         }
 
         private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex < 0
-                || _grid.Columns[e.ColumnIndex].Name != "note")
+            if (e.ColumnIndex < 0) return;
+            if (e.RowIndex == -1)
+            {
+                DataGridViewColumn column = _grid.Columns[e.ColumnIndex];
+                SortOrder sortOrder = column.SortMode == DataGridViewColumnSortMode.Programmatic
+                    && string.Equals(
+                        _blockedServerSortColumn,
+                        column.Name,
+                        StringComparison.Ordinal)
+                    ? _blockedServerSortOrder
+                    : SortOrder.None;
+                PaintDarkGridHeader(e, sortOrder);
+                var selectionHeader = column.HeaderCell as SelectionColumnHeaderCell;
+                if (selectionHeader != null)
+                {
+                    PaintSelectionHeaderCheckBox(
+                        e.Graphics,
+                        e.CellBounds,
+                        selectionHeader.VisualState,
+                        _grid.Enabled);
+                }
                 return;
+            }
+            if (_grid.Columns[e.ColumnIndex].Name != "note") return;
 
             Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
             if (clip.Width <= 0 || clip.Height <= 0)
@@ -836,6 +1243,246 @@ namespace TarkovServerReporter
             {
                 e.Graphics.Restore(state);
                 e.Handled = true;
+            }
+        }
+
+        private static void PaintDarkGridHeader(
+            DataGridViewCellPaintingEventArgs e,
+            SortOrder sortOrder)
+        {
+            Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
+            if (clip.Width <= 0 || clip.Height <= 0)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            GraphicsState state = e.Graphics.Save();
+            try
+            {
+                e.Graphics.SetClip(clip);
+                using (var background = new SolidBrush(SurfaceAlt))
+                    e.Graphics.FillRectangle(background, e.CellBounds);
+                using (var highlight = new Pen(HeaderBevelHighlight))
+                using (var shadow = new Pen(HeaderBevelShadow))
+                {
+                    int right = e.CellBounds.Right - 1;
+                    int bottom = e.CellBounds.Bottom - 1;
+                    e.Graphics.DrawLine(
+                        highlight,
+                        e.CellBounds.Left,
+                        e.CellBounds.Top,
+                        right,
+                        e.CellBounds.Top);
+                    e.Graphics.DrawLine(
+                        highlight,
+                        e.CellBounds.Left,
+                        e.CellBounds.Top,
+                        e.CellBounds.Left,
+                        bottom);
+                    e.Graphics.DrawLine(
+                        shadow,
+                        e.CellBounds.Left,
+                        bottom,
+                        right,
+                        bottom);
+                    e.Graphics.DrawLine(shadow, right, e.CellBounds.Top, right, bottom);
+                }
+
+                bool active = sortOrder != SortOrder.None;
+                float scale = Math.Max(1F, e.Graphics.DpiX / 96F);
+                int edgePadding = Math.Max(4, (int)Math.Round(4F * scale));
+                int arrowWidth = Math.Max(7, (int)Math.Round(7F * scale));
+                int arrowHeight = Math.Max(5, (int)Math.Round(5F * scale));
+                int arrowGap = Math.Max(4, (int)Math.Round(4F * scale));
+                Rectangle textBounds = new Rectangle(
+                    e.CellBounds.Left + edgePadding,
+                    e.CellBounds.Top + 2,
+                    Math.Max(1, e.CellBounds.Width - edgePadding * 2),
+                    Math.Max(1, e.CellBounds.Height - 4));
+                Rectangle arrowBounds = Rectangle.Empty;
+                if (active)
+                {
+                    arrowBounds = new Rectangle(
+                        e.CellBounds.Right - edgePadding - arrowWidth,
+                        e.CellBounds.Top + (e.CellBounds.Height - arrowHeight) / 2,
+                        arrowWidth,
+                        arrowHeight);
+                    textBounds.Width = Math.Max(
+                        1,
+                        arrowBounds.Left - arrowGap - textBounds.Left);
+                }
+
+                TextFormatFlags flags = TextFormatFlags.NoPrefix
+                    | TextFormatFlags.EndEllipsis
+                    | TextFormatFlags.VerticalCenter
+                    | TextFormatFlags.PreserveGraphicsClipping;
+                switch (e.CellStyle.Alignment)
+                {
+                    case DataGridViewContentAlignment.BottomCenter:
+                    case DataGridViewContentAlignment.MiddleCenter:
+                    case DataGridViewContentAlignment.TopCenter:
+                        flags |= TextFormatFlags.HorizontalCenter;
+                        break;
+                    case DataGridViewContentAlignment.BottomRight:
+                    case DataGridViewContentAlignment.MiddleRight:
+                    case DataGridViewContentAlignment.TopRight:
+                        flags |= TextFormatFlags.Right;
+                        break;
+                    default:
+                        flags |= TextFormatFlags.Left;
+                        break;
+                }
+                string headerText = Convert.ToString(e.FormattedValue) ?? string.Empty;
+                string[] fixedLines = headerText
+                    .Replace("\r\n", "\n")
+                    .Replace('\r', '\n')
+                    .Split(new[] { '\n' }, StringSplitOptions.None);
+                if (fixedLines.Length > 1)
+                {
+                    TextFormatFlags lineFlags = flags | TextFormatFlags.SingleLine;
+                    int lineHeight = Math.Max(1, TextRenderer.MeasureText(
+                        e.Graphics,
+                        "가A",
+                        e.CellStyle.Font,
+                        Size.Empty,
+                        TextFormatFlags.NoPrefix
+                            | TextFormatFlags.NoPadding
+                            | TextFormatFlags.SingleLine).Height);
+                    int blockHeight = Math.Min(
+                        textBounds.Height,
+                        lineHeight * fixedLines.Length);
+                    int lineTop = textBounds.Top
+                        + Math.Max(0, (textBounds.Height - blockHeight) / 2);
+                    for (int lineIndex = 0; lineIndex < fixedLines.Length; lineIndex++)
+                    {
+                        int top = lineTop + lineIndex * lineHeight;
+                        if (top >= textBounds.Bottom) break;
+                        TextRenderer.DrawText(
+                            e.Graphics,
+                            fixedLines[lineIndex],
+                            e.CellStyle.Font,
+                            new Rectangle(
+                                textBounds.Left,
+                                top,
+                                textBounds.Width,
+                                Math.Min(lineHeight, textBounds.Bottom - top)),
+                            e.CellStyle.ForeColor,
+                            lineFlags);
+                    }
+                }
+                else
+                {
+                    TextFormatFlags singleLineFlags =
+                        e.CellStyle.WrapMode == DataGridViewTriState.True
+                            ? flags | TextFormatFlags.WordBreak
+                            : flags | TextFormatFlags.SingleLine;
+                    TextRenderer.DrawText(
+                        e.Graphics,
+                        headerText,
+                        e.CellStyle.Font,
+                        textBounds,
+                        e.CellStyle.ForeColor,
+                        singleLineFlags);
+                }
+
+                if (active)
+                {
+                    Point[] points = sortOrder == SortOrder.Ascending
+                        ? new[]
+                        {
+                            new Point(
+                                arrowBounds.Left + arrowBounds.Width / 2,
+                                arrowBounds.Top),
+                            new Point(arrowBounds.Left, arrowBounds.Bottom - 1),
+                            new Point(arrowBounds.Right - 1, arrowBounds.Bottom - 1)
+                        }
+                        : new[]
+                        {
+                            new Point(arrowBounds.Left, arrowBounds.Top),
+                            new Point(arrowBounds.Right - 1, arrowBounds.Top),
+                            new Point(
+                                arrowBounds.Left + arrowBounds.Width / 2,
+                                arrowBounds.Bottom - 1)
+                        };
+                    using (var arrowBrush = new SolidBrush(SortArrowOrange))
+                        e.Graphics.FillPolygon(arrowBrush, points);
+                }
+            }
+            finally
+            {
+                e.Graphics.Restore(state);
+                e.Handled = true;
+            }
+        }
+
+        private static void PaintSelectionHeaderCheckBox(
+            Graphics graphics,
+            Rectangle cellBounds,
+            HeaderSelectionState state,
+            bool enabled)
+        {
+            float scale = Math.Max(1F, graphics.DpiX / 96F);
+            int size = Math.Max(15, (int)Math.Round(16F * scale));
+            Rectangle box = new Rectangle(
+                cellBounds.Left + (cellBounds.Width - size) / 2,
+                cellBounds.Top + (cellBounds.Height - size) / 2,
+                size,
+                size);
+            Color outlineColor = enabled ? TextMuted : Border;
+            Color fillColor = state == HeaderSelectionState.None
+                ? Surface
+                : enabled ? Accent : Border;
+            using (var fill = new SolidBrush(fillColor))
+            using (var outline = new Pen(outlineColor, Math.Max(1F, scale)))
+            {
+                graphics.FillRectangle(fill, box);
+                graphics.DrawRectangle(
+                    outline,
+                    box.Left,
+                    box.Top,
+                    box.Width - 1,
+                    box.Height - 1);
+            }
+
+            if (state == HeaderSelectionState.None) return;
+            Color markColor = enabled ? Background : TextMuted;
+            SmoothingMode oldMode = graphics.SmoothingMode;
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            try
+            {
+                using (var mark = new Pen(
+                    markColor,
+                    Math.Max(2F, 2.2F * scale)))
+                {
+                    mark.StartCap = LineCap.Round;
+                    mark.EndCap = LineCap.Round;
+                    if (state == HeaderSelectionState.Partial)
+                    {
+                        int y = box.Top + box.Height / 2;
+                        graphics.DrawLine(
+                            mark,
+                            box.Left + Math.Max(3, size / 4),
+                            y,
+                            box.Right - Math.Max(3, size / 4) - 1,
+                            y);
+                    }
+                    else
+                    {
+                        graphics.DrawLines(
+                            mark,
+                            new[]
+                            {
+                                new Point(box.Left + size / 5, box.Top + size / 2),
+                                new Point(box.Left + size * 2 / 5, box.Top + size * 7 / 10),
+                                new Point(box.Left + size * 4 / 5, box.Top + size * 3 / 10)
+                            });
+                    }
+                }
+            }
+            finally
+            {
+                graphics.SmoothingMode = oldMode;
             }
         }
 
@@ -887,6 +1534,9 @@ namespace TarkovServerReporter
             records = BlockedServerMetadataStore.LoadAll();
             records.TryGetValue(server.IpAddress, out metadata);
             UpdateNoteCell(row, metadata == null ? null : metadata.Note);
+            if (_blockedServerSortColumn == "note"
+                && _blockedServerSortOrder != SortOrder.None)
+                ApplyBlockedServerSort();
             _statusLabel.ForeColor = Success;
             _statusLabel.Text = metadata == null || string.IsNullOrWhiteSpace(metadata.Note)
                 ? server.IpAddress + " 서버의 차단 메모를 삭제했습니다."
@@ -917,8 +1567,7 @@ namespace TarkovServerReporter
                 DefaultExt = "json",
                 AddExtension = true,
                 OverwritePrompt = true,
-                FileName = "TarkovServerGuard-blocked-servers-"
-                    + DateTime.Now.ToString("yyyyMMdd") + ".json"
+                FileName = BlockedServerBackupPresentation.CreateDefaultFileName(DateTime.Now)
             })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
@@ -971,10 +1620,10 @@ namespace TarkovServerReporter
             }
             if (IsDisposed) return;
 
-            string status = string.Format("차단 서버 {0}개를 백업 파일로 저장했습니다.", export.Entries.Count);
-            if (export.ExcludedAddresses.Count > 0)
-                status += string.Format(" 공인 IPv4가 아닌 관리 규칙 {0}개는 제외했습니다.",
-                    export.ExcludedAddresses.Count);
+            string status = BlockedServerBackupPresentation.CreateExportSuccessStatus(
+                export.Entries.Count,
+                export.ExcludedAddresses.Count,
+                selectedPath);
             SetBusy(false, status);
             _statusLabel.ForeColor = export.ExcludedAddresses.Count == 0 ? Success : Color.FromArgb(231, 184, 73);
         }
@@ -1303,7 +1952,26 @@ namespace TarkovServerReporter
         private void UpdateButtons()
         {
             int count = _grid == null ? 0 : _grid.Rows.Count;
-            bool hasSelected = !_busy && count > 0 && GetSelectedAddresses().Count > 0;
+            int selectedCount = count == 0 ? 0 : GetSelectedAddresses().Count;
+            bool hasSelected = !_busy && selectedCount > 0;
+            _selectedCountLabel.Text = string.Format("선택 {0}개", selectedCount);
+            _selectedCountLabel.ForeColor = selectedCount > 0 ? Accent : TextMuted;
+            _selectedCountLabel.AccessibleName =
+                string.Format("선택된 차단 서버 수: {0}개", selectedCount);
+            _selectedCountLabel.AccessibleDescription = string.Format(
+                "현재 차단 서버 {0}개 중 {1}개가 선택되어 있습니다.",
+                count,
+                selectedCount);
+            _grid.AccessibleDescription = string.Format(
+                "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
+                    + "현재 차단 서버 {0}개 중 {1}개가 선택되어 있습니다. "
+                    + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다.",
+                count,
+                selectedCount);
+            var selectionHeader = _grid.Columns["selected"].HeaderCell
+                as SelectionColumnHeaderCell;
+            if (selectionHeader != null)
+                selectionHeader.UpdateSelectionState(selectedCount, count);
             _refreshButton.Enabled = !_busy;
             _removeSelectedButton.Enabled = hasSelected;
             _removeSelectedButton.BackColor = hasSelected ? Success : SurfaceAlt;

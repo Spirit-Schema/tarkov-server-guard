@@ -36,11 +36,25 @@ namespace TarkovServerReporter.Tests
 
         private static void TestBundledNotes()
         {
-            ReleaseNotesEntry current = ReleaseNotesCatalog.FindBundled("v0.8.0");
-            Assert(current != null && current.VersionText == "0.8.0",
-                "The v0.8.0 bundled completion notes are missing.");
-            Assert(current.NotesText.Contains("GameStarted real"),
-                "The bundled completion notes lost a required improvement.");
+            ReleaseNotesEntry current = ReleaseNotesCatalog.FindBundled("v0.8.2");
+            Assert(current != null && current.VersionText == "0.8.2",
+                "The v0.8.2 bundled completion notes are missing.");
+            Assert(current.NotesText.Contains("세로 위치를 중단")
+                && current.NotesText.Contains("하나의 파일")
+                && current.NotesText.Contains("없는 메모만")
+                && current.NotesText.Contains("로컬 이미지 연결 경로"),
+                "The v0.8.2 bundled completion notes lost a required improvement.");
+
+            ReleaseNotesEntry previous = ReleaseNotesCatalog.FindBundled("v0.8.1");
+            Assert(previous != null && previous.VersionText == "0.8.1",
+                "The retained v0.8.1 bundled completion notes are missing.");
+            Assert(previous.NotesText.Contains("로그 없음")
+                && previous.NotesText.Contains("Ctrl+A")
+                && previous.NotesText.Contains("저장 시간")
+                && previous.NotesText.Contains("화면 읽기 프로그램")
+                && previous.NotesText.Contains("3단계 정렬")
+                && previous.NotesText.Contains("주황색 방향 표시"),
+                "The retained v0.8.1 notes lost a required improvement.");
             Assert(ReleaseNotesCatalog.FindBundled("0.7.5") == null,
                 "An older or unknown version must not borrow the current notes.");
             string bounded = ReleaseNotesCatalog.NormalizeNotesText(
@@ -63,23 +77,23 @@ namespace TarkovServerReporter.Tests
         {
             WithTemporaryRoot(delegate(string root)
             {
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.0"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
                     "The after-update marker was not recorded.");
                 string claimed;
-                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed)
-                    && claimed == "0.8.0",
+                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed)
+                    && claimed == "0.8.1",
                     "The matching completed update was not claimed.");
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "The same update notice was displayed more than once.");
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.0"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
                     "Replaying the same Velopack hook should remain harmless.");
                 Assert(!File.Exists(Path.Combine(root, UpdateCompletionNotice.PendingFileName)),
                     "An acknowledged version was queued again.");
 
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.2"),
                     "A later version was not queued independently.");
-                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed)
-                    && claimed == "0.8.1",
+                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.2", out claimed)
+                    && claimed == "0.8.2",
                     "A later version did not receive its own one-time claim.");
             });
         }
@@ -89,13 +103,13 @@ namespace TarkovServerReporter.Tests
             WithTemporaryRoot(delegate(string root)
             {
                 string claimed;
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "A fresh install without after-update evidence displayed notes.");
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.0"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
                     "The fixture marker was not recorded.");
                 Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.7.5", out claimed),
                     "A different running version consumed the update notice.");
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "A stale mismatched marker survived for a later fresh install.");
             });
         }
@@ -104,15 +118,15 @@ namespace TarkovServerReporter.Tests
         {
             WithTemporaryRoot(delegate(string root)
             {
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.0"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
                     "The fixture marker was not recorded.");
                 Directory.CreateDirectory(Path.Combine(root, UpdateCompletionNotice.ConsumedFileName));
                 string claimed;
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "A notice was shown without first persisting its consumed receipt.");
                 Assert(!File.Exists(Path.Combine(root, UpdateCompletionNotice.PendingFileName)),
                     "A failed receipt write left an endlessly repeating pending marker.");
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "The failed receipt policy retried a possibly displayed notice.");
             });
         }
@@ -124,11 +138,11 @@ namespace TarkovServerReporter.Tests
                 string pending = Path.Combine(root, UpdateCompletionNotice.PendingFileName);
                 File.WriteAllText(pending, "{not-json}");
                 string claimed;
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "A corrupt local marker enabled the completion dialog.");
 
                 File.WriteAllText(pending, new string('x', 5000));
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.0", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
                     "An oversized local marker enabled the completion dialog.");
             });
         }
@@ -136,7 +150,7 @@ namespace TarkovServerReporter.Tests
         private static void TestCompletionDialog()
         {
             using (var form = new PatchNotesForm(
-                ReleaseNotesCatalog.FindBundled("0.8.0")))
+                ReleaseNotesCatalog.FindBundled("0.8.2")))
             {
                 Button[] buttons = Descendants(form).OfType<Button>().ToArray();
                 Assert(buttons.Length == 1 && buttons[0].Text == "확인",
@@ -161,7 +175,7 @@ namespace TarkovServerReporter.Tests
 
         private static void TestUpdatePrompt()
         {
-            using (var form = new UpdatePromptForm("0.8.1"))
+            using (var form = new UpdatePromptForm("0.8.2"))
             {
                 string[] labels = Descendants(form)
                     .OfType<Button>()

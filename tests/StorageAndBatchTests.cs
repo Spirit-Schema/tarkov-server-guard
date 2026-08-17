@@ -25,6 +25,7 @@ namespace TarkovServerReporter.Tests
                 TestMetadataRoundTripAndBackupRecovery(temporaryRoot);
                 TestMetadataMutationFailClosed(temporaryRoot);
                 TestBackupExportImportAndPrivacy();
+                TestBackupFileNameAndSuccessStatus();
                 TestEmptyBackupExportDoesNotOverwrite(temporaryRoot);
                 TestAtomicBackupWrite(temporaryRoot);
                 TestBackupValidationAndPreview();
@@ -377,6 +378,22 @@ namespace TarkovServerReporter.Tests
                 metadata);
             Assert(repeated.Success && exported.Utf8Bytes.SequenceEqual(repeated.Utf8Bytes),
                 "backup bytes are deterministic regardless of managed-rule enumeration order");
+        }
+
+        private static void TestBackupFileNameAndSuccessStatus()
+        {
+            DateTime localTimestamp = new DateTime(2026, 8, 17, 15, 30, 12, DateTimeKind.Local);
+            string fileName = BlockedServerBackupPresentation.CreateDefaultFileName(localTimestamp);
+            Assert(fileName == "TarkovServerGuard-blocked-servers-20260817-153012.json",
+                "backup default filename includes local date and time down to seconds");
+
+            string savedPath = Path.Combine("C:\\Users\\example\\Desktop", fileName);
+            string status = BlockedServerBackupPresentation.CreateExportSuccessStatus(3, 1, savedPath);
+            Assert(status.Contains(fileName)
+                && !status.Contains("C:\\Users\\example")
+                && status.Contains("3개")
+                && status.Contains("1개는 제외"),
+                "backup success status reports the actual filename without exposing its absolute path");
         }
 
         private static void TestEmptyBackupExportDoesNotOverwrite(string temporaryRoot)

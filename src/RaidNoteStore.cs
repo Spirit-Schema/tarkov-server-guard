@@ -23,6 +23,7 @@ namespace TarkovServerReporter
 
         public string Key { get; set; }
         public string Game { get; set; }
+        public string GameType { get; set; }
         public DateTime RaidStartedUtc { get; set; }
         public string MapName { get; set; }
         public string NoteText { get; set; }
@@ -39,7 +40,16 @@ namespace TarkovServerReporter
     public sealed class RaidNoteStore
     {
         internal const string LegacyDefaultNoteTemplate = "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n유저닉네임\r\n1.\r\n2.\r\n3.";
+        internal const int MaximumScreenshotPathCount = 100;
+        internal const int MaximumScreenshotPathLength = 2048;
         private const int MaximumJsonLength = 2 * 1024 * 1024;
+        private static readonly HashSet<string> SupportedScreenshotExtensions =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"
+            };
+        private static readonly char[] InvalidScreenshotFileNameCharacters =
+            Path.GetInvalidFileNameChars();
         private readonly object _sync = new object();
         private readonly JavaScriptSerializer _serializer = new JavaScriptSerializer();
         private readonly string _notesFolder;
@@ -197,6 +207,7 @@ namespace TarkovServerReporter
             {
                 Key = CreateStableKey(session),
                 Game = session.GameDisplayName,
+                GameType = Limit(GetSessionGameType(session), 64),
                 RaidStartedUtc = NormalizeDate(session.SessionStarted),
                 MapName = Limit(session.MapName, 256),
                 CreatedUtc = now,
@@ -215,6 +226,56 @@ namespace TarkovServerReporter
         public void Save(string key, RaidNoteRecord record)
         {
             Save(key, record, null);
+        }
+
+        /// <summary>
+        /// Restores a validated portable-backup record only when neither the primary nor
+        /// fallback record already exists. The final File.Move is create-only, so a race
+        /// with another store instance or process never replaces an existing primary.
+        /// Validated screenshot link strings are preserved without requiring the linked
+        /// files to exist on this PC. Screenshot file contents are never read here.
+        /// </summary>
+        public bool TryRestoreMissing(string key, RaidNoteRecord record)
+        {
+            ValidateKey(key);
+            if (record == null) throw new ArgumentNullException("record");
+            RaidNoteRecord normalized = NormalizeRestoredRecord(key, record);
+            string json = _serializer.Serialize(normalized);
+            if (json.Length <= 0 || json.Length > MaximumJsonLength)
+                throw new InvalidOperationException("복원할 메모 데이터가 허용 크기를 초과했습니다.");
+
+            bool saved = false;
+            lock (_sync)
+            {
+                EnsureFolder();
+                string target = GetPath(key);
+                string backup = GetBackupPath(key);
+                if (File.Exists(target) || File.Exists(backup)) return false;
+
+                string temporary = target + ".restore." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    WriteDurably(temporary, json);
+                    if (File.Exists(target) || File.Exists(backup)) return false;
+                    try
+                    {
+                        File.Move(temporary, target);
+                        saved = true;
+                    }
+                    catch (IOException)
+                    {
+                        if (File.Exists(target) || File.Exists(backup)) return false;
+                        throw;
+                    }
+                }
+                finally
+                {
+                    DeleteIfPresent(temporary);
+                }
+            }
+
+            if (saved) CopyRecordValues(normalized, record);
+            return saved;
         }
 
         public void Delete(ServerSession session)
@@ -279,17 +340,42 @@ namespace TarkovServerReporter
             {
                 Key = key,
                 Game = Limit(session == null ? record.Game : session.GameDisplayName, 32),
+                GameType = Limit(
+                    session == null ? record.GameType : GetSessionGameType(session),
+                    64),
                 RaidStartedUtc = session == null
                     ? NormalizeDate(record.RaidStartedUtc)
                     : NormalizeDate(session.SessionStarted),
                 MapName = Limit(session == null ? record.MapName : session.MapName, 256),
                 NoteText = Limit(NormalizeLegacyNoteText(record.NoteText), 200000),
-                ScreenshotPaths = NormalizePaths(record.ScreenshotPaths, 100),
+                ScreenshotPaths = NormalizePaths(
+                    record.ScreenshotPaths,
+                    MaximumScreenshotPathCount),
                 Tags = NormalizeList(record.Tags, 100, 64, true),
                 CreatedUtc = created,
                 UpdatedUtc = now
             };
             return normalized;
+        }
+
+        private static RaidNoteRecord NormalizeRestoredRecord(string key, RaidNoteRecord record)
+        {
+            if (record.CreatedUtc == default(DateTime)
+                || record.UpdatedUtc == default(DateTime))
+                throw new InvalidOperationException("복원할 메모 시각이 올바르지 않습니다.");
+            return new RaidNoteRecord
+            {
+                Key = key.ToLowerInvariant(),
+                Game = Limit(record.Game, 32),
+                GameType = Limit(record.GameType, 64),
+                RaidStartedUtc = NormalizeDate(record.RaidStartedUtc),
+                MapName = Limit(record.MapName, 256),
+                NoteText = Limit(NormalizeLegacyNoteText(record.NoteText), 200000),
+                ScreenshotPaths = CopyValidatedRestoredPaths(record.ScreenshotPaths),
+                Tags = NormalizeList(record.Tags, 100, 64, true),
+                CreatedUtc = NormalizeDate(record.CreatedUtc),
+                UpdatedUtc = NormalizeDate(record.UpdatedUtc)
+            };
         }
 
         private RaidNoteRecord TryRead(string path, string expectedKey)
@@ -313,6 +399,7 @@ namespace TarkovServerReporter
                     return null;
                 record.ScreenshotPaths = record.ScreenshotPaths ?? new List<string>();
                 record.Tags = record.Tags ?? new List<string>();
+                record.GameType = Limit(record.GameType, 64);
                 record.NoteText = NormalizeLegacyNoteText(record.NoteText);
                 return record;
             }
@@ -355,16 +442,128 @@ namespace TarkovServerReporter
                 try { path = Path.GetFullPath(value.Trim().Trim('"')); }
                 catch { continue; }
                 if (!seen.Add(path)) continue;
-                result.Add(Limit(path, 2048));
+                result.Add(Limit(path, MaximumScreenshotPathLength));
                 if (result.Count >= maximumItems) break;
             }
             return result;
+        }
+
+        private static List<string> CopyValidatedRestoredPaths(IEnumerable<string> values)
+        {
+            var result = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (values == null) return result;
+            foreach (string value in values)
+            {
+                if (string.IsNullOrWhiteSpace(value)
+                    || value.Length > MaximumScreenshotPathLength
+                    || !HasValidUnicode(value)
+                    || !IsSafeScreenshotAttachmentPath(value)
+                    || !seen.Add(value))
+                    throw new InvalidOperationException(
+                        "복원할 스크린샷 연결 정보가 올바르지 않습니다.");
+                result.Add(value);
+                if (result.Count > MaximumScreenshotPathCount)
+                    throw new InvalidOperationException(
+                        "복원할 스크린샷 연결 수가 허용 한도를 초과했습니다.");
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Checks the lexical contract for a local screenshot attachment. It intentionally
+        /// does not resolve the path or require the linked drive or file to exist on this PC.
+        /// Legacy records are still read as-is; this validator is used for new attachments
+        /// and portable-backup import/export/restore boundaries.
+        /// </summary>
+        internal static bool IsSafeScreenshotAttachmentPath(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)
+                || value.Length > MaximumScreenshotPathLength
+                || !HasValidUnicode(value))
+                return false;
+
+            bool driveRooted = value.Length >= 3
+                && ((value[0] >= 'A' && value[0] <= 'Z')
+                    || (value[0] >= 'a' && value[0] <= 'z'))
+                && value[1] == ':'
+                && value[2] == '\\';
+            if (!driveRooted)
+                return false;
+
+            for (int index = 0; index < value.Length; index++)
+            {
+                UnicodeCategory category = CharUnicodeInfo.GetUnicodeCategory(value, index);
+                if (category == UnicodeCategory.Control
+                    || category == UnicodeCategory.Format)
+                    return false;
+                if (char.IsHighSurrogate(value[index])) index++;
+            }
+
+            string relativePart = value.Substring(3);
+            if (relativePart.Length == 0)
+                return false;
+            string[] segments = relativePart.Split(new[] { '\\' });
+            foreach (string segment in segments)
+            {
+                if (string.IsNullOrEmpty(segment)
+                    || segment == "."
+                    || segment == ".."
+                    || segment[segment.Length - 1] == ' '
+                    || segment[segment.Length - 1] == '.'
+                    || segment.IndexOfAny(InvalidScreenshotFileNameCharacters) >= 0
+                    || IsReservedWindowsDeviceName(segment))
+                    return false;
+            }
+
+            string fileName = segments[segments.Length - 1];
+            int extensionStart = fileName.LastIndexOf('.');
+            if (extensionStart <= 0) return false;
+            return SupportedScreenshotExtensions.Contains(
+                fileName.Substring(extensionStart));
+        }
+
+        private static bool IsReservedWindowsDeviceName(string segment)
+        {
+            int dot = segment.IndexOf('.');
+            string stem = (dot < 0 ? segment : segment.Substring(0, dot))
+                .ToUpperInvariant();
+            if (stem == "CON" || stem == "PRN" || stem == "AUX"
+                || stem == "NUL" || stem == "CLOCK$")
+                return true;
+            if (stem.Length == 4
+                && (stem.StartsWith("COM", StringComparison.Ordinal)
+                    || stem.StartsWith("LPT", StringComparison.Ordinal))
+                && stem[3] >= '1' && stem[3] <= '9')
+                return true;
+            return false;
+        }
+
+        private static bool HasValidUnicode(string value)
+        {
+            for (int index = 0; index < value.Length; index++)
+            {
+                char character = value[index];
+                if (char.IsHighSurrogate(character))
+                {
+                    if (index + 1 >= value.Length
+                        || !char.IsLowSurrogate(value[index + 1]))
+                        return false;
+                    index++;
+                }
+                else if (char.IsLowSurrogate(character))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static void CopyRecordValues(RaidNoteRecord source, RaidNoteRecord destination)
         {
             destination.Key = source.Key;
             destination.Game = source.Game;
+            destination.GameType = source.GameType;
             destination.RaidStartedUtc = source.RaidStartedUtc;
             destination.MapName = source.MapName;
             destination.NoteText = source.NoteText;
@@ -378,6 +577,14 @@ namespace TarkovServerReporter
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
             return value.Length <= maximumLength ? value : value.Substring(0, maximumLength);
+        }
+
+        private static string GetSessionGameType(ServerSession session)
+        {
+            if (session == null) return string.Empty;
+            return session.Game == TarkovGame.Eft
+                ? session.RaidTypeText
+                : session.Game == TarkovGame.Arena ? session.GameMode : string.Empty;
         }
 
         internal static string NormalizeLegacyNoteText(string value)

@@ -15,6 +15,9 @@ namespace TarkovServerReporter
 {
     public sealed class MainForm : BrandedForm
     {
+        private const string HeaderSortToolTip =
+            "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.";
+
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);
         private static readonly Color SurfaceAlt = Color.FromArgb(31, 38, 46);
@@ -57,6 +60,8 @@ namespace TarkovServerReporter
         private Button _applyPathButton;
         private Label _launcherSelectionLabel;
         private Label _statusLabel;
+        private TableLayoutPanel _historyLayout;
+        private bool _updatingStatusAreaHeight;
         private Label _ipLabel;
         private Label _mapValueLabel;
         private Label _timeValueLabel;
@@ -135,6 +140,21 @@ namespace TarkovServerReporter
         {
             Note,
             Shield
+        }
+
+        private struct FirewallActionPresentationState
+        {
+            public bool HasResult;
+            public bool Known;
+            public bool Busy;
+            public bool IsBlocked;
+            public bool BlockAvailable;
+            public bool UnblockAvailable;
+
+            public bool SortKnown
+            {
+                get { return BlockAvailable != UnblockAvailable; }
+            }
         }
 
         private sealed class RegionMenuColorTable : ProfessionalColorTable
@@ -1208,6 +1228,18 @@ namespace TarkovServerReporter
             if (button == null || textBox == null) return;
             button.Dock = DockStyle.None;
             button.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            // Path actions are intentionally aligned against a native single-line
+            // TextBox instead of filling the table row. Keep the caption centered
+            // inside that shorter button at every layout/DPI recalculation.
+            button.TextAlign = ContentAlignment.MiddleCenter;
+            // The default GDI flat-button path places Malgun Gothic's visual weight
+            // low at 120 DPI. Compatible rendering centers the complete glyph for
+            // these four short captions without the clipping or over-correction
+            // caused by asymmetric padding.
+            button.UseCompatibleTextRendering = true;
+            Padding targetPadding = new Padding(0);
+            if (button.Padding != targetPadding)
+                button.Padding = targetPadding;
             int scaledRightMargin = rightMargin <= 0
                 ? 0
                 : Math.Max(1, (int)Math.Round(
@@ -1351,7 +1383,7 @@ namespace TarkovServerReporter
                 "사용자의 게임 로그·계정정보·SID·로컬경로는 전송하지 않습니다.\r\n"
                 + "차단·해제 시에만 Windows 관리자권한을 요청합니다.\r\n"
                 + "게임서버 IP 지역은 외부 API 대신 PC의 DB-IP Lite 데이터로 조회합니다.\r\n"
-                + "조회 시 새 월간 지역 DB가 있으면 자동으로 업데이트합니다. (약 60~70MB교체)\r\n"
+                + "조회 시 새 월간 지역 DB가 있으면 자동으로 업데이트합니다. (약 60~70MB 교체)\r\n"
                 + "새 버전 확인을 위해 GitHub Releases에 접속합니다.\r\n"
                 + "DB-IP.com . CC BY 4.0";
             string[] privacyNoticeLines = privacyNoticeText.Split(
@@ -1459,17 +1491,18 @@ namespace TarkovServerReporter
             card.Padding = new Padding(14, 9, 14, 9);
             outer.Controls.Add(card);
 
-            var layout = new TableLayoutPanel
+            _historyLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 BackColor = Surface,
                 ColumnCount = 1,
                 RowCount = 3
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
-            card.Controls.Add(layout);
+            _historyLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            _historyLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            _historyLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+            card.Controls.Add(_historyLayout);
+            TableLayoutPanel layout = _historyLayout;
 
             var titleBar = new Panel
             {
@@ -1756,7 +1789,9 @@ namespace TarkovServerReporter
                 "location", "ping", "actualRtt", "packetLoss", "result"
             })
             {
-                _historyGrid.Columns[sortableColumn].SortMode = DataGridViewColumnSortMode.Programmatic;
+                DataGridViewColumn column = _historyGrid.Columns[sortableColumn];
+                column.SortMode = DataGridViewColumnSortMode.Programmatic;
+                AppendHeaderSortToolTip(column);
             }
             _historyGrid.ColumnHeaderMouseClick += HistoryGridColumnHeaderMouseClick;
             _historyGrid.CellMouseClick += async delegate(object sender, DataGridViewCellMouseEventArgs args)
@@ -1794,6 +1829,7 @@ namespace TarkovServerReporter
             _historyGrid.Layout += delegate { UpdateStickyActionGridBounds(); };
 
             _stickyActionGrid = CreateStickyActionGrid();
+            _stickyActionGrid.ColumnHeaderMouseClick += StickyActionGridColumnHeaderMouseClick;
             _stickyActionGrid.CellPainting += StickyActionGridCellPainting;
             _stickyActionGrid.CurrentCellChanged += delegate { SyncHistorySelectionFromStickyActions(); };
             _stickyActionGrid.SelectionChanged += delegate { SyncHistorySelectionFromStickyActions(); };
@@ -1822,9 +1858,16 @@ namespace TarkovServerReporter
                 ForeColor = TextMuted,
                 Font = new Font("Malgun Gothic", 8.5F),
                 TextAlign = ContentAlignment.MiddleLeft,
-                AutoEllipsis = true
+                AutoEllipsis = false,
+                AccessibleName = "작업 상태 안내",
+                AccessibleDescription = "준비 중…",
+                Margin = new Padding(0)
             };
+            _toolTip.SetToolTip(_statusLabel, _statusLabel.Text);
             layout.Controls.Add(_statusLabel, 0, 2);
+            layout.Resize += delegate { UpdateStatusAreaHeight(); };
+            _statusLabel.FontChanged += delegate { UpdateStatusAreaHeight(); };
+            UpdateStatusAreaHeight();
             UpdateFilterButtons();
             UpdatePeriodButtons();
             return outer;
@@ -1839,6 +1882,14 @@ namespace TarkovServerReporter
                 Width = width,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             };
+        }
+
+        private static void AppendHeaderSortToolTip(DataGridViewColumn column)
+        {
+            string existing = column.HeaderCell.ToolTipText;
+            column.HeaderCell.ToolTipText = string.IsNullOrEmpty(existing)
+                ? HeaderSortToolTip
+                : existing + "\r\n" + HeaderSortToolTip;
         }
 
         private static DataGridViewButtonColumn CreateConnectionActionColumn(string name, string text)
@@ -1917,6 +1968,8 @@ namespace TarkovServerReporter
             grid.Columns.Add(CreateConnectionActionColumn("unblockAction", "해제"));
             foreach (DataGridViewColumn column in grid.Columns)
             {
+                column.SortMode = DataGridViewColumnSortMode.Programmatic;
+                AppendHeaderSortToolTip(column);
                 column.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
                 column.MinimumWidth = 2;
                 column.Resizable = DataGridViewTriState.False;
@@ -1979,9 +2032,13 @@ namespace TarkovServerReporter
                 e.Graphics.SetClip(clip);
                 if (e.RowIndex < 0)
                 {
+                    DataGridViewColumn column = grid.Columns[e.ColumnIndex];
+                    bool active = column.SortMode == DataGridViewColumnSortMode.Programmatic
+                        && string.Equals(_historySortColumn, column.Name, StringComparison.Ordinal)
+                        && _historySortOrder != SortOrder.None;
                     PaintDarkGridHeader(
                         e,
-                        SortOrder.None);
+                        active ? _historySortOrder : SortOrder.None);
                     return;
                 }
 
@@ -2931,7 +2988,12 @@ namespace TarkovServerReporter
                 _firewallStates[pair.Key] = pair.Value;
                 UpdateServerRowsFromCache(pair.Key);
             }
-            if (applicable.Count > 0) RefreshActionCells();
+            if (applicable.Count > 0)
+            {
+                RefreshActionCells();
+                if (IsFirewallActionSortColumn(_historySortColumn))
+                    ReapplyHistorySort(false, true);
+            }
         }
 
         private static RaidLogScanResult ScanSessionsForPeriod(
@@ -4248,12 +4310,32 @@ namespace TarkovServerReporter
             object sender,
             DataGridViewCellMouseEventArgs args)
         {
-            if (_historyGrid == null || args.ColumnIndex < 0) return;
+            if (_historyGrid == null || args.Button != MouseButtons.Left
+                || args.ColumnIndex < 0) return;
             DataGridViewColumn column = _historyGrid.Columns[args.ColumnIndex];
             if (column.SortMode != DataGridViewColumnSortMode.Programmatic) return;
 
+            CycleHistorySort(column.Name);
+        }
+
+        private void StickyActionGridColumnHeaderMouseClick(
+            object sender,
+            DataGridViewCellMouseEventArgs args)
+        {
+            if (_stickyActionGrid == null || args.Button != MouseButtons.Left
+                || args.ColumnIndex < 0) return;
+            DataGridViewColumn column = _stickyActionGrid.Columns[args.ColumnIndex];
+            if (column.SortMode != DataGridViewColumnSortMode.Programmatic) return;
+
+            CycleHistorySort(column.Name);
+        }
+
+        private void CycleHistorySort(string columnName)
+        {
+            if (string.IsNullOrWhiteSpace(columnName)) return;
+
             bool restoreDefaultOrder = false;
-            if (string.Equals(_historySortColumn, column.Name, StringComparison.Ordinal))
+            if (string.Equals(_historySortColumn, columnName, StringComparison.Ordinal))
             {
                 if (_historySortOrder == SortOrder.Ascending)
                 {
@@ -4268,17 +4350,26 @@ namespace TarkovServerReporter
             }
             else
             {
-                _historySortColumn = column.Name;
+                _historySortColumn = columnName;
                 _historySortOrder = SortOrder.Ascending;
             }
 
-            if (restoreDefaultOrder)
+            if (IsFirewallActionSortColumn(columnName))
+            {
+                // Keep the selected raid, but show the beginning of the newly sorted
+                // result. Revealing the previous selection here can scroll the leading
+                // action group above the viewport and make a successful sort look inert.
+                ReapplyHistorySort(false, true);
+            }
+            else if (restoreDefaultOrder)
                 RefreshVisibleSessions();
             else
                 ReapplyHistorySort();
         }
 
-        private void ReapplyHistorySort(bool scrollSelectedIntoView = true)
+        private void ReapplyHistorySort(
+            bool scrollSelectedIntoView = true,
+            bool resetViewportToTop = false)
         {
             if (_historyGrid == null || _visibleSessions == null) return;
             string viewportAnchorIdentity;
@@ -4301,8 +4392,11 @@ namespace TarkovServerReporter
                     GetSessionRefreshIdentity(item),
                     selectedIdentity,
                     StringComparison.OrdinalIgnoreCase));
-            if (selected != null) SelectGridRow(selected, scrollSelectedIntoView);
-            if (!scrollSelectedIntoView)
+            if (selected != null)
+                SelectGridRow(selected, scrollSelectedIntoView && !resetViewportToTop);
+            if (resetViewportToTop)
+                RestoreHistoryViewport(null, 0, horizontalOffset);
+            else if (!scrollSelectedIntoView)
                 RestoreHistoryViewport(
                     viewportAnchorIdentity,
                     viewportAnchorIndex,
@@ -4329,7 +4423,11 @@ namespace TarkovServerReporter
         {
             bool leftKnown;
             bool rightKnown;
-            int primary = CompareHistorySortValue(left, right, out leftKnown, out rightKnown);
+            int primary = CompareHistorySortValue(
+                left,
+                right,
+                out leftKnown,
+                out rightKnown);
             if (leftKnown != rightKnown) return leftKnown ? -1 : 1;
             if (leftKnown && primary != 0)
             {
@@ -4338,10 +4436,14 @@ namespace TarkovServerReporter
             }
 
             int dateTieBreak = DateTime.Compare(right.DisplayDetectedAt, left.DisplayDetectedAt);
-            if (dateTieBreak != 0) return dateTieBreak;
-            return StringComparer.OrdinalIgnoreCase.Compare(
+            bool reverseActionTieBreak = IsFirewallActionSortColumn(_historySortColumn)
+                && _historySortOrder == SortOrder.Descending;
+            if (dateTieBreak != 0)
+                return reverseActionTieBreak ? -dateTieBreak : dateTieBreak;
+            int identityTieBreak = StringComparer.OrdinalIgnoreCase.Compare(
                 left.SessionKey ?? string.Empty,
                 right.SessionKey ?? string.Empty);
+            return reverseActionTieBreak ? -identityTieBreak : identityTieBreak;
         }
 
         private int CompareHistorySortValue(
@@ -4366,6 +4468,26 @@ namespace TarkovServerReporter
                     leftKnown = true;
                     rightKnown = true;
                     return _noteStore.Exists(left).CompareTo(_noteStore.Exists(right));
+                case "blockAction":
+                case "unblockAction":
+                    bool leftActionAvailable;
+                    bool rightActionAvailable;
+                    bool isUnblockAction = string.Equals(
+                        _historySortColumn,
+                        "unblockAction",
+                        StringComparison.Ordinal);
+                    leftKnown = TryGetFirewallActionSortValue(
+                        left,
+                        isUnblockAction,
+                        out leftActionAvailable);
+                    rightKnown = TryGetFirewallActionSortValue(
+                        right,
+                        isUnblockAction,
+                        out rightActionAvailable);
+                    // For an action column the useful first view is the action the
+                    // user can currently perform. Treat that as the ascending lead;
+                    // the second click reverses the two known groups.
+                    return rightActionAvailable.CompareTo(leftActionAvailable);
                 case "ping":
                     double leftPing;
                     double rightPing;
@@ -4389,6 +4511,50 @@ namespace TarkovServerReporter
                     string rightText = GetHistorySortText(right, _historySortColumn, out rightKnown);
                     return StringComparer.CurrentCultureIgnoreCase.Compare(leftText, rightText);
             }
+        }
+
+        private bool TryGetFirewallActionSortValue(
+            ServerSession session,
+            bool isUnblockAction,
+            out bool actionAvailable)
+        {
+            FirewallActionPresentationState state =
+                GetFirewallActionPresentationState(session);
+            actionAvailable = isUnblockAction
+                ? state.UnblockAvailable
+                : state.BlockAvailable;
+            return state.SortKnown;
+        }
+
+        private FirewallActionPresentationState GetFirewallActionPresentationState(
+            ServerSession session)
+        {
+            var state = new FirewallActionPresentationState();
+            if (session == null || !session.HasServerIp) return state;
+
+            FirewallQueryResult firewall;
+            state.HasResult = _firewallStates.TryGetValue(
+                session.IpAddress,
+                out firewall);
+            state.Known = state.HasResult
+                && firewall != null
+                && firewall.Success;
+            state.Busy = _firewallBusyIpAddresses.Contains(session.IpAddress)
+                || _isFirewallChanging;
+            state.IsBlocked = state.Known && firewall.IsBlocked;
+            bool canChange = state.Known
+                && !state.Busy
+                && !_isMeasuring
+                && !_isRefreshing;
+            state.BlockAvailable = canChange && !state.IsBlocked;
+            state.UnblockAvailable = canChange && state.IsBlocked;
+            return state;
+        }
+
+        private static bool IsFirewallActionSortColumn(string columnName)
+        {
+            return string.Equals(columnName, "blockAction", StringComparison.Ordinal)
+                || string.Equals(columnName, "unblockAction", StringComparison.Ordinal);
         }
 
         private bool TryGetSortablePing(ServerSession session, out double averageMs)
@@ -4453,6 +4619,12 @@ namespace TarkovServerReporter
             foreach (DataGridViewColumn column in _historyGrid.Columns)
                 column.HeaderCell.SortGlyphDirection = SortOrder.None;
             _historyGrid.Invalidate();
+            if (_stickyActionGrid != null)
+            {
+                foreach (DataGridViewColumn column in _stickyActionGrid.Columns)
+                    column.HeaderCell.SortGlyphDirection = SortOrder.None;
+                _stickyActionGrid.Invalidate();
+            }
         }
 
         private void PopulateHistoryGrid(IList<ServerSession> sessions)
@@ -4995,7 +5167,10 @@ namespace TarkovServerReporter
                 queryCancellation.Dispose();
                 UpdateActionButtons();
                 RefreshActionCells();
-                if (_historySortColumn == "ping" || _historySortColumn == "location")
+                if (IsFirewallActionSortColumn(_historySortColumn))
+                    ReapplyHistorySort(false, true);
+                else if (_historySortColumn == "ping"
+                    || _historySortColumn == "location")
                     ReapplyHistorySort(refreshedVisibleNewSession != null);
             }
         }
@@ -5409,7 +5584,10 @@ namespace TarkovServerReporter
                 _isFirewallChanging = false;
                 UpdateActionButtons();
                 UpdateServerRowsFromCache(ipAddress);
-                if (_historySortColumn == "ping") ReapplyHistorySort();
+                if (IsFirewallActionSortColumn(_historySortColumn))
+                    ReapplyHistorySort(false, true);
+                else if (_historySortColumn == "ping")
+                    ReapplyHistorySort();
             }
         }
 
@@ -5491,24 +5669,19 @@ namespace TarkovServerReporter
                 return;
             }
 
-            FirewallQueryResult firewall;
-            bool hasResult = _firewallStates.TryGetValue(session.IpAddress, out firewall);
-            bool known = hasResult && firewall.Success;
-            bool busy = _firewallBusyIpAddresses.Contains(session.IpAddress);
-            bool canChange = known && !busy && !_isMeasuring && !_isRefreshing && !_isFirewallChanging;
-            bool blockEnabled = canChange && !firewall.IsBlocked;
-            bool unblockEnabled = canChange && firewall.IsBlocked;
-            ApplyActionCellStyle(blockCell, blockEnabled, true);
-            ApplyActionCellStyle(unblockCell, unblockEnabled, false);
-            string help = busy || _isFirewallChanging
+            FirewallActionPresentationState actionState =
+                GetFirewallActionPresentationState(session);
+            ApplyActionCellStyle(blockCell, actionState.BlockAvailable, true);
+            ApplyActionCellStyle(unblockCell, actionState.UnblockAvailable, false);
+            string help = actionState.Busy
                 ? "차단·해제 작업이 진행 중입니다."
                 : (_isMeasuring
                     ? "서버 상태를 조회하고 있습니다."
-                    : (!hasResult
+                    : (!actionState.HasResult
                         ? "먼저 조회를 실행해 주세요."
-                        : (!known
+                        : (!actionState.Known
                             ? "방화벽 상태를 확인하지 못했습니다. 다시 조회해 주세요."
-                            : (firewall.IsBlocked ? "현재 차단 중인 서버입니다." : "현재 차단되지 않은 서버입니다."))));
+                            : (actionState.IsBlocked ? "현재 차단 중인 서버입니다." : "현재 차단되지 않은 서버입니다."))));
             blockCell.ToolTipText = help;
             unblockCell.ToolTipText = help;
             _historyGrid.InvalidateCell(blockCell);
@@ -5602,6 +5775,8 @@ namespace TarkovServerReporter
                 _isRefreshing = false;
                 UpdateActionButtons();
                 RefreshActionCells();
+                if (IsFirewallActionSortColumn(_historySortColumn))
+                    ReapplyHistorySort(false, true);
             }
         }
 
@@ -5706,6 +5881,60 @@ namespace TarkovServerReporter
             _statusLabel.ForeColor = color;
             _statusLabel.AccessibleDescription = message;
             _toolTip.SetToolTip(_statusLabel, message);
+            UpdateStatusAreaHeight();
+        }
+
+        private void UpdateStatusAreaHeight()
+        {
+            if (_updatingStatusAreaHeight || _historyLayout == null || _statusLabel == null)
+                return;
+
+            int availableWidth = _historyLayout.ClientSize.Width
+                - _historyLayout.Padding.Horizontal
+                - _statusLabel.Margin.Horizontal;
+            if (availableWidth <= 1) return;
+
+            _updatingStatusAreaHeight = true;
+            try
+            {
+                int dpi = _statusLabel.DeviceDpi <= 0 ? 96 : _statusLabel.DeviceDpi;
+                int requiredHeight = CalculateStatusAreaHeight(
+                    _statusLabel.Text,
+                    _statusLabel.Font,
+                    availableWidth,
+                    dpi);
+                RowStyle statusRow = _historyLayout.RowStyles[2];
+                if (statusRow.SizeType != SizeType.Absolute)
+                    statusRow.SizeType = SizeType.Absolute;
+                if (Math.Abs(statusRow.Height - requiredHeight) > 0.5F)
+                    statusRow.Height = requiredHeight;
+            }
+            finally
+            {
+                _updatingStatusAreaHeight = false;
+            }
+        }
+
+        private static int CalculateStatusAreaHeight(
+            string message,
+            Font font,
+            int availableWidth,
+            int dpi)
+        {
+            int scaledDpi = Math.Max(96, dpi);
+            int minimumHeight = ScaleLogical(28, scaledDpi);
+            if (font == null || availableWidth <= 1)
+                return minimumHeight;
+
+            string measuredText = string.IsNullOrEmpty(message) ? " " : message;
+            Size textSize = TextRenderer.MeasureText(
+                measuredText,
+                font,
+                new Size(Math.Max(1, availableWidth), int.MaxValue),
+                TextFormatFlags.NoPadding
+                | TextFormatFlags.NoPrefix
+                | TextFormatFlags.WordBreak);
+            return Math.Max(minimumHeight, textSize.Height + ScaleLogical(6, scaledDpi));
         }
 
         private static string GetApplicationSemanticVersion()

@@ -274,7 +274,7 @@ namespace TarkovServerReporter
     public static class RaidMetricPresentation
     {
         public const string MissingLogHelp =
-            "레이드 진행 중 또는 게임의 강제·비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
+            "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
 
         public const string LocalRaidHelp =
             "로컬 PvE 레이드는 게임 서버 통계가 적용되지 않습니다.";
@@ -1055,7 +1055,7 @@ namespace TarkovServerReporter
 
     public static class NetworkServices
     {
-        internal const string ProductUserAgent = "TarkovServerGuard/0.8.0";
+        internal const string ProductUserAgent = "TarkovServerGuard/0.8.2";
         private static readonly DbIpLiteGeoService GeoService = CreateGeoService();
 
         private static DbIpLiteGeoService CreateGeoService()

@@ -27,6 +27,7 @@ namespace TarkovServerReporter
         // Kept for lossless compatibility with the free-form v0.6.6 memo format.
         public string MemoText { get; set; }
         public string Game { get; set; }
+        public string GameType { get; set; }
         public DateTime RaidStartedUtc { get; set; }
         public string MapName { get; set; }
         public DateTime CreatedUtc { get; set; }
@@ -169,6 +170,7 @@ namespace TarkovServerReporter
                 Entries = new List<UserReportMemoEntry>(),
                 MemoText = string.Empty,
                 Game = LimitText(session.GameDisplayName, 32),
+                GameType = LimitText(GetSessionGameType(session), 64),
                 RaidStartedUtc = NormalizeDate(session.SessionStarted),
                 MapName = LimitText(session.MapName, 256),
                 CreatedUtc = now,
@@ -188,6 +190,55 @@ namespace TarkovServerReporter
         {
             if (record == null) throw new ArgumentNullException("record");
             SaveCore(key, record, NormalizeReportCount(record.ReportCount), null);
+        }
+
+        /// <summary>
+        /// Restores a validated portable-backup record only when neither the primary nor
+        /// fallback record already exists. The final File.Move is create-only, so a race
+        /// with another store instance or process never replaces an existing primary.
+        /// </summary>
+        public bool TryRestoreMissing(string key, UserReportMemoRecord record)
+        {
+            ValidateKey(key);
+            if (record == null) throw new ArgumentNullException("record");
+            UserReportMemoRecord normalized = NormalizeRestoredRecord(key, record);
+            string json = _serializer.Serialize(normalized);
+            if (json.Length <= 0 || json.Length > MaximumJsonLength)
+                throw new InvalidOperationException(
+                    "복원할 유저신고 메모 데이터가 허용 크기를 초과했습니다.");
+
+            bool saved = false;
+            lock (_sync)
+            {
+                EnsureFolder();
+                string target = GetPath(key);
+                string backup = GetBackupPath(key);
+                if (File.Exists(target) || File.Exists(backup)) return false;
+
+                string temporary = target + ".restore." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    WriteDurably(temporary, json);
+                    if (File.Exists(target) || File.Exists(backup)) return false;
+                    try
+                    {
+                        File.Move(temporary, target);
+                        saved = true;
+                    }
+                    catch (IOException)
+                    {
+                        if (File.Exists(target) || File.Exists(backup)) return false;
+                        throw;
+                    }
+                }
+                finally
+                {
+                    DeleteIfPresent(temporary);
+                }
+            }
+
+            if (saved) CopyRecordValues(normalized, record);
+            return saved;
         }
 
         public void Delete(ServerSession session)
@@ -227,6 +278,9 @@ namespace TarkovServerReporter
                 Entries = NormalizeEntries(record.Entries),
                 MemoText = LimitMemo(record.MemoText),
                 Game = LimitText(session == null ? record.Game : session.GameDisplayName, 32),
+                GameType = LimitText(
+                    session == null ? record.GameType : GetSessionGameType(session),
+                    64),
                 RaidStartedUtc = session == null
                     ? NormalizeDate(record.RaidStartedUtc)
                     : NormalizeDate(session.SessionStarted),
@@ -264,6 +318,7 @@ namespace TarkovServerReporter
             record.Entries = CloneEntries(normalized.Entries);
             record.MemoText = normalized.MemoText;
             record.Game = normalized.Game;
+            record.GameType = normalized.GameType;
             record.RaidStartedUtc = normalized.RaidStartedUtc;
             record.MapName = normalized.MapName;
             record.CreatedUtc = normalized.CreatedUtc;
@@ -305,6 +360,7 @@ namespace TarkovServerReporter
                 record.Entries = NormalizeEntries(record.Entries);
                 record.MemoText = record.MemoText ?? string.Empty;
                 record.Game = LimitText(record.Game, 32);
+                record.GameType = LimitText(record.GameType, 64);
                 record.RaidStartedUtc = NormalizeDate(record.RaidStartedUtc);
                 record.MapName = LimitText(record.MapName, 256);
                 record.CreatedUtc = NormalizeDate(record.CreatedUtc);
@@ -315,6 +371,45 @@ namespace TarkovServerReporter
             {
                 return null;
             }
+        }
+
+        private static UserReportMemoRecord NormalizeRestoredRecord(
+            string key,
+            UserReportMemoRecord record)
+        {
+            if (record.CreatedUtc == default(DateTime)
+                || record.UpdatedUtc == default(DateTime))
+                throw new InvalidOperationException(
+                    "복원할 유저신고 메모 시각이 올바르지 않습니다.");
+            return new UserReportMemoRecord
+            {
+                Key = key.ToLowerInvariant(),
+                ReportCount = NormalizeReportCount(record.ReportCount),
+                Entries = NormalizeEntries(record.Entries),
+                MemoText = LimitMemo(record.MemoText),
+                Game = LimitText(record.Game, 32),
+                GameType = LimitText(record.GameType, 64),
+                RaidStartedUtc = NormalizeDate(record.RaidStartedUtc),
+                MapName = LimitText(record.MapName, 256),
+                CreatedUtc = NormalizeDate(record.CreatedUtc),
+                UpdatedUtc = NormalizeDate(record.UpdatedUtc)
+            };
+        }
+
+        private static void CopyRecordValues(
+            UserReportMemoRecord source,
+            UserReportMemoRecord destination)
+        {
+            destination.Key = source.Key;
+            destination.ReportCount = source.ReportCount;
+            destination.Entries = CloneEntries(source.Entries);
+            destination.MemoText = source.MemoText;
+            destination.Game = source.Game;
+            destination.GameType = source.GameType;
+            destination.RaidStartedUtc = source.RaidStartedUtc;
+            destination.MapName = source.MapName;
+            destination.CreatedUtc = source.CreatedUtc;
+            destination.UpdatedUtc = source.UpdatedUtc;
         }
 
         private string GetPath(string key)
@@ -422,6 +517,14 @@ namespace TarkovServerReporter
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
             return value.Length <= maximumLength ? value : value.Substring(0, maximumLength);
+        }
+
+        private static string GetSessionGameType(ServerSession session)
+        {
+            if (session == null) return string.Empty;
+            return session.Game == TarkovGame.Eft
+                ? session.RaidTypeText
+                : session.Game == TarkovGame.Arena ? session.GameMode : string.Empty;
         }
 
         private static DateTime NormalizeDate(DateTime value)

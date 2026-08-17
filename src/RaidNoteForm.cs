@@ -526,21 +526,36 @@ namespace TarkovServerReporter
             using (var dialog = new OpenFileDialog())
             {
                 dialog.Title = "스크린샷 첨부";
-                dialog.Filter = "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|모든 파일|*.*";
+                dialog.Filter = "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp";
                 dialog.Multiselect = true;
                 dialog.CheckFileExists = true;
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 var existing = new HashSet<string>(
                     _screenshotList.Items.Cast<object>().Select(Convert.ToString),
                     StringComparer.OrdinalIgnoreCase);
+                bool added = false;
+                bool rejected = false;
                 foreach (string selected in dialog.FileNames)
                 {
                     string fullPath;
                     try { fullPath = Path.GetFullPath(selected); }
-                    catch { continue; }
-                    if (existing.Add(fullPath)) _screenshotList.Items.Add(fullPath);
+                    catch
+                    {
+                        rejected = true;
+                        continue;
+                    }
+                    if (!RaidNoteStore.IsSafeScreenshotAttachmentPath(fullPath))
+                    {
+                        rejected = true;
+                        continue;
+                    }
+                    if (!existing.Add(fullPath)) continue;
+                    _screenshotList.Items.Add(fullPath);
+                    added = true;
                 }
-                MarkDirty();
+                if (added) MarkDirty();
+                if (rejected)
+                    ShowStatus("로컬 드라이브의 지원 이미지 파일만 첨부할 수 있습니다.", Danger);
             }
         }
 
@@ -556,6 +571,11 @@ namespace TarkovServerReporter
         {
             string path = GetSelectedScreenshotPath();
             if (path == null) return;
+            if (!RaidNoteStore.IsSafeScreenshotAttachmentPath(path))
+            {
+                ShowStatus("지원하는 로컬 이미지 파일만 열 수 있습니다.", Danger);
+                return;
+            }
             if (!File.Exists(path))
             {
                 ShowStatus("첨부한 파일을 찾을 수 없습니다. 경로가 이동되었는지 확인해 주세요.", Danger);
@@ -568,6 +588,11 @@ namespace TarkovServerReporter
         {
             string path = GetSelectedScreenshotPath();
             if (path == null) return;
+            if (!RaidNoteStore.IsSafeScreenshotAttachmentPath(path))
+            {
+                ShowStatus("지원하는 로컬 이미지 파일의 위치만 열 수 있습니다.", Danger);
+                return;
+            }
             if (File.Exists(path))
                 TryOpen("explorer.exe", "/select,\"" + path.Replace("\"", string.Empty) + "\"");
             else

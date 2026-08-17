@@ -885,7 +885,7 @@ namespace TarkovServerReporter
         {
             var handler = new HttpClientHandler { AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.None };
             _client = new HttpClient(handler, true) { Timeout = TimeSpan.FromMinutes(10) };
-            _client.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovServerGuard/0.8.0");
+            _client.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovServerGuard/0.8.2");
         }
 
         public async Task DownloadAsync(

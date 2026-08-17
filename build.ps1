@@ -90,6 +90,8 @@ $appArguments = @(
     (Join-Path $sourceRoot 'PingKickActionCell.cs'),
     (Join-Path $sourceRoot 'RaidNoteStore.cs'),
     (Join-Path $sourceRoot 'RaidNoteForm.cs'),
+    (Join-Path $sourceRoot 'MemoArchiveBackup.cs'),
+    (Join-Path $sourceRoot 'MemoArchiveRestorePreviewForm.cs'),
     (Join-Path $sourceRoot 'RaidNoteArchiveForm.cs'),
     (Join-Path $sourceRoot 'UserReportMemoStore.cs'),
     (Join-Path $sourceRoot 'UserReportMemoForm.cs'),
@@ -141,6 +143,21 @@ if (-not $SkipTests) {
     ))
     Invoke-TestExecutable $storageTestOutput
 
+    $memoArchiveBackupTestOutput = Join-Path $buildRoot 'MemoArchiveBackupTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $memoArchiveBackupTestOutput)
+    ) + $commonReferences + @(
+        (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
+        (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
+        (Join-Path $sourceRoot 'ServerReportCore.cs'),
+        (Join-Path $sourceRoot 'RaidNoteStore.cs'),
+        (Join-Path $sourceRoot 'UserReportMemoStore.cs'),
+        (Join-Path $sourceRoot 'MemoArchiveBackup.cs'),
+        (Join-Path $testRoot 'MemoArchiveBackupTests.cs')
+    ))
+    Invoke-TestExecutable $memoArchiveBackupTestOutput
+
     $memoTestOutput = Join-Path $buildRoot 'UserReportMemoTests.exe'
     Invoke-CSharpCompiler (@(
         '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
@@ -152,6 +169,8 @@ if (-not $SkipTests) {
         (Join-Path $sourceRoot 'ServerReportCore.cs'),
         (Join-Path $sourceRoot 'RaidNoteStore.cs'),
         (Join-Path $sourceRoot 'RaidNoteForm.cs'),
+        (Join-Path $sourceRoot 'MemoArchiveBackup.cs'),
+        (Join-Path $sourceRoot 'MemoArchiveRestorePreviewForm.cs'),
         (Join-Path $sourceRoot 'RaidNoteArchiveForm.cs'),
         (Join-Path $sourceRoot 'UserReportMemoStore.cs'),
         (Join-Path $sourceRoot 'UserReportMemoForm.cs'),
@@ -185,6 +204,16 @@ if (-not $SkipTests) {
         (Join-Path $testRoot 'ReleaseNotesTests.cs')
     ))
     Invoke-TestExecutable $releaseNotesTestOutput
+
+    $blockedServersUiTestOutput = Join-Path $buildRoot 'BlockedServersUiTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        '/main:TarkovServerReporter.Tests.BlockedServersUiTests',
+        ('/out:' + $blockedServersUiTestOutput)
+    ) + $windowsFormsReferences + $commonReferences + @(
+        (Join-Path $testRoot 'BlockedServersUiTests.cs')
+    ))
+    Invoke-TestExecutable $blockedServersUiTestOutput @($appOutput)
 
     $programSource = Get-Content -Raw -LiteralPath (Join-Path $sourceRoot 'Program.cs')
     $versionMatch = [regex]::Match(
