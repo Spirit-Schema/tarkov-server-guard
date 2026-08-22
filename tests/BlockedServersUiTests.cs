@@ -357,6 +357,18 @@ namespace TarkovServerReporter.Tests
                 true,
                 0,
                 insufficientAt));
+            DateTime singleSampleAt = new DateTime(2026, 8, 17, 20, 50, 2);
+            sessions.Add(CreateSession(
+                sessionType,
+                hostingModeType,
+                "192.0.2.33",
+                singleSampleAt.AddSeconds(-2),
+                93.4,
+                0.0125,
+                false,
+                true,
+                1,
+                singleSampleAt));
 
             Type enumerableType = typeof(IEnumerable<>).MakeGenericType(sessionType);
             ConstructorInfo constructor = formType.GetConstructor(new[] { enumerableType });
@@ -394,11 +406,13 @@ namespace TarkovServerReporter.Tests
                 DataGridViewRow missing = AddMetricRow(grid, "192.0.2.30");
                 DataGridViewRow insufficient = AddMetricRow(grid, "192.0.2.31");
                 DataGridViewRow noRecentRecord = AddMetricRow(grid, "192.0.2.32");
+                DataGridViewRow singleSample = AddMetricRow(grid, "192.0.2.33");
                 applyMetrics.Invoke(form, new object[] { first, "203.0.113.10" });
                 applyMetrics.Invoke(form, new object[] { second, "198.51.100.20" });
                 applyMetrics.Invoke(form, new object[] { missing, "192.0.2.30" });
                 applyMetrics.Invoke(form, new object[] { insufficient, "192.0.2.31" });
                 applyMetrics.Invoke(form, new object[] { noRecentRecord, "192.0.2.32" });
+                applyMetrics.Invoke(form, new object[] { singleSample, "192.0.2.33" });
 
                 const string currentPingHelp =
                     "차단 규칙이 해당 IP의 모든 아웃바운드 통신(ICMP 포함)을 막으므로 차단 중에는 "
@@ -432,14 +446,22 @@ namespace TarkovServerReporter.Tests
                     && noRecentRecord.Cells["actualRtt"].AccessibilityObject.Description
                         == noRecentRecordHelp,
                     "최근 100개에 IP 기록이 없는 상태를 해당 레이드의 Statistics 누락과 구분해야 합니다.");
-                Assert(Convert.ToString(insufficient.Cells["actualRtt"].Value) == "표본부족"
-                    && Convert.ToString(insufficient.Cells["packetLoss"].Value) == "0% (참고)"
-                    && insufficient.Cells["actualRtt"].ToolTipText.Contains(
-                        "2026-08-17 20:40:02 레이드 로그")
-                    && insufficient.Cells["actualRtt"].ToolTipText.Contains("수신 표본이 0건")
-                    && insufficient.Cells["packetLoss"].ToolTipText.Contains("참고값")
-                    && Convert.ToDouble(insufficient.Cells["packetLoss"].Tag) == 0,
-                    "차단현황도 수신 0건의 RTT와 참고 손실값을 로그없음으로 잃지 않아야 합니다.");
+                Assert(Convert.ToString(insufficient.Cells["actualRtt"].Value) == "로그없음"
+                    && Convert.ToString(insufficient.Cells["packetLoss"].Value) == "로그없음"
+                    && insufficient.Cells["actualRtt"].ToolTipText
+                        == "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다."
+                    && insufficient.Cells["packetLoss"].ToolTipText
+                        == "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다."
+                    && insufficient.Cells["actualRtt"].Tag == null
+                    && insufficient.Cells["packetLoss"].Tag == null,
+                    "차단현황도 수신 표본 0건의 두 실게임 지표를 로그없음으로 표시해야 합니다.");
+                Assert(Convert.ToString(singleSample.Cells["actualRtt"].Value) == "93 ms"
+                    && Convert.ToString(singleSample.Cells["packetLoss"].Value) == "1.25%"
+                    && singleSample.Cells["actualRtt"].ToolTipText.Contains(
+                        "2026-08-17 20:50:02 레이드 로그")
+                    && Convert.ToDouble(singleSample.Cells["actualRtt"].Tag) == 93.4
+                    && Math.Abs(Convert.ToDouble(singleSample.Cells["packetLoss"].Tag) - 0.0125) < 0.0001,
+                    "차단현황은 수신 표본 1건의 지표도 임의 최소 표본 기준 없이 표시해야 합니다.");
                 Assert(first.Cells["currentPing"].AccessibilityObject.Description
                         == first.Cells["currentPing"].ToolTipText
                     && first.Cells["actualRtt"].AccessibilityObject.Description
@@ -467,7 +489,7 @@ namespace TarkovServerReporter.Tests
 
                 InvokeHeaderClick(form, grid, headerClick, "actualRtt");
                 Assert(GetIpOrder(grid)
-                        == "198.51.100.20|203.0.113.10|192.0.2.30|192.0.2.31|192.0.2.32",
+                        == "198.51.100.20|192.0.2.33|203.0.113.10|192.0.2.30|192.0.2.31|192.0.2.32",
                     "실게임 RTT는 문자열이 아닌 수치로 정렬하고 로그 없는 값은 마지막에 유지해야 합니다.");
 
                 form.CreateControl();
@@ -566,31 +588,50 @@ namespace TarkovServerReporter.Tests
             string step2 = Convert.ToString(usageType.GetField(
                 "Step2Line",
                 staticFlags).GetRawConstantValue());
-            string step2Explanation = Convert.ToString(usageType.GetField(
+            FieldInfo obsoleteExplanation = usageType.GetField(
                 "Step2ExplanationLine",
-                staticFlags).GetRawConstantValue());
+                staticFlags);
             string noticeText = Convert.ToString(usageType.GetField(
                 "NoticeText",
                 staticFlags).GetRawConstantValue());
             const string expected =
                 "2. 다음 화면에서 재진입 대신 나가기 확인 선택 (장비는 보존됩니다)";
-            const string expectedExplanation =
-                "   서버 입장이 완료되지 않은 상태라 일반 레이드 이탈과 다릅니다.";
             using (var form = (Form)Activator.CreateInstance(usageType))
             {
+                form.Size = form.MinimumSize;
+                form.CreateControl();
+                form.PerformLayout();
                 Assert(step2 == expected
-                    && step2Explanation == expectedExplanation
+                    && obsoleteExplanation == null
                     && noticeText.Contains(expected)
-                    && noticeText.Contains(expectedExplanation)
+                    && noticeText.Contains(expected + "\r\n\r\n")
+                    && noticeText.IndexOf(
+                        "서버 입장이 완료되지 않은 상태라 일반 레이드 이탈과 다릅니다.",
+                        StringComparison.Ordinal) < 0
                     && form.AccessibleDescription == noticeText,
-                    "사용방법 2번은 장비 보존과 일반 레이드 이탈의 차이를 화면 읽기 프로그램에도 제공해야 합니다.");
+                    "사용방법 2번은 장비 보존 괄호 문구만 화면과 접근성 설명에 동일하게 제공해야 합니다.");
                 Control[] visibleParts = GetDescendants(form).ToArray();
-                Assert(visibleParts.Any(control => control.Text == "나가기 확인")
+                Control step2Token = visibleParts.FirstOrDefault(
+                    control => control.Text == "나가기 확인");
+                Assert(step2Token != null
                     && visibleParts.Any(control =>
                         control.Text == " 선택 (장비는 보존됩니다)"),
                     "사용방법의 실제 토큰 UI에도 장비 보존 문구가 표시되어야 합니다.");
-                Assert(visibleParts.Any(control => control.Text == expectedExplanation),
-                    "사용방법 화면에 일반 레이드 이탈과 다른 절차라는 설명이 표시되어야 합니다.");
+                var secondLine = step2Token.Parent as FlowLayoutPanel;
+                var step2Block = secondLine == null
+                    ? null
+                    : secondLine.Parent as TableLayoutPanel;
+                int requiredLineHeight = secondLine == null || secondLine.Controls.Count == 0
+                    ? int.MaxValue
+                    : secondLine.Controls.Cast<Control>()
+                        .Max(control => control.GetPreferredSize(Size.Empty).Height
+                            + control.Margin.Vertical);
+                Assert(step2Block != null
+                    && step2Block.RowCount == 2
+                    && step2Block.RowStyles.Count == 2
+                    && step2Block.Controls.Count == 2
+                    && secondLine.ClientSize.Height >= requiredLineHeight,
+                    "사용방법 2번은 최소 창 크기에서도 별도 설명 행 없이 두 줄이 잘리지 않아야 합니다.");
             }
         }
 

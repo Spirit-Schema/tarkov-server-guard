@@ -51,8 +51,8 @@ namespace TarkovServerReporter.Tests
             session.ParticipationType = TarkovParticipationType.Party;
             session.PartySize = 3;
             Assert(session.CharacterTypeText == "스캐브"
-                && session.ParticipationTypeText == "3인 파티"
-                && session.RaidTypeAndParticipantText == "PvP시즌2 · 스캐브 · 3인 파티",
+                && session.ParticipationTypeText == "3인"
+                && session.RaidTypeAndParticipantText == "PvP시즌2 · 스캐브 · 3인",
                 "display order is game type, character, then participation");
 
             session.PartySize = null;
@@ -149,7 +149,7 @@ namespace TarkovServerReporter.Tests
                 RaidClassificationModel.AddPartySizeEvidence(session, size);
                 Assert(session.ParticipationType == TarkovParticipationType.Party
                     && session.PartySize == size
-                    && session.ParticipationTypeText == size + "인 파티",
+                    && session.ParticipationTypeText == size + "인",
                     "party sizes from two through five are accepted");
             }
 

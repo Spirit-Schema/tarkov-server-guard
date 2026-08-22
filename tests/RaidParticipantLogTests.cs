@@ -229,7 +229,7 @@ namespace TarkovServerReporter.Tests
                 ServerSession session = Scan(root).Single();
                 Assert(session.ParticipationType == TarkovParticipationType.Party
                         && session.PartySize == 2
-                        && session.ParticipationTypeText == "2인 파티",
+                        && session.ParticipationTypeText == "2인",
                     "the observed Ready/group/routes/Start/assignment order lost its two-member snapshot");
                 Assert(session.CharacterType == TarkovCharacterType.Pmc,
                     "the observed nested visual side no longer agrees with the profile relation");

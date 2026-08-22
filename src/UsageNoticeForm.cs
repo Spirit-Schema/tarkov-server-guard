@@ -25,16 +25,13 @@ namespace TarkovServerReporter
         internal const string Step1Line = "1. 접속실패가 표시되면 종료 대신 ESCAPE FROM TARKOV 선택";
         internal const string Step2Line =
             "2. 다음 화면에서 재진입 대신 나가기 확인 선택 (장비는 보존됩니다)";
-        internal const string Step2ExplanationLine =
-            "   서버 입장이 완료되지 않은 상태라 일반 레이드 이탈과 다릅니다.";
         internal const string Step3Line = "3. 축하합니다! 차단한 서버로의 접속을 막았습니다. 다시 매칭해 주세요.";
         internal const string NoticeText =
             "- " + MatchLine + "\r\n"
             + "  " + ErrorLine + "\r\n\r\n"
             + "- " + NormalLine + "\r\n\r\n\r\n"
             + Step1Line + "\r\n\r\n"
-            + Step2Line + "\r\n"
-            + Step2ExplanationLine + "\r\n\r\n"
+            + Step2Line + "\r\n\r\n"
             + Step3Line;
 
         public UsageNoticeForm()
@@ -207,8 +204,7 @@ namespace TarkovServerReporter
                 new[] { "   ", "ESCAPE FROM TARKOV", " 선택" }), 0, 4);
             notice.Controls.Add(CreateStepBlock(
                 new[] { "2. 다음 화면에서 ", "재진입", " 대신" },
-                new[] { "   ", "나가기 확인", " 선택 (장비는 보존됩니다)" },
-                Step2ExplanationLine), 0, 6);
+                new[] { "   ", "나가기 확인", " 선택 (장비는 보존됩니다)" }), 0, 6);
             notice.Controls.Add(CreateBodyLabel(
                 "3. 축하합니다! 차단한 서버로의 접속을 막았습니다.\r\n   다시 매칭해 주세요."), 0, 8);
             return notice;
@@ -275,35 +271,20 @@ namespace TarkovServerReporter
             string[] firstLineParts,
             string[] secondLineParts)
         {
-            return CreateStepBlock(firstLineParts, secondLineParts, null);
-        }
-
-        private static TableLayoutPanel CreateStepBlock(
-            string[] firstLineParts,
-            string[] secondLineParts,
-            string thirdLine)
-        {
-            bool hasThirdLine = !string.IsNullOrWhiteSpace(thirdLine);
             var block = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 BackColor = Background,
                 ColumnCount = 1,
-                RowCount = hasThirdLine ? 3 : 2,
+                RowCount = 2,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
             block.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            float rowHeight = hasThirdLine ? 33.333F : 50F;
-            block.RowStyles.Add(new RowStyle(SizeType.Percent, rowHeight));
-            block.RowStyles.Add(new RowStyle(SizeType.Percent, rowHeight));
+            block.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            block.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             block.Controls.Add(CreateInlineStep(firstLineParts), 0, 0);
             block.Controls.Add(CreateInlineStep(secondLineParts), 0, 1);
-            if (hasThirdLine)
-            {
-                block.RowStyles.Add(new RowStyle(SizeType.Percent, rowHeight));
-                block.Controls.Add(CreateBodyLabel(thirdLine), 0, 2);
-            }
             return block;
         }
 

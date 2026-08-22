@@ -935,7 +935,7 @@ namespace TarkovServerReporter.Tests
             session.CharacterType = TarkovCharacterType.Scav;
             session.ParticipationType = TarkovParticipationType.Party;
             session.PartySize = 4;
-            const string expectedType = "PvP시즌2 · 스캐브 · 4인 파티";
+            const string expectedType = "PvP시즌2 · 스캐브 · 4인";
             const string expectedDisplay = "Factory · " + expectedType;
 
             RaidNoteRecord raid = raidStore.CreateFor(session);
@@ -1392,6 +1392,8 @@ namespace TarkovServerReporter.Tests
             };
             if (kind == MemoArchiveBackupKind.RaidNote)
             {
+                // Deliberately retain the older stored label: restore previews must not
+                // rewrite historical GameType text from an existing memo backup.
                 source.RaidNote = new RaidNoteRecord
                 {
                     Key = key,

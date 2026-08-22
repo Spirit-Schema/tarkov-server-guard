@@ -477,9 +477,9 @@ namespace TarkovServerReporter.Tests
 
             string[] expectedRows =
             {
-                "Streets of Tarkov · PvP시즌1 · PMC · 2인 파티",
+                "Streets of Tarkov · PvP시즌1 · PMC · 2인",
                 "Bay 5 · CheckPoint",
-                "Woods · PvE(서버) · 스캐브 · 3인 파티",
+                "Woods · PvE(서버) · 스캐브 · 3인",
                 "Factory · PvE(로컬) · PMC · 솔로"
             };
             foreach (string expected in expectedRows)
@@ -1468,43 +1468,48 @@ namespace TarkovServerReporter.Tests
             MethodInfo formatPacketLossMethod = presentationType.GetMethod(
                 "FormatPacketLoss",
                 publicStatic);
-            string insufficientRttHelp = GetStaticString(
-                presentationType,
-                "InsufficientRttHelp",
-                publicStatic);
-            string referenceLossHelp = GetStaticString(
-                presentationType,
-                "ReferencePacketLossHelp",
-                publicStatic);
             Assert(Convert.ToString(formatActualRttMethod.Invoke(null, new[] { session }))
-                    == "표본부족"
+                    == "로그없음"
                 && Convert.ToString(formatPacketLossMethod.Invoke(null, new[] { session }))
-                    == "0% (참고)"
+                    == "로그없음"
                 && Convert.ToString(actualRttHelpMethod.Invoke(null, new[] { session }))
-                    == insufficientRttHelp
+                    == expected
                 && Convert.ToString(packetLossHelpMethod.Invoke(null, new[] { session }))
-                    == referenceLossHelp,
-                "수신 표본 0건은 RTT 표본부족과 손실 참고값으로 정확히 구분되어야 합니다.");
+                    == expected,
+                "수신 표본 0건은 RTT와 패킷손실 모두 로그없음으로 표시되어야 합니다.");
 
             int rowIndex = historyGrid.Rows.Add();
             try
             {
                 DataGridViewCell rttCell = historyGrid.Rows[rowIndex].Cells["actualRtt"];
                 DataGridViewCell lossCell = historyGrid.Rows[rowIndex].Cells["packetLoss"];
-                rttCell.Value = "표본부족";
-                rttCell.ToolTipText = insufficientRttHelp;
-                lossCell.Value = "0% (참고)";
-                lossCell.ToolTipText = referenceLossHelp;
+                rttCell.Value = "로그없음";
+                rttCell.ToolTipText = expected;
+                lossCell.Value = "로그없음";
+                lossCell.ToolTipText = expected;
                 Assert(rttCell.AccessibilityObject.Description
-                        == "표본부족. " + insufficientRttHelp
+                        == "로그없음. " + expected
                     && lossCell.AccessibilityObject.Description
-                        == "0% (참고). " + referenceLossHelp,
+                        == "로그없음. " + expected,
                     "메인 목록의 지표 셀도 표시값과 전체 도움말을 접근성 설명으로 제공해야 합니다.");
             }
             finally
             {
                 historyGrid.Rows.RemoveAt(rowIndex);
             }
+
+            sessionType.GetProperty("ActualRttMs").SetValue(session, 81.6D, null);
+            sessionType.GetProperty("NetworkReceived").SetValue(session, 1L, null);
+            sessionType.GetProperty("NetworkLoss").SetValue(session, 0.0123456D, null);
+            Assert(Convert.ToString(formatActualRttMethod.Invoke(null, new[] { session }))
+                    == "82 ms"
+                && Convert.ToString(formatPacketLossMethod.Invoke(null, new[] { session }))
+                    == "1.23%"
+                && Convert.ToString(actualRttHelpMethod.Invoke(null, new[] { session }))
+                    == string.Empty
+                && Convert.ToString(packetLossHelpMethod.Invoke(null, new[] { session }))
+                    == string.Empty,
+                "수신 표본이 1건이라도 있으면 임의 최소 표본 기준 없이 두 실게임 지표를 표시해야 합니다.");
         }
 
         private static void AssertPrivacyNoticeText(Form mainForm)

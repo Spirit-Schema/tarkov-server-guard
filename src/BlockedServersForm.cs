@@ -66,7 +66,6 @@ namespace TarkovServerReporter
                     ?? ordered.FirstOrDefault(item => item.NetworkStatisticsObserved)
                     ?? ordered.FirstOrDefault();
                 ServerSession packetLossSource = ordered.FirstOrDefault(HasValidPacketLoss)
-                    ?? ordered.FirstOrDefault(HasReferencePacketLoss)
                     ?? ordered.FirstOrDefault(item => item.NetworkStatisticsObserved)
                     ?? ordered.FirstOrDefault();
 
@@ -88,16 +87,6 @@ namespace TarkovServerReporter
         {
             double ignored;
             return RaidMetricPresentation.TryGetPacketLoss(session, out ignored);
-        }
-
-        private static bool HasReferencePacketLoss(ServerSession session)
-        {
-            return session != null
-                && session.NetworkStatisticsObserved
-                && session.NetworkLoss.HasValue
-                && !double.IsNaN(session.NetworkLoss.Value)
-                && !double.IsInfinity(session.NetworkLoss.Value)
-                && session.NetworkLoss.Value >= 0;
         }
 
         private static void CopyActualRttSource(
@@ -1939,7 +1928,7 @@ namespace TarkovServerReporter
             bool hasActualRtt = RaidMetricPresentation.TryGetActualRtt(
                 actualRttSource,
                 out actualRttSortValue);
-            bool hasPacketLoss = TryGetDisplayedPacketLoss(
+            bool hasPacketLoss = RaidMetricPresentation.TryGetPacketLoss(
                 packetLossSource,
                 out packetLossSortValue);
 
@@ -1960,12 +1949,8 @@ namespace TarkovServerReporter
                 "실게임 패킷손실",
                 packetLossSource,
                 snapshot == null ? null : snapshot.PacketLossRecordedAt);
-            bool referenceValue = packetLossSource.NetworkStatisticsObserved
-                && packetLossSource.NetworkReceived <= 0
-                && packetLossSource.NetworkLoss.HasValue;
             packetLossCell.Style.ForeColor = GetPacketLossColor(
-                hasPacketLoss ? (double?)packetLossSortValue : null,
-                referenceValue);
+                hasPacketLoss ? (double?)packetLossSortValue : null);
         }
 
         private static void ApplyUnavailableMetricCell(DataGridViewCell cell)
@@ -2010,21 +1995,6 @@ namespace TarkovServerReporter
             };
         }
 
-        private static bool TryGetDisplayedPacketLoss(
-            ServerSession source,
-            out double value)
-        {
-            value = 0;
-            if (source == null
-                || !source.NetworkLoss.HasValue
-                || double.IsNaN(source.NetworkLoss.Value)
-                || double.IsInfinity(source.NetworkLoss.Value)
-                || source.NetworkLoss.Value < 0)
-                return false;
-            value = source.NetworkLoss.Value;
-            return true;
-        }
-
         private static string CreateMetricHelp(
             string metricName,
             ServerSession sourceSession,
@@ -2044,9 +2014,8 @@ namespace TarkovServerReporter
                     ? RaidMetricPresentation.TryGetActualRtt(
                         sourceSession,
                         out ignored)
-                    : TryGetDisplayedPacketLoss(sourceSession, out ignored);
-            if (!hasValue && !sourceSession.NetworkStatisticsObserved)
-                return presentationHelp;
+                    : RaidMetricPresentation.TryGetPacketLoss(sourceSession, out ignored);
+            if (!hasValue) return presentationHelp;
             string source = recordedAt.HasValue
                 ? recordedAt.Value.ToString("yyyy-MM-dd HH:mm:ss") + " 레이드 로그"
                 : "가장 최근 레이드 로그";
@@ -2065,10 +2034,9 @@ namespace TarkovServerReporter
             return Success;
         }
 
-        private static Color GetPacketLossColor(double? value, bool referenceValue)
+        private static Color GetPacketLossColor(double? value)
         {
             if (!value.HasValue) return TextMuted;
-            if (referenceValue) return Color.FromArgb(231, 184, 73);
             if (value.Value >= 0.05) return Danger;
             if (value.Value > 0) return Color.FromArgb(231, 184, 73);
             return Success;

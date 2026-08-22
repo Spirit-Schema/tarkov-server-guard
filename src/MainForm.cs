@@ -5424,8 +5424,7 @@ namespace TarkovServerReporter
         {
             if (cell == null) return;
             string text = Convert.ToString(cell.Value);
-            bool missing = string.Equals(text, "로그없음", StringComparison.Ordinal)
-                || string.Equals(text, "표본부족", StringComparison.Ordinal);
+            bool missing = string.Equals(text, "로그없음", StringComparison.Ordinal);
             // Null restores the normal inherited metric font for measured,
             // local-PvE, and neutral values. Only the compact missing state uses
             // the connection-result font beside it.
@@ -5453,8 +5452,7 @@ namespace TarkovServerReporter
 
         private static bool IsCompactMetricState(string text)
         {
-            return string.Equals(text, "로그없음", StringComparison.Ordinal)
-                || string.Equals(text, "표본부족", StringComparison.Ordinal);
+            return string.Equals(text, "로그없음", StringComparison.Ordinal);
         }
 
         private static string CreateMetricAccessibleDescription(string value, string help)
@@ -5468,18 +5466,7 @@ namespace TarkovServerReporter
         private static Color GetPacketLossColor(ServerSession session)
         {
             double value;
-            if (!RaidMetricPresentation.TryGetPacketLoss(session, out value))
-            {
-                if (session != null
-                    && session.NetworkStatisticsObserved
-                    && session.NetworkReceived <= 0
-                    && session.NetworkLoss.HasValue
-                    && !double.IsNaN(session.NetworkLoss.Value)
-                    && !double.IsInfinity(session.NetworkLoss.Value)
-                    && session.NetworkLoss.Value >= 0)
-                    return Warning;
-                return TextMuted;
-            }
+            if (!RaidMetricPresentation.TryGetPacketLoss(session, out value)) return TextMuted;
             if (value >= 0.05) return Danger;
             if (value > 0) return Warning;
             return Success;

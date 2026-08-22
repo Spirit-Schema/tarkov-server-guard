@@ -597,9 +597,9 @@ namespace TarkovServerReporter.Tests
                     && zero.NetworkLoss == 0
                     && zero.NetworkSent == 16
                     && zero.NetworkReceived == 0
-                    && RaidMetricPresentation.FormatActualRtt(zero) == "표본부족"
-                    && RaidMetricPresentation.FormatPacketLoss(zero) == "0% (참고)",
-                "a zero-receive Statistics row preserves its raw counters and loss without pretending RTT is measured");
+                    && RaidMetricPresentation.FormatActualRtt(zero) == "로그없음"
+                    && RaidMetricPresentation.FormatPacketLoss(zero) == "로그없음",
+                "a zero-receive Statistics row keeps its raw counters but presents both metrics as missing logs");
             Assert(valid.NetworkStatisticsObserved
                     && valid.NetworkStatisticsAt == new DateTime(2026, 8, 14, 11, 0, 2)
                     && valid.ActualRttMs == 81.6
@@ -769,6 +769,11 @@ namespace TarkovServerReporter.Tests
                 + "2026.08.14 12:05:00|Statistics (address: 192.0.2.88:17013, rtt: 47.75, lose: 0, sent: 400, received: 400)\r\n"
                 + "2026.08.14 12:10:00|Enter to the 'Disconnected' state (address: 192.0.2.88:17013, reason: 0)\r\n",
                 Encoding.UTF8);
+            File.WriteAllText(
+                Path.Combine(folder, "2026.08.14 backend.log"),
+                "2026.08.14 12:00:06|Info|/client/match/group/current\r\n"
+                + "2026.08.14 12:00:07|Info|/client/match/join\r\n",
+                Encoding.UTF8);
 
             RaidLogScanResult result = RaidLogScanner.Scan(
                 new TarkovLogPaths { ArenaPath = logs },
@@ -794,6 +799,11 @@ namespace TarkovServerReporter.Tests
                 && !session.PvpSeasonNumber.HasValue
                 && session.RaidTypeText == "미확인",
                 "EFT season labels and numbers do not alter Arena sessions");
+            Assert(session != null
+                && session.CharacterType == TarkovCharacterType.Unknown
+                && session.ParticipationType == TarkovParticipationType.Unknown
+                && !session.PartySize.HasValue,
+                "Arena's common match routes do not invent solo, party, or premade party size");
             Assert(session != null
                 && session.DataCenterCode == "JP-TK02"
                 && session.ClientVersion == "1.1.0.1.46699"
@@ -1886,15 +1896,8 @@ namespace TarkovServerReporter.Tests
         {
             const string expectedMissingLogHelp =
                 "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
-            const string expectedInsufficientRttHelp =
-                "네트워크 통계 로그는 있지만 수신 표본이 0건이어서 실게임 RTT를 확정할 수 없습니다.";
-            const string expectedReferencePacketLossHelp =
-                "네트워크 통계 로그의 패킷손실 기록값입니다. 수신 표본이 0건이어서 참고값으로 표시합니다.";
             Assert(RaidMetricPresentation.MissingLogHelp == expectedMissingLogHelp,
                 "the missing-log help keeps the exact user-approved wording");
-            Assert(RaidMetricPresentation.InsufficientRttHelp == expectedInsufficientRttHelp
-                    && RaidMetricPresentation.ReferencePacketLossHelp == expectedReferencePacketLossHelp,
-                "insufficient-sample metric help keeps the exact explanatory wording");
 
             Assert(RaidMetricPresentation.FormatActualRtt(null) == "-"
                 && RaidMetricPresentation.FormatPacketLoss(null) == "-",
@@ -1920,18 +1923,36 @@ namespace TarkovServerReporter.Tests
                 NetworkReceived = 0
             };
             double value;
-            Assert(RaidMetricPresentation.FormatActualRtt(insufficient) == "표본부족"
-                    && RaidMetricPresentation.FormatPacketLoss(insufficient) == "0% (참고)"
+            Assert(RaidMetricPresentation.FormatActualRtt(insufficient) == "로그없음"
+                    && RaidMetricPresentation.FormatPacketLoss(insufficient) == "로그없음"
                     && RaidMetricPresentation.GetActualRttHelp(insufficient)
-                        == expectedInsufficientRttHelp
+                        == expectedMissingLogHelp
                     && RaidMetricPresentation.GetPacketLossHelp(insufficient)
-                        == expectedReferencePacketLossHelp
+                        == expectedMissingLogHelp
                     && !RaidMetricPresentation.TryGetActualRtt(insufficient, out value)
                     && !RaidMetricPresentation.TryGetPacketLoss(insufficient, out value),
-                "an observed zero-receive snapshot is distinct from a missing log and remains non-authoritative");
+                "an observed zero-receive snapshot presents both metrics as missing logs");
             insufficient.NetworkLoss = 0.0123456;
-            Assert(RaidMetricPresentation.FormatPacketLoss(insufficient) == "1.23% (참고)",
-                "an insufficient snapshot exposes the raw logged loss as an explicitly labeled reference value");
+            Assert(RaidMetricPresentation.FormatPacketLoss(insufficient) == "로그없음",
+                "a raw loss value is not exposed when no received sample supports it");
+
+            var singleSample = new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Server,
+                NetworkStatisticsObserved = true,
+                NetworkStatisticsAt = new DateTime(2026, 8, 22, 10, 1, 0),
+                ActualRttMs = 81.6,
+                NetworkLoss = 0.0123456,
+                NetworkSent = 1,
+                NetworkReceived = 1
+            };
+            Assert(RaidMetricPresentation.FormatActualRtt(singleSample) == "82 ms"
+                    && RaidMetricPresentation.FormatPacketLoss(singleSample) == "1.23%"
+                    && RaidMetricPresentation.GetActualRttHelp(singleSample) == string.Empty
+                    && RaidMetricPresentation.GetPacketLossHelp(singleSample) == string.Empty
+                    && RaidMetricPresentation.TryGetActualRtt(singleSample, out value)
+                    && RaidMetricPresentation.TryGetPacketLoss(singleSample, out value),
+                "one received sample displays both logged metrics without an arbitrary minimum threshold");
 
             var local = new ServerSession
             {

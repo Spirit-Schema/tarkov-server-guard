@@ -305,7 +305,7 @@ namespace TarkovServerReporter
                 if (ParticipationType == TarkovParticipationType.Solo) return "솔로";
                 if (ParticipationType != TarkovParticipationType.Party) return string.Empty;
                 return RaidClassificationModel.IsValidPartySize(PartySize)
-                    ? PartySize.Value.ToString(CultureInfo.InvariantCulture) + "인 파티"
+                    ? PartySize.Value.ToString(CultureInfo.InvariantCulture) + "인"
                     : "파티";
             }
         }
@@ -606,12 +606,6 @@ namespace TarkovServerReporter
         public const string LocalRaidHelp =
             "로컬 PvE 레이드는 게임 서버 통계가 적용되지 않습니다.";
 
-        public const string InsufficientRttHelp =
-            "네트워크 통계 로그는 있지만 수신 표본이 0건이어서 실게임 RTT를 확정할 수 없습니다.";
-
-        public const string ReferencePacketLossHelp =
-            "네트워크 통계 로그의 패킷손실 기록값입니다. 수신 표본이 0건이어서 참고값으로 표시합니다.";
-
         public static string FormatActualRtt(ServerSession session)
         {
             double value;
@@ -623,13 +617,8 @@ namespace TarkovServerReporter
         public static string FormatPacketLoss(ServerSession session)
         {
             double value;
-            if (TryGetRawPacketLoss(session, out value))
-            {
-                string formatted = FormatPacketLossValue(value);
-                return HasInsufficientNetworkSample(session)
-                    ? formatted + " (참고)"
-                    : formatted;
-            }
+            if (TryGetPacketLoss(session, out value))
+                return FormatPacketLossValue(value);
             return GetUnavailableText(session);
         }
 
@@ -648,10 +637,7 @@ namespace TarkovServerReporter
             if (session.HostingMode == TarkovHostingMode.Local) return LocalRaidHelp;
             double ignored;
             if (TryGetActualRtt(session, out ignored)) return string.Empty;
-            if (!session.NetworkStatisticsObserved) return MissingLogHelp;
-            return session.NetworkReceived <= 0
-                ? InsufficientRttHelp
-                : "네트워크 통계 로그는 있지만 유효한 실게임 RTT 값이 없어 표본부족으로 표시합니다.";
+            return MissingLogHelp;
         }
 
         public static string GetPacketLossHelp(ServerSession session)
@@ -660,11 +646,7 @@ namespace TarkovServerReporter
             if (session.HostingMode == TarkovHostingMode.Local) return LocalRaidHelp;
             double ignored;
             if (TryGetPacketLoss(session, out ignored)) return string.Empty;
-            if (!session.NetworkStatisticsObserved) return MissingLogHelp;
-            if (HasInsufficientNetworkSample(session)
-                && TryGetRawPacketLoss(session, out ignored))
-                return ReferencePacketLossHelp;
-            return "네트워크 통계 로그는 있지만 유효한 패킷손실 값이 없어 표본부족으로 표시합니다.";
+            return MissingLogHelp;
         }
 
         public static bool TryGetActualRtt(ServerSession session, out double value)
@@ -672,7 +654,7 @@ namespace TarkovServerReporter
             value = 0;
             if (session == null
                 || session.HostingMode == TarkovHostingMode.Local
-                || HasInsufficientNetworkSample(session)
+                || HasNoReceivedNetworkSample(session)
                 || !session.ActualRttMs.HasValue)
                 return false;
             value = session.ActualRttMs.Value;
@@ -684,7 +666,7 @@ namespace TarkovServerReporter
             value = 0;
             if (session == null
                 || session.HostingMode == TarkovHostingMode.Local
-                || HasInsufficientNetworkSample(session))
+                || HasNoReceivedNetworkSample(session))
                 return false;
             return TryGetRawPacketLoss(session, out value);
         }
@@ -700,7 +682,7 @@ namespace TarkovServerReporter
             return IsFiniteNonNegative(value);
         }
 
-        private static bool HasInsufficientNetworkSample(ServerSession session)
+        private static bool HasNoReceivedNetworkSample(ServerSession session)
         {
             return session != null
                 && session.NetworkStatisticsObserved
@@ -716,7 +698,7 @@ namespace TarkovServerReporter
         {
             if (session == null) return "-";
             if (session.HostingMode == TarkovHostingMode.Local) return "해당 없음";
-            return session.NetworkStatisticsObserved ? "표본부족" : "로그없음";
+            return "로그없음";
         }
     }
 
