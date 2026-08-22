@@ -1742,7 +1742,7 @@ namespace TarkovServerReporter
             DataGridViewTextBoxColumn mapModeColumn = CreateTextColumn(
                 "mapMode",
                 "맵 · 게임유형",
-                195);
+                220);
             mapModeColumn.CellTemplate = new RaidContextTextBoxCell();
             mapModeColumn.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
             _historyGrid.Columns.Add(mapModeColumn);
@@ -5747,7 +5747,7 @@ namespace TarkovServerReporter
         {
             try
             {
-                RaidLogScanResult scan = await LoadRecentSessionsForBlockedFormAsync();
+                RaidLogScanResult scan = await LoadRecentSessionsForQualityEvidenceAsync();
                 if (scan == null
                     || !scan.ScanCompletedWithoutErrors
                     || !scan.TotalMatchingSessionsIsExact
@@ -5900,23 +5900,8 @@ namespace TarkovServerReporter
                 return;
             }
 
-            _isRefreshing = true;
-            UpdateActionButtons();
-            SetStatus("차단 서버의 최근 실게임 지표를 확인하는 중…", Accent);
-            RaidLogScanResult metricHistory;
-            try
-            {
-                metricHistory = await LoadRecentSessionsForBlockedFormAsync();
-            }
-            finally
-            {
-                _isRefreshing = false;
-                UpdateActionButtons();
-            }
             bool changed;
-            using (var form = new BlockedServersForm(
-                metricHistory.Sessions,
-                metricHistory.ScanCompletedWithoutErrors))
+            using (var form = new BlockedServersForm())
             {
                 form.ShowDialog(this);
                 changed = form.FirewallStateChanged;
@@ -6101,7 +6086,7 @@ namespace TarkovServerReporter
             }
         }
 
-        private async Task<RaidLogScanResult> LoadRecentSessionsForBlockedFormAsync()
+        private async Task<RaidLogScanResult> LoadRecentSessionsForQualityEvidenceAsync()
         {
             if (!AreConfiguredLogSourcesAvailable(
                 _appliedEftPath,
@@ -6143,8 +6128,8 @@ namespace TarkovServerReporter
             }
             catch
             {
-                // The firewall-rule list is still useful, but incomplete history must not
-                // be presented as the latest known raid metrics.
+                // An incomplete scan must not be presented as conclusive recent-raid
+                // evidence in the block-completion message.
                 return new RaidLogScanResult
                 {
                     Sessions = new List<ServerSession>(),

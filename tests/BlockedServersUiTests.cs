@@ -27,7 +27,7 @@ namespace TarkovServerReporter.Tests
                 Assembly application = Assembly.LoadFrom(Path.GetFullPath(args[0]));
                 AssertSelectionConveniences(application);
                 AssertHeaderSorting(application);
-                AssertMetricSnapshotAndPresentation(application);
+                AssertCurrentPingPresentation(application);
                 AssertUsageNotice(application);
                 Console.WriteLine("BlockedServersUiTests: PASS");
                 return 0;
@@ -80,16 +80,6 @@ namespace TarkovServerReporter.Tests
                         && column.HeaderCell.ToolTipText
                             == "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.",
                         columnName + " 열은 3단계 정렬 동작과 안내를 제공해야 합니다.");
-                }
-                foreach (string columnName in new[] { "actualRtt", "packetLoss" })
-                {
-                    DataGridViewColumn column = grid.Columns[columnName];
-                    Assert(column.SortMode == DataGridViewColumnSortMode.Programmatic
-                        && column.HeaderCell.ToolTipText.Contains("현재 측정값이 아닙니다.")
-                        && column.HeaderCell.ToolTipText.Contains("서로 다른 레이드 시점")
-                        && column.HeaderCell.ToolTipText.Contains(
-                            "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다."),
-                        columnName + " 측정 열은 정확한 범위 안내와 3단계 정렬을 제공해야 합니다.");
                 }
                 Assert(grid.Columns["currentPing"].SortMode
                         == DataGridViewColumnSortMode.NotSortable
@@ -322,59 +312,13 @@ namespace TarkovServerReporter.Tests
             }
         }
 
-        private static void AssertMetricSnapshotAndPresentation(Assembly application)
+        private static void AssertCurrentPingPresentation(Assembly application)
         {
             const BindingFlags instanceFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+            const BindingFlags staticFlags = BindingFlags.Static | BindingFlags.NonPublic;
             Type formType = application.GetType("TarkovServerReporter.BlockedServersForm", true);
-            Type sessionType = application.GetType("TarkovServerReporter.ServerSession", true);
-            Type hostingModeType = application.GetType(
-                "TarkovServerReporter.TarkovHostingMode",
-                true);
-            Type sessionListType = typeof(List<>).MakeGenericType(sessionType);
-            var sessions = (IList)Activator.CreateInstance(sessionListType);
-            DateTime older = new DateTime(2026, 8, 17, 20, 10, 0);
-            DateTime newer = new DateTime(2026, 8, 17, 20, 20, 0);
-            DateTime localNewest = new DateTime(2026, 8, 17, 20, 30, 0);
-            sessions.Add(CreateSession(
-                sessionType, hostingModeType, "203.0.113.10", older, 142.4, null, false));
-            sessions.Add(CreateSession(
-                sessionType, hostingModeType, "203.0.113.10", newer, null, 0.031, false));
-            sessions.Add(CreateSession(
-                sessionType, hostingModeType, "203.0.113.10", localNewest, 5, 0, true));
-            sessions.Add(CreateSession(
-                sessionType, hostingModeType, "198.51.100.20", newer, 81.2, 0, false));
-            sessions.Add(CreateSession(
-                sessionType, hostingModeType, "192.0.2.30", newer, null, null, false));
-            DateTime insufficientAt = new DateTime(2026, 8, 17, 20, 40, 2);
-            sessions.Add(CreateSession(
-                sessionType,
-                hostingModeType,
-                "192.0.2.31",
-                insufficientAt.AddSeconds(-2),
-                null,
-                0,
-                false,
-                true,
-                0,
-                insufficientAt));
-            DateTime singleSampleAt = new DateTime(2026, 8, 17, 20, 50, 2);
-            sessions.Add(CreateSession(
-                sessionType,
-                hostingModeType,
-                "192.0.2.33",
-                singleSampleAt.AddSeconds(-2),
-                93.4,
-                0.0125,
-                false,
-                true,
-                1,
-                singleSampleAt));
-
-            Type enumerableType = typeof(IEnumerable<>).MakeGenericType(sessionType);
-            ConstructorInfo constructor = formType.GetConstructor(new[] { enumerableType });
-            Assert(constructor != null,
-                "서버차단현황은 읽기 전용 세션 스냅샷을 받는 생성자를 제공해야 합니다.");
-            using (var form = (Form)constructor.Invoke(new object[] { sessions }))
+            Type serverType = application.GetType("TarkovServerReporter.ManagedBlockedServer", true);
+            using (var form = (Form)Activator.CreateInstance(formType))
             {
                 var grid = (DataGridView)formType.GetField("_grid", instanceFlags).GetValue(form);
                 var refreshButton = (Button)formType.GetField(
@@ -383,122 +327,51 @@ namespace TarkovServerReporter.Tests
                 var toolTip = (ToolTip)formType.GetField(
                     "_toolTip",
                     instanceFlags).GetValue(form);
-                var snapshots = (IDictionary)formType.GetField(
-                    "_metricSnapshots",
-                    instanceFlags).GetValue(form);
-                MethodInfo applyMetrics = formType.GetMethod("ApplyMetricCells", instanceFlags);
-                MethodInfo headerClick = formType.GetMethod(
-                    "GridColumnHeaderMouseClick",
-                    instanceFlags);
-                Assert(grid != null && snapshots != null && applyMetrics != null,
-                    "차단 서버 로그 지표 표시 경계를 찾지 못했습니다.");
+                MethodInfo applyCurrentPing = formType.GetMethod(
+                    "ApplyCurrentPingCell",
+                    staticFlags);
+                Assert(grid != null && refreshButton != null && toolTip != null
+                        && applyCurrentPing != null,
+                    "서버차단현황의 현재 핑 표시 경계를 찾지 못했습니다.");
+                Assert(!grid.Columns.Contains("actualRtt")
+                        && !grid.Columns.Contains("packetLoss")
+                        && grid.Columns.Contains("currentPing"),
+                    "서버차단현황은 제거된 실게임 지표 열 없이 현재 핑 열을 유지해야 합니다.");
 
-                object firstSnapshot = snapshots["203.0.113.10"];
-                Assert(firstSnapshot != null
-                    && Math.Abs(Convert.ToDouble(firstSnapshot.GetType()
-                        .GetProperty("ActualRttMs").GetValue(firstSnapshot, null)) - 142.4) < 0.001
-                    && Math.Abs(Convert.ToDouble(firstSnapshot.GetType()
-                        .GetProperty("PacketLoss").GetValue(firstSnapshot, null)) - 0.031) < 0.0001,
-                    "RTT와 패킷손실은 각 지표의 가장 최근 유효 원격 레이드 값을 독립적으로 보존해야 합니다.");
-
-                DataGridViewRow first = AddMetricRow(grid, "203.0.113.10");
-                DataGridViewRow second = AddMetricRow(grid, "198.51.100.20");
-                DataGridViewRow missing = AddMetricRow(grid, "192.0.2.30");
-                DataGridViewRow insufficient = AddMetricRow(grid, "192.0.2.31");
-                DataGridViewRow noRecentRecord = AddMetricRow(grid, "192.0.2.32");
-                DataGridViewRow singleSample = AddMetricRow(grid, "192.0.2.33");
-                applyMetrics.Invoke(form, new object[] { first, "203.0.113.10" });
-                applyMetrics.Invoke(form, new object[] { second, "198.51.100.20" });
-                applyMetrics.Invoke(form, new object[] { missing, "192.0.2.30" });
-                applyMetrics.Invoke(form, new object[] { insufficient, "192.0.2.31" });
-                applyMetrics.Invoke(form, new object[] { noRecentRecord, "192.0.2.32" });
-                applyMetrics.Invoke(form, new object[] { singleSample, "192.0.2.33" });
+                DataGridViewRow row = AddServerRow(grid, serverType, "192.0.2.10");
+                applyCurrentPing.Invoke(null, new object[] { row });
 
                 const string currentPingHelp =
                     "차단 규칙이 해당 IP의 모든 아웃바운드 통신(ICMP 포함)을 막으므로 차단 중에는 "
                     + "현재 핑을 측정할 수 없습니다. 해제 후 메인 화면에서 조회해 주세요.";
-                Assert(Convert.ToString(first.Cells["currentPing"].Value)
+                Assert(Convert.ToString(row.Cells["currentPing"].Value)
                         == "차단 중 · 측정 불가"
-                    && first.Cells["currentPing"].ToolTipText == currentPingHelp,
+                    && row.Cells["currentPing"].ToolTipText == currentPingHelp
+                    && row.Cells["currentPing"].AccessibilityObject.Description
+                        == currentPingHelp,
                     "차단 중 현재 핑을 실제 서버 상태처럼 오인하지 않도록 측정 불가 이유를 제공해야 합니다.");
-                Assert(Convert.ToString(first.Cells["actualRtt"].Value) == "142 ms"
-                    && Convert.ToString(first.Cells["packetLoss"].Value) == "3.1%"
-                    && first.Cells["actualRtt"].ToolTipText.Contains(
-                        "2026-08-17 20:10:00 레이드 로그")
-                    && first.Cells["packetLoss"].ToolTipText.Contains(
-                        "2026-08-17 20:20:00 레이드 로그")
-                    && first.Cells["actualRtt"].ToolTipText.EndsWith(
-                        "현재 측정값이 아닙니다.", StringComparison.Ordinal),
-                    "최근 실게임 지표와 서로 다른 근거 시각을 정확히 표시해야 합니다.");
-                Assert(Convert.ToString(missing.Cells["actualRtt"].Value) == "로그없음"
-                    && Convert.ToString(missing.Cells["packetLoss"].Value) == "로그없음"
-                    && missing.Cells["actualRtt"].ToolTipText
-                        == "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.",
-                    "실제 로그 지표가 없을 때만 로그없음과 공통 안내를 표시해야 합니다.");
-                const string noRecentRecordHelp =
-                    "불러온 최근 레이드 최대 100개에서 이 IP의 접속 기록을 찾지 못했습니다. "
-                    + "더 오래된 기록은 이 목록에 표시되지 않을 수 있습니다.";
-                Assert(Convert.ToString(noRecentRecord.Cells["actualRtt"].Value)
-                        == "최근 기록 없음"
-                    && Convert.ToString(noRecentRecord.Cells["packetLoss"].Value)
-                        == "최근 기록 없음"
-                    && noRecentRecord.Cells["actualRtt"].ToolTipText == noRecentRecordHelp
-                    && noRecentRecord.Cells["actualRtt"].AccessibilityObject.Description
-                        == noRecentRecordHelp,
-                    "최근 100개에 IP 기록이 없는 상태를 해당 레이드의 Statistics 누락과 구분해야 합니다.");
-                Assert(Convert.ToString(insufficient.Cells["actualRtt"].Value) == "로그없음"
-                    && Convert.ToString(insufficient.Cells["packetLoss"].Value) == "로그없음"
-                    && insufficient.Cells["actualRtt"].ToolTipText
-                        == "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다."
-                    && insufficient.Cells["packetLoss"].ToolTipText
-                        == "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다."
-                    && insufficient.Cells["actualRtt"].Tag == null
-                    && insufficient.Cells["packetLoss"].Tag == null,
-                    "차단현황도 수신 표본 0건의 두 실게임 지표를 로그없음으로 표시해야 합니다.");
-                Assert(Convert.ToString(singleSample.Cells["actualRtt"].Value) == "93 ms"
-                    && Convert.ToString(singleSample.Cells["packetLoss"].Value) == "1.25%"
-                    && singleSample.Cells["actualRtt"].ToolTipText.Contains(
-                        "2026-08-17 20:50:02 레이드 로그")
-                    && Convert.ToDouble(singleSample.Cells["actualRtt"].Tag) == 93.4
-                    && Math.Abs(Convert.ToDouble(singleSample.Cells["packetLoss"].Tag) - 0.0125) < 0.0001,
-                    "차단현황은 수신 표본 1건의 지표도 임의 최소 표본 기준 없이 표시해야 합니다.");
-                Assert(first.Cells["currentPing"].AccessibilityObject.Description
-                        == first.Cells["currentPing"].ToolTipText
-                    && first.Cells["actualRtt"].AccessibilityObject.Description
-                        == first.Cells["actualRtt"].ToolTipText
-                    && insufficient.Cells["packetLoss"].AccessibilityObject.Description
-                        == insufficient.Cells["packetLoss"].ToolTipText,
-                    "현재 핑과 실게임 지표의 전체 설명을 셀 접근성 설명에도 제공해야 합니다.");
-
                 Assert(grid.Columns["currentPing"].HeaderCell.ToolTipText.Contains(
                         "ICMP 포함")
                     && grid.Columns["currentPing"].HeaderCell.AccessibilityObject.Description
                         == grid.Columns["currentPing"].HeaderCell.ToolTipText
-                    && grid.Columns["actualRtt"].HeaderCell.AccessibilityObject.Description
-                        == grid.Columns["actualRtt"].HeaderCell.ToolTipText
                     && grid.AccessibleDescription.Contains(
                         "차단 중에는 측정할 수 없습니다."),
-                    "측정 범위와 제약을 헤더 툴팁과 접근성 설명에서 동일하게 제공해야 합니다.");
+                    "현재 핑의 측정 제약을 헤더 툴팁과 접근성 설명에서 동일하게 제공해야 합니다.");
 
                 const string refreshHelp =
-                    "차단 규칙 목록만 새로고침합니다. 실게임 지표는 이 창을 다시 열 때 최신 로그로 갱신됩니다.";
+                    "Windows 방화벽의 차단 규칙 목록을 다시 확인합니다.";
                 Assert(refreshButton.AccessibleName == "차단 규칙 목록 새로고침"
                     && refreshButton.AccessibleDescription == refreshHelp
                     && toolTip.GetToolTip(refreshButton) == refreshHelp,
-                    "창 안 새로고침이 방화벽 규칙만 갱신하고 지표 갱신은 재열기 시점이라는 범위를 명확히 알려야 합니다.");
-
-                InvokeHeaderClick(form, grid, headerClick, "actualRtt");
-                Assert(GetIpOrder(grid)
-                        == "198.51.100.20|192.0.2.33|203.0.113.10|192.0.2.30|192.0.2.31|192.0.2.32",
-                    "실게임 RTT는 문자열이 아닌 수치로 정렬하고 로그 없는 값은 마지막에 유지해야 합니다.");
+                    "창 안 새로고침은 Windows 방화벽 차단 규칙만 다시 확인한다고 안내해야 합니다.");
 
                 form.CreateControl();
                 form.PerformLayout();
                 grid.CreateControl();
                 grid.PerformLayout();
-                Assert(form.ClientSize.Width == 1320
+                Assert(form.ClientSize.Width == 1120
                     && !grid.Controls.OfType<HScrollBar>().Any(scroll => scroll.Visible),
-                    "기본 창 폭에서는 새 지표 열 때문에 가로 스크롤이 처음부터 나타나면 안 됩니다.");
+                    "축소된 기본 창 폭에서도 가로 스크롤이 처음부터 나타나면 안 됩니다.");
 
                 Control[] notices = form.Controls.Find("firewallPartyScopeNotice", true);
                 const string partyScope =
@@ -510,75 +383,6 @@ namespace TarkovServerReporter.Tests
                     "파티별 로컬 차단 범위를 화면과 접근성 설명에 동일하게 제공해야 합니다.");
             }
 
-            ConstructorInfo completenessConstructor = formType.GetConstructor(
-                new[] { enumerableType, typeof(bool) });
-            Assert(completenessConstructor != null,
-                "최근 로그 완전성 상태를 차단현황에 전달하는 생성자가 필요합니다.");
-            using (var incompleteForm = (Form)completenessConstructor.Invoke(
-                new object[] { sessions, false }))
-            {
-                var grid = (DataGridView)formType.GetField("_grid", instanceFlags)
-                    .GetValue(incompleteForm);
-                MethodInfo applyMetrics = formType.GetMethod("ApplyMetricCells", instanceFlags);
-                DataGridViewRow row = AddMetricRow(grid, "203.0.113.10");
-                applyMetrics.Invoke(incompleteForm, new object[] { row, "203.0.113.10" });
-                Assert(Convert.ToString(row.Cells["actualRtt"].Value) == "확인 불가"
-                    && Convert.ToString(row.Cells["packetLoss"].Value) == "확인 불가"
-                    && row.Cells["actualRtt"].ToolTipText.Contains("일부 로그를 읽지 못해")
-                    && row.Cells["actualRtt"].AccessibilityObject.Description
-                        == row.Cells["actualRtt"].ToolTipText,
-                    "불완전 스캔은 부분 지표를 최신값이나 로그없음으로 단정하지 않아야 합니다.");
-            }
-        }
-
-        private static object CreateSession(
-            Type sessionType,
-            Type hostingModeType,
-            string ipAddress,
-            DateTime detectedAt,
-            double? actualRtt,
-            double? packetLoss,
-            bool local,
-            bool statisticsObserved = false,
-            long received = 0,
-            DateTime? statisticsAt = null)
-        {
-            object session = Activator.CreateInstance(sessionType);
-            sessionType.GetProperty("IpAddress").SetValue(session, ipAddress, null);
-            sessionType.GetProperty("SessionStarted").SetValue(session, detectedAt, null);
-            sessionType.GetProperty("LastUpdated").SetValue(session, detectedAt, null);
-            sessionType.GetProperty("HostingMode").SetValue(
-                session,
-                Enum.Parse(hostingModeType, local ? "Local" : "Server"),
-                null);
-            if (actualRtt.HasValue)
-                sessionType.GetProperty("ActualRttMs").SetValue(session, actualRtt.Value, null);
-            if (packetLoss.HasValue)
-                sessionType.GetProperty("NetworkLoss").SetValue(session, packetLoss.Value, null);
-            sessionType.GetProperty("NetworkStatisticsObserved").SetValue(
-                session,
-                statisticsObserved,
-                null);
-            sessionType.GetProperty("NetworkReceived").SetValue(session, received, null);
-            sessionType.GetProperty("NetworkStatisticsAt").SetValue(session, statisticsAt, null);
-            return session;
-        }
-
-        private static DataGridViewRow AddMetricRow(DataGridView grid, string ipAddress)
-        {
-            int index = grid.Rows.Add(
-                false,
-                ipAddress,
-                "차단 중",
-                "차단 중 · 측정 불가",
-                "로그없음",
-                "로그없음",
-                "-",
-                "확인 안 됨",
-                string.Empty,
-                "현재 규칙",
-                "해제");
-            return grid.Rows[index];
         }
 
         private static void AssertUsageNotice(Assembly application)
@@ -670,8 +474,7 @@ namespace TarkovServerReporter.Tests
                 "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
                     + "현재 차단 서버 {0}개 중 {1}개가 선택되어 있습니다. "
                     + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다. "
-                    + "실게임 RTT와 패킷손실은 서로 다른 최근 레이드의 값일 수 있으며, 현재 핑은 차단 규칙이 "
-                    + "ICMP를 포함한 통신을 막아 차단 중에는 측정할 수 없습니다.",
+                    + "현재 핑은 차단 규칙이 ICMP를 포함한 통신을 막아 차단 중에는 측정할 수 없습니다.",
                 totalCount,
                 selectedCount);
             AccessibleObject header = grid.Columns["selected"].HeaderCell.AccessibilityObject;
@@ -714,7 +517,10 @@ namespace TarkovServerReporter.Tests
                 state.ToString());
         }
 
-        private static void AddServerRow(DataGridView grid, Type serverType, string ipAddress)
+        private static DataGridViewRow AddServerRow(
+            DataGridView grid,
+            Type serverType,
+            string ipAddress)
         {
             object server = Activator.CreateInstance(serverType);
             serverType.GetProperty("IpAddress").SetValue(server, ipAddress, null);
@@ -723,14 +529,14 @@ namespace TarkovServerReporter.Tests
                 ipAddress,
                 "차단 중",
                 "차단 중 · 측정 불가",
-                "로그없음",
-                "로그없음",
                 "-",
                 "확인 안 됨",
                 string.Empty,
                 "현재 규칙",
                 "해제");
-            grid.Rows[index].Tag = server;
+            DataGridViewRow row = grid.Rows[index];
+            row.Tag = server;
+            return row;
         }
 
         private static DataGridViewRow AddSortableServerRow(
@@ -751,8 +557,6 @@ namespace TarkovServerReporter.Tests
                 ipAddress,
                 status,
                 "차단 중 · 측정 불가",
-                "로그없음",
-                "로그없음",
                 location,
                 blockedAt,
                 hasNote ? "저장된 차단 메모" : "차단 메모 추가",

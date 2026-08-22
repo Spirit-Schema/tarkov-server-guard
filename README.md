@@ -6,7 +6,7 @@
 
 Escape from Tarkov와 Escape from Tarkov: Arena의 최근 접속 서버를 한눈에 확인하고, 연결 품질이 좋지 않은 서버를 Windows 방화벽으로 선택 차단·해제하는 도구입니다.
 
-현재 배포 버전은 `v0.8.0`입니다.
+현재 배포 버전은 `v0.8.3`입니다.
 
 ## 핵심 기능
 

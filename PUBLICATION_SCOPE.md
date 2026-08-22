@@ -14,7 +14,7 @@ Tarkov Server Guard는 사용자가 동작의 안전성과 투명성을 검토�
 
 소스가 공개되어 있어도 원본이나 수정본을 임의로 공유·재배포할 수 있다는 의미는 아닙니다. 공식 배포본은 [Spirit-Schema GitHub Releases](https://github.com/Spirit-Schema/tarkov-server-guard/releases)에서만 제공합니다. 해당 공식 링크 자체를 공유하는 것은 허용됩니다.
 
-`deferred/` 아래의 보류 설계는 현재 제품 소스·테스트·패키징 입력이 아닙니다. `deferred/uninstall/`에는 사용자 선택형 설치 제거 시험 구현을, `deferred/release-integrity/`에는 Build ID·provenance·공개 자산 재검증·전용 민감정보 검사 시험 구현을 보존합니다. `package-release.ps1`의 공개 실행 소스 스냅샷(`src`, `tests`, `tools`)에는 두 보류 폴더가 포함되지 않습니다. 향후 공개 검토본에 참고 자료로 포함하려면 공개 범위와 개인정보 노출 가능성을 별도로 다시 검토해야 합니다.
+사용자 선택형 설치 제거와 Build ID·provenance·공개 자산 재검증·전용 민감정보 검사 시험 구현은 공개 저장소 밖의 로컬 보류 자료로만 보존하며 현재 제품 소스·테스트·패키징 입력이 아닙니다. `package-release.ps1`의 공개 실행 소스 스냅샷은 명시된 `src`, `tests`, `tools`와 공개 문서만 포함합니다. 향후 보류 자료를 공개 검토본에 포함하려면 공개 범위와 개인정보 노출 가능성을 별도로 다시 검토해야 합니다.
 
 ## 공개하지 않으며 Git에서 제외하는 항목
 

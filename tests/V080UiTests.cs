@@ -84,7 +84,7 @@ namespace TarkovServerReporter.Tests
                     AssertMissingLogTooltips(application, mainFormType, grid);
                     AssertPrivacyNoticeText(form);
                     AssertFirewallPersistenceUi(application, mainFormType, form);
-                    AssertMetricHistoryRequiresConfiguredLogSource(mainFormType, form);
+                    AssertQualityEvidenceRequiresConfiguredLogSource(mainFormType, form);
                     AssertInitialFirewallStatePresentation(mainFormType, form);
                     AssertNoPersistentPatchNotesOrUninstallButtons(form);
                 }
@@ -472,8 +472,9 @@ namespace TarkovServerReporter.Tests
                 "맵·게임유형·캐릭터·참가 형태 표시 열이 없습니다.");
             DataGridViewColumn column = historyGrid.Columns["mapMode"];
             Assert(column.HeaderText == "맵 · 게임유형"
+                    && column.Width == 220
                     && column.DefaultCellStyle.WrapMode == DataGridViewTriState.False,
-                "레이드 문맥 열은 기존 헤더와 한 줄 표시를 유지해야 합니다.");
+                "레이드 문맥 열은 넓어진 기본 폭과 기존 한 줄 표시를 유지해야 합니다.");
 
             string[] expectedRows =
             {
@@ -1540,7 +1541,7 @@ namespace TarkovServerReporter.Tests
                 "메인 화면의 지역 DB 용량 안내 문구와 띄어쓰기가 확정안과 달라졌습니다.");
         }
 
-        private static void AssertMetricHistoryRequiresConfiguredLogSource(
+        private static void AssertQualityEvidenceRequiresConfiguredLogSource(
             Type mainFormType,
             Form mainForm)
         {
@@ -1555,7 +1556,7 @@ namespace TarkovServerReporter.Tests
                 "AreConfiguredLogSourcesAvailable",
                 staticFlags);
             MethodInfo historyMethod = mainFormType.GetMethod(
-                "LoadRecentSessionsForBlockedFormAsync",
+                "LoadRecentSessionsForQualityEvidenceAsync",
                 instanceFlags);
             MethodInfo evidenceMethod = mainFormType.GetMethod(
                 "LoadRecentRaidQualityEvidenceAsync",
@@ -1568,7 +1569,7 @@ namespace TarkovServerReporter.Tests
                     && availabilityMethod != null
                     && historyMethod != null
                     && evidenceMethod != null,
-                "차단현황 로그 원본 가용성 판정 경계를 찾지 못했습니다.");
+                "차단 완료 근거용 로그 원본 가용성 판정 경계를 찾지 못했습니다.");
 
             object originalEftPath = eftPathField.GetValue(mainForm);
             object originalArenaPath = arenaPathField.GetValue(mainForm);
@@ -1601,7 +1602,7 @@ namespace TarkovServerReporter.Tests
                         unavailableHistory,
                         "ScanCompletedWithoutErrors")
                     && GetCollectionCount(unavailableHistory, "Sessions") == 0,
-                    "로그 경로가 없으면 차단현황 지표를 로그없음이 아닌 확인 불가로 전달해야 합니다.");
+                    "로그 경로가 없으면 차단 완료 근거용 스캔을 불완전 상태로 전달해야 합니다.");
                 Assert(AwaitReflectedTaskResult(evidenceMethod.Invoke(
                         mainForm,
                         new object[] { "203.0.113.42" })) == null,
@@ -1656,7 +1657,7 @@ namespace TarkovServerReporter.Tests
                     && GetBooleanProperty(latestHistory, "TotalMatchingSessionsIsExact")
                     && GetCollectionCount(latestHistory, "Sessions") == 100
                     && GetIntegerProperty(latestHistory, "TotalMatchingSessions") == 101,
-                    "차단현황을 열 때 화면의 오래된 Recent100 캐시 대신 전체 로그에서 최신 100개를 다시 확정해야 합니다.");
+                    "차단 완료 근거는 화면의 오래된 Recent100 캐시 대신 전체 로그에서 최신 100개를 다시 확정해야 합니다.");
                 object latestEvidence = AwaitReflectedTaskResult(evidenceMethod.Invoke(
                     mainForm,
                     new object[] { "198.51.100.101" }));
