@@ -39,11 +39,23 @@ namespace TarkovServerReporter.Tests
             ReleaseNotesEntry current = ReleaseNotesCatalog.FindBundled("v0.8.3");
             Assert(current != null && current.VersionText == "0.8.3",
                 "The v0.8.3 bundled completion notes are missing.");
-            Assert(current.NotesText.Contains("PMC·스캐브")
-                && current.NotesText.Contains("솔로·파티")
-                && current.NotesText.Contains("2~5인")
-                && current.NotesText.Contains("추측하지 않고"),
-                "The v0.8.3 bundled completion notes lost a required improvement.");
+            string[] expectedCurrentLines =
+            {
+                "- EFT 레이드 기록에서 확인 가능한 경우 PMC·스캐브와 솔로·파티를 맵·게임유형 뒤에 함께 표시합니다.",
+                "- 파티 로그의 최종 준비 상태가 온전하면 본인을 포함한 2~5인 인원수를 표시합니다.",
+                "- 로그에 명시된 PvpSeason1·PvpSeason2 같은 번호를 우선해 PvP시즌1·PvP시즌2로 표시합니다.",
+                "- ProfileId 관계와 파티 캐릭터 정보가 충돌하거나 로그가 불완전하면 값을 추측하지 않고 확인되지 않은 부분만 생략합니다.",
+                "- 로컬 PvE는 솔로를 확인할 수 있지만 현재 로그에는 캐릭터 직접 근거가 없어 PMC·스캐브 부분을 표시하지 않습니다.",
+                "- 차단 완료 상태에는 최근 레이드 최대 100개에서 해당 IP 사용 횟수와 RTT 150ms 이상·패킷손실 5% 이상·시간초과 중 하나 이상의 징후가 관찰된 횟수를 표시하며, 서버가 문제를 유발했다는 인과 판정으로 안내하지 않습니다.",
+                "- 실게임 통계 행이 없으면 로그없음, 수신 표본이 0건이면 RTT를 표본부족으로 구분하고 로그의 패킷손실 값에는 (참고)를 표시합니다.",
+                "- 서버차단현황의 최근 실게임 RTT와 패킷손실은 서로 다른 레이드 값일 수 있으며, 차단 중 현재 핑은 자동 해제 없이 측정 불가로 표시합니다.",
+                "- 차단 리스트는 이 PC에만 적용되므로 파티원 모두의 접속을 막으려면 각 파티원이 같은 서버를 차단해야 합니다.",
+                "- 사용방법의 나가기 확인 단계에 서버 입장 전에는 장비가 보존된다는 안내를 추가했습니다.",
+                "- 메모보관함에도 새로 저장한 레이드의 캐릭터·참가 형태 표시를 함께 보존합니다."
+            };
+            Assert(current.NotesText.Split(new[] { "\r\n" }, StringSplitOptions.None)
+                    .SequenceEqual(expectedCurrentLines),
+                "The v0.8.3 bundled completion notes lost or changed an exact required line.");
 
             ReleaseNotesEntry prior = ReleaseNotesCatalog.FindBundled("v0.8.2");
             Assert(prior != null && prior.VersionText == "0.8.2"

@@ -98,6 +98,7 @@ $appArguments = @(
     (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
     (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
     (Join-Path $sourceRoot 'ServerReportCore.cs'),
+    (Join-Path $sourceRoot 'RaidQualityEvidence.cs'),
     (Join-Path $sourceRoot 'TarkovLogServices.cs')
 )
 
@@ -204,6 +205,19 @@ if (-not $SkipTests) {
         (Join-Path $testRoot 'RaidParticipantLogTests.cs')
     ))
     Invoke-TestExecutable $raidParticipantTestOutput
+
+    $raidQualityEvidenceTestOutput = Join-Path $buildRoot 'RaidQualityEvidenceTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $raidQualityEvidenceTestOutput)
+    ) + $commonReferences + @(
+        (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
+        (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
+        (Join-Path $sourceRoot 'ServerReportCore.cs'),
+        (Join-Path $sourceRoot 'RaidQualityEvidence.cs'),
+        (Join-Path $testRoot 'RaidQualityEvidenceTests.cs')
+    ))
+    Invoke-TestExecutable $raidQualityEvidenceTestOutput
 
     $githubUpdateTestOutput = Join-Path $buildRoot 'GitHubUpdateTests.exe'
     Invoke-CSharpCompiler (@(

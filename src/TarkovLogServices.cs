@@ -845,6 +845,7 @@ namespace TarkovServerReporter
             EmptyGroup,
             NonEmptyGroup,
             MatchJoin,
+            LocalStartRoute,
             GroupStartRoute,
             GroupInviteAccept,
             GroupReady,
@@ -883,8 +884,10 @@ namespace TarkovServerReporter
             public bool HasApplicationMatch { get; set; }
             public bool HasEmptyGroup { get; set; }
             public bool HasMatchJoin { get; set; }
+            public bool HasLocalStart { get; set; }
             public bool HasPartyRoute { get; set; }
             public bool HasPartyStart { get; set; }
+            public bool HasValidGroupState { get; set; }
             public int? PartySize { get; set; }
             public bool VisualPmc { get; set; }
             public bool VisualScav { get; set; }
@@ -897,8 +900,10 @@ namespace TarkovServerReporter
             public TarkovCharacterType ProfileCharacter { get; set; }
             public bool HasEmptyGroup { get; set; }
             public bool HasMatchJoin { get; set; }
+            public bool HasLocalStart { get; set; }
             public bool HasPartyRoute { get; set; }
             public bool HasPartyStart { get; set; }
+            public bool HasValidGroupState { get; set; }
             public int? PartySize { get; set; }
             public bool VisualPmc { get; set; }
             public bool VisualScav { get; set; }
@@ -1726,6 +1731,7 @@ namespace TarkovServerReporter
             return new ServerSession
             {
                 Game = game,
+                HostingMode = TarkovHostingMode.Server,
                 SessionStarted = timestamp,
                 LastUpdated = timestamp,
                 SessionFolderName = directory.Name,
@@ -1972,12 +1978,9 @@ namespace TarkovServerReporter
             IList<ParticipantAssignment> assignments = InferParticipantAssignments(events);
             foreach (ParticipantAssignment assignment in assignments)
             {
-                ServerSession session = sessions
-                    .Where(item => item != null
-                        && item.Game == TarkovGame.Eft
-                        && Math.Abs((item.DisplayDetectedAt - assignment.Timestamp).TotalSeconds) <= 1)
-                    .OrderBy(item => Math.Abs((item.DisplayDetectedAt - assignment.Timestamp).TotalMilliseconds))
-                    .FirstOrDefault();
+                ServerSession session = FindSessionForParticipantAssignment(
+                    sessions,
+                    assignment);
                 if (session == null) continue;
                 if (assignment.Mode != TarkovProgressionMode.Unknown
                     && session.ProgressionMode != TarkovProgressionMode.Unknown
@@ -2019,6 +2022,12 @@ namespace TarkovServerReporter
                         session,
                         RaidParticipationEvidence.MatchJoin);
                 }
+                if (assignment.HasLocalStart)
+                {
+                    RaidClassificationModel.AddParticipationEvidence(
+                        session,
+                        RaidParticipationEvidence.LocalStartRoute);
+                }
                 if (assignment.HasPartyRoute)
                 {
                     RaidClassificationModel.AddParticipationEvidence(
@@ -2031,15 +2040,50 @@ namespace TarkovServerReporter
                         session,
                         RaidParticipationEvidence.GroupStartEvent);
                 }
+                if (assignment.HasValidGroupState)
+                {
+                    RaidClassificationModel.AddParticipationEvidence(
+                        session,
+                        RaidParticipationEvidence.ValidGroupState);
+                }
                 if (assignment.PartySize.HasValue)
                     RaidClassificationModel.AddPartySizeEvidence(session, assignment.PartySize);
             }
+        }
+
+        private static ServerSession FindSessionForParticipantAssignment(
+            IEnumerable<ServerSession> sessions,
+            ParticipantAssignment assignment)
+        {
+            if (sessions == null || assignment == null) return null;
+            if (assignment.HasLocalStart)
+            {
+                return sessions
+                    .Where(item => item != null
+                        && item.Game == TarkovGame.Eft
+                        && item.HostingMode == TarkovHostingMode.Local
+                        && item.ProgressionMode == TarkovProgressionMode.Pve
+                        && item.DisplayDetectedAt <= assignment.Timestamp.AddSeconds(1)
+                        && item.LastUpdated >= assignment.Timestamp.AddSeconds(-1)
+                        && assignment.Timestamp - item.DisplayDetectedAt <= TimeSpan.FromMinutes(5))
+                    .OrderByDescending(item => item.DisplayDetectedAt)
+                    .FirstOrDefault();
+            }
+
+            return sessions
+                .Where(item => item != null
+                    && item.Game == TarkovGame.Eft
+                    && Math.Abs((item.DisplayDetectedAt - assignment.Timestamp).TotalSeconds) <= 1)
+                .OrderBy(item => Math.Abs(
+                    (item.DisplayDetectedAt - assignment.Timestamp).TotalMilliseconds))
+                .FirstOrDefault();
         }
 
         private static IList<ParticipantLogEvent> ReadParticipantLogEvents(
             IEnumerable<FileInfo> relevantFiles)
         {
             var events = new List<ParticipantLogEvent>();
+            var seenPushEventIds = new HashSet<string>(StringComparer.Ordinal);
             int order = 0;
             FileInfo[] files = (relevantFiles ?? Enumerable.Empty<FileInfo>()).ToArray();
 
@@ -2138,6 +2182,8 @@ namespace TarkovServerReporter
                     ParticipantEventKind kind;
                     if (line.IndexOf("/client/match/group/start_game", StringComparison.OrdinalIgnoreCase) >= 0)
                         kind = ParticipantEventKind.GroupStartRoute;
+                    else if (line.IndexOf("/client/match/local/start", StringComparison.OrdinalIgnoreCase) >= 0)
+                        kind = ParticipantEventKind.LocalStartRoute;
                     else if (line.IndexOf("/client/match/join", StringComparison.OrdinalIgnoreCase) >= 0)
                         kind = ParticipantEventKind.MatchJoin;
                     else
@@ -2158,7 +2204,7 @@ namespace TarkovServerReporter
                 .OrderBy(item => item.LastWriteTimeUtc)
                 .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
             {
-                ReadPushParticipantEvents(file, events, ref order);
+                ReadPushParticipantEvents(file, events, seenPushEventIds, ref order);
             }
 
             return events
@@ -2182,6 +2228,7 @@ namespace TarkovServerReporter
                 || kind == ParticipantEventKind.NonEmptyGroup)
                 return 3;
             if (kind == ParticipantEventKind.MatchJoin
+                || kind == ParticipantEventKind.LocalStartRoute
                 || kind == ParticipantEventKind.GroupStartRoute
                 || kind == ParticipantEventKind.GroupStart)
                 return 4;
@@ -2201,6 +2248,7 @@ namespace TarkovServerReporter
             string pendingProfileId = null;
             DateTime pendingProfileAt = DateTime.MinValue;
             TarkovProgressionMode pendingProfileMode = TarkovProgressionMode.Unknown;
+            DateTime latestMemberEventAt = DateTime.MinValue;
 
             foreach (ParticipantLogEvent item in source ?? Enumerable.Empty<ParticipantLogEvent>())
             {
@@ -2209,6 +2257,7 @@ namespace TarkovServerReporter
                     currentMode = item.Mode;
                     generation = null;
                     members.Clear();
+                    latestMemberEventAt = DateTime.MinValue;
                     pendingProfileId = null;
                     pendingProfileAt = DateTime.MinValue;
                     pendingProfileMode = TarkovProgressionMode.Unknown;
@@ -2229,6 +2278,7 @@ namespace TarkovServerReporter
                 {
                     generation = null;
                     members.Clear();
+                    latestMemberEventAt = DateTime.MinValue;
                     pendingProfileId = null;
                     pendingProfileAt = DateTime.MinValue;
                     pendingProfileMode = TarkovProgressionMode.Unknown;
@@ -2250,11 +2300,13 @@ namespace TarkovServerReporter
                     if (item.VisualCharacter == TarkovCharacterType.Pmc
                         || item.VisualCharacter == TarkovCharacterType.Scav)
                         member.VisualCharacter = item.VisualCharacter;
+                    latestMemberEventAt = item.Timestamp;
                     continue;
                 }
                 if (item.Kind == ParticipantEventKind.GroupMemberRemoved)
                 {
                     if (!string.IsNullOrWhiteSpace(item.MemberId)) members.Remove(item.MemberId);
+                    latestMemberEventAt = item.Timestamp;
                     continue;
                 }
 
@@ -2266,6 +2318,15 @@ namespace TarkovServerReporter
                         || item.Timestamp - generation.StartedAt > TimeSpan.FromMinutes(2);
                     if (replace)
                     {
+                        if (generation != null
+                            || HasExpiredGroupMemberState(
+                                members,
+                                latestMemberEventAt,
+                                item.Timestamp))
+                        {
+                            members.Clear();
+                            latestMemberEventAt = DateTime.MinValue;
+                        }
                         generation = CreateParticipantGeneration(
                             item.Timestamp,
                             currentMode,
@@ -2277,16 +2338,28 @@ namespace TarkovServerReporter
                     if (item.Kind == ParticipantEventKind.EmptyGroup)
                         generation.HasEmptyGroup = true;
                     else
-                        generation.HasPartyStart = true;
+                        generation.HasValidGroupState = true;
                     continue;
                 }
 
                 if (item.Kind == ParticipantEventKind.MatchJoin
+                    || item.Kind == ParticipantEventKind.LocalStartRoute
                     || item.Kind == ParticipantEventKind.GroupStartRoute
                     || item.Kind == ParticipantEventKind.GroupStart)
                 {
-                    if (generation == null
-                        || item.Timestamp - generation.StartedAt > TimeSpan.FromMinutes(2))
+                    bool replaceExpiredGeneration = generation != null
+                        && item.Timestamp - generation.StartedAt > TimeSpan.FromMinutes(2);
+                    if (replaceExpiredGeneration
+                        || generation == null
+                            && HasExpiredGroupMemberState(
+                                members,
+                                latestMemberEventAt,
+                                item.Timestamp))
+                    {
+                        members.Clear();
+                        latestMemberEventAt = DateTime.MinValue;
+                    }
+                    if (generation == null || replaceExpiredGeneration)
                     {
                         generation = CreateParticipantGeneration(
                             item.Timestamp,
@@ -2297,6 +2370,14 @@ namespace TarkovServerReporter
                     }
                     if (item.Kind == ParticipantEventKind.MatchJoin)
                         generation.HasMatchJoin = true;
+                    else if (item.Kind == ParticipantEventKind.LocalStartRoute)
+                    {
+                        generation.HasLocalStart = true;
+                        results.Add(CreateParticipantAssignment(
+                            item.Timestamp,
+                            generation,
+                            TarkovCharacterType.Unknown));
+                    }
                     else if (item.Kind == ParticipantEventKind.GroupStartRoute)
                     {
                         generation.HasPartyRoute = true;
@@ -2306,6 +2387,7 @@ namespace TarkovServerReporter
                         generation.HasPartyStart = true;
                         CaptureFinalGroupState(generation, members);
                         members.Clear();
+                        latestMemberEventAt = DateTime.MinValue;
                     }
                     continue;
                 }
@@ -2321,28 +2403,51 @@ namespace TarkovServerReporter
                         pendingProfileMode);
                 }
 
-                results.Add(new ParticipantAssignment
-                {
-                    Timestamp = item.Timestamp,
-                    Mode = generation.Mode,
-                    ProfileCharacter = CompareProfileIds(
-                        generation.BaseProfileId,
-                        item.ProfileId),
-                    HasEmptyGroup = generation.HasEmptyGroup,
-                    HasMatchJoin = generation.HasMatchJoin,
-                    HasPartyRoute = generation.HasPartyRoute,
-                    HasPartyStart = generation.HasPartyStart,
-                    PartySize = generation.PartySize,
-                    VisualPmc = generation.VisualPmc,
-                    VisualScav = generation.VisualScav
-                });
+                results.Add(CreateParticipantAssignment(
+                    item.Timestamp,
+                    generation,
+                    CompareProfileIds(generation.BaseProfileId, item.ProfileId)));
                 generation = null;
                 members.Clear();
+                latestMemberEventAt = DateTime.MinValue;
                 pendingProfileId = null;
                 pendingProfileAt = DateTime.MinValue;
                 pendingProfileMode = TarkovProgressionMode.Unknown;
             }
             return results;
+        }
+
+        private static bool HasExpiredGroupMemberState(
+            IDictionary<string, GroupMemberState> members,
+            DateTime latestMemberEventAt,
+            DateTime currentTimestamp)
+        {
+            if (members == null || members.Count == 0) return false;
+            return latestMemberEventAt == DateTime.MinValue
+                || currentTimestamp < latestMemberEventAt
+                || currentTimestamp - latestMemberEventAt > TimeSpan.FromMinutes(2);
+        }
+
+        private static ParticipantAssignment CreateParticipantAssignment(
+            DateTime timestamp,
+            ParticipantGeneration generation,
+            TarkovCharacterType profileCharacter)
+        {
+            return new ParticipantAssignment
+            {
+                Timestamp = timestamp,
+                Mode = generation.Mode,
+                ProfileCharacter = profileCharacter,
+                HasEmptyGroup = generation.HasEmptyGroup,
+                HasMatchJoin = generation.HasMatchJoin,
+                HasLocalStart = generation.HasLocalStart,
+                HasPartyRoute = generation.HasPartyRoute,
+                HasPartyStart = generation.HasPartyStart,
+                HasValidGroupState = generation.HasValidGroupState,
+                PartySize = generation.PartySize,
+                VisualPmc = generation.VisualPmc,
+                VisualScav = generation.VisualScav
+            };
         }
 
         private static ParticipantGeneration CreateParticipantGeneration(
@@ -2434,9 +2539,10 @@ namespace TarkovServerReporter
         private static void ReadPushParticipantEvents(
             FileInfo file,
             ICollection<ParticipantLogEvent> events,
+            ISet<string> seenEventIds,
             ref int order)
         {
-            if (file == null || events == null) return;
+            if (file == null || events == null || seenEventIds == null) return;
             try
             {
                 file.Refresh();
@@ -2447,7 +2553,6 @@ namespace TarkovServerReporter
                 return;
             }
 
-            var seenEventIds = new HashSet<string>(StringComparer.Ordinal);
             try
             {
                 using (var stream = new FileStream(
@@ -2729,6 +2834,23 @@ namespace TarkovServerReporter
             object value;
             if (!source.TryGetValue(name, out value) || value == null) return null;
             string result = value as string;
+            if (result == null)
+            {
+                if (value is byte || value is sbyte
+                    || value is short || value is ushort
+                    || value is int || value is uint
+                    || value is long || value is ulong)
+                {
+                    try
+                    {
+                        result = Convert.ToString(value, CultureInfo.InvariantCulture);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+            }
             if (result == null || result.Length > MaximumOpaqueIdentifierChars) return null;
             if (HasInvalidOpaqueIdCharacter(result)) return null;
             return result;
@@ -2888,15 +3010,20 @@ namespace TarkovServerReporter
                             + "|" + endpoint.Groups["ip"].Value + ":" + port;
                         if (session.ConnectionAttemptKeys.Add(eventKey))
                         {
-                            if (session.ConnectionAttempts > 0)
+                            int previousAttemptCount = session.ConnectionAttempts;
+                            bool becameCurrentAttempt = BeginNetworkMetricAttempt(
+                                session,
+                                timestamp);
+                            if (previousAttemptCount > 0 && becameCurrentAttempt)
                             {
                                 session.TimedOut = false;
                                 session.HasDisconnectRecord = false;
                                 session.DisconnectReason = null;
                                 session.ConnectionEndedAt = null;
                             }
-                            session.CurrentAttemptConnected = false;
                             session.ConnectionAttempts = session.ConnectionAttemptKeys.Count;
+                            if (becameCurrentAttempt)
+                                session.CurrentAttemptConnected = false;
                         }
                     }
                     if (line.IndexOf("Enter to the 'Connected' state", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -2932,22 +3059,92 @@ namespace TarkovServerReporter
 
                     if (stats.Success)
                     {
-                        double rtt;
-                        double loss;
-                        long sent;
-                        long received;
-                        long.TryParse(stats.Groups["received"].Value, out received);
-                        if (double.TryParse(stats.Groups["rtt"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rtt)
-                            && rtt > 0
-                            && received > 0)
-                            session.ActualRttMs = rtt;
-                        if (double.TryParse(stats.Groups["lose"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out loss))
-                            session.NetworkLoss = Math.Max(0, loss);
-                        if (long.TryParse(stats.Groups["sent"].Value, out sent)) session.NetworkSent = sent;
-                        session.NetworkReceived = received;
+                        ApplyNetworkStatisticsSnapshot(session, stats, timestamp);
                     }
                 }
             }
+        }
+
+        private static bool BeginNetworkMetricAttempt(
+            ServerSession session,
+            DateTime timestamp)
+        {
+            if (session.NetworkMetricAttemptStartedAt.HasValue
+                && timestamp <= session.NetworkMetricAttemptStartedAt.Value)
+                return false;
+
+            bool keepAlreadyParsedLaterStatistics = session.NetworkStatisticsAt.HasValue
+                && session.NetworkStatisticsAt.Value >= timestamp;
+            session.NetworkMetricAttemptStartedAt = timestamp;
+            if (!keepAlreadyParsedLaterStatistics)
+                ClearNetworkMetricSnapshot(session);
+            return true;
+        }
+
+        private static void ClearNetworkMetricSnapshot(ServerSession session)
+        {
+            session.NetworkStatisticsObserved = false;
+            session.NetworkStatisticsAt = null;
+            session.ActualRttMs = null;
+            session.NetworkLoss = null;
+            session.NetworkSent = 0;
+            session.NetworkReceived = 0;
+        }
+
+        private static void ApplyNetworkStatisticsSnapshot(
+            ServerSession session,
+            Match stats,
+            DateTime timestamp)
+        {
+            if (session.NetworkMetricAttemptStartedAt.HasValue
+                && timestamp < session.NetworkMetricAttemptStartedAt.Value)
+                return;
+            if (session.NetworkStatisticsAt.HasValue
+                && timestamp < session.NetworkStatisticsAt.Value)
+                return;
+
+            double rtt;
+            double loss;
+            long sent;
+            long received;
+            if (!double.TryParse(
+                    stats.Groups["rtt"].Value,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out rtt)
+                || !double.TryParse(
+                    stats.Groups["lose"].Value,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out loss)
+                || !long.TryParse(
+                    stats.Groups["sent"].Value,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out sent)
+                || !long.TryParse(
+                    stats.Groups["received"].Value,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out received)
+                || double.IsNaN(rtt)
+                || double.IsInfinity(rtt)
+                || double.IsNaN(loss)
+                || double.IsInfinity(loss)
+                || rtt < 0
+                || loss < 0
+                || sent < 0
+                || received < 0)
+                return;
+
+            session.NetworkStatisticsObserved = true;
+            session.NetworkStatisticsAt = timestamp;
+            session.ActualRttMs = rtt > 0 && received > 0
+                ? (double?)rtt
+                : null;
+            session.NetworkLoss = loss;
+            session.NetworkSent = sent;
+            session.NetworkReceived = received;
         }
 
         private static ServerSession FindSessionForEvent(
@@ -3188,8 +3385,7 @@ namespace TarkovServerReporter
                 {
                     existing.RaidEntryMeasuredSeconds = candidate.RaidEntryMeasuredSeconds;
                 }
-                if (candidate.ActualRttMs.HasValue && (!existing.ActualRttMs.HasValue || candidateIsLater))
-                    existing.ActualRttMs = candidate.ActualRttMs;
+                MergeNetworkMetricSnapshot(existing, candidate, candidateIsLater);
                 if (candidateIsLater)
                 {
                     existing.HasDisconnectRecord = candidate.HasDisconnectRecord;
@@ -3197,13 +3393,79 @@ namespace TarkovServerReporter
                     existing.TimedOut = candidate.TimedOut;
                     existing.DisconnectReason = candidate.DisconnectReason;
                     existing.ConnectionEndedAt = candidate.ConnectionEndedAt;
-                    existing.NetworkLoss = candidate.NetworkLoss;
-                    existing.NetworkSent = candidate.NetworkSent;
-                    existing.NetworkReceived = candidate.NetworkReceived;
                     existing.LogFilePath = candidate.LogFilePath;
                 }
             }
             return merged.Values;
+        }
+
+        private static void MergeNetworkMetricSnapshot(
+            ServerSession target,
+            ServerSession candidate,
+            bool candidateIsLater)
+        {
+            int attemptComparison = CompareOptionalTimestamp(
+                candidate.NetworkMetricAttemptStartedAt,
+                target.NetworkMetricAttemptStartedAt);
+            if (attemptComparison > 0)
+            {
+                CopyNetworkMetricSnapshot(target, candidate);
+                return;
+            }
+            if (attemptComparison < 0) return;
+
+            int statisticsComparison = CompareOptionalTimestamp(
+                candidate.NetworkStatisticsAt,
+                target.NetworkStatisticsAt);
+            if (statisticsComparison > 0)
+            {
+                CopyNetworkMetricSnapshot(target, candidate);
+                return;
+            }
+            if (statisticsComparison < 0) return;
+
+            if (candidate.NetworkStatisticsObserved != target.NetworkStatisticsObserved)
+            {
+                if (candidate.NetworkStatisticsObserved)
+                    CopyNetworkMetricSnapshot(target, candidate);
+                return;
+            }
+
+            bool candidateHasLegacySnapshot = HasLegacyNetworkMetricSnapshot(candidate);
+            bool targetHasLegacySnapshot = HasLegacyNetworkMetricSnapshot(target);
+            if (candidateHasLegacySnapshot
+                && (!targetHasLegacySnapshot || candidateIsLater))
+                CopyNetworkMetricSnapshot(target, candidate);
+        }
+
+        private static int CompareOptionalTimestamp(DateTime? left, DateTime? right)
+        {
+            if (left.HasValue && right.HasValue)
+                return left.Value.CompareTo(right.Value);
+            if (left.HasValue) return 1;
+            if (right.HasValue) return -1;
+            return 0;
+        }
+
+        private static bool HasLegacyNetworkMetricSnapshot(ServerSession session)
+        {
+            return session.ActualRttMs.HasValue
+                || session.NetworkLoss.HasValue
+                || session.NetworkSent != 0
+                || session.NetworkReceived != 0;
+        }
+
+        private static void CopyNetworkMetricSnapshot(
+            ServerSession target,
+            ServerSession source)
+        {
+            target.NetworkMetricAttemptStartedAt = source.NetworkMetricAttemptStartedAt;
+            target.NetworkStatisticsObserved = source.NetworkStatisticsObserved;
+            target.NetworkStatisticsAt = source.NetworkStatisticsAt;
+            target.ActualRttMs = source.ActualRttMs;
+            target.NetworkLoss = source.NetworkLoss;
+            target.NetworkSent = source.NetworkSent;
+            target.NetworkReceived = source.NetworkReceived;
         }
 
         private static int GetOperationStatePriority(RaidOperationState state)
@@ -3249,6 +3511,9 @@ namespace TarkovServerReporter
                 NetworkLoss = source.NetworkLoss,
                 NetworkSent = source.NetworkSent,
                 NetworkReceived = source.NetworkReceived,
+                NetworkStatisticsObserved = source.NetworkStatisticsObserved,
+                NetworkStatisticsAt = source.NetworkStatisticsAt,
+                NetworkMetricAttemptStartedAt = source.NetworkMetricAttemptStartedAt,
                 ConnectionAttempts = source.ConnectionAttempts,
                 ConnectionAttemptKeys = source.ConnectionAttemptKeys == null
                     ? null

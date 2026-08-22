@@ -25,8 +25,154 @@ namespace TarkovServerReporter
         internal const string FullText = ProcessExitLine + "\r\n" + RulesPersistLine;
     }
 
+    internal static class FirewallPartyScopeNotice
+    {
+        internal const string LocalOnlyLine =
+            "차단 리스트는 이 PC에만 적용됩니다. 파티 매칭에서는 각 파티원이 같은 서버를 차단해야 "
+            + "모든 파티원의 접속을 막을 수 있습니다.";
+    }
+
+    internal sealed class BlockedServerMetricSnapshot
+    {
+        public double? ActualRttMs { get; set; }
+        public DateTime? ActualRttRecordedAt { get; set; }
+        public bool ActualRttStatisticsObserved { get; set; }
+        public long ActualRttReceived { get; set; }
+        public double? PacketLoss { get; set; }
+        public DateTime? PacketLossRecordedAt { get; set; }
+        public bool PacketLossStatisticsObserved { get; set; }
+        public long PacketLossReceived { get; set; }
+    }
+
+    internal static class BlockedServerMetricSnapshotPlanner
+    {
+        internal static IDictionary<string, BlockedServerMetricSnapshot> Create(
+            IEnumerable<ServerSession> sessions)
+        {
+            var snapshots = new Dictionary<string, BlockedServerMetricSnapshot>(
+                StringComparer.OrdinalIgnoreCase);
+            if (sessions == null) return snapshots;
+
+            foreach (IGrouping<string, ServerSession> group in sessions
+                .Where(item => item != null
+                    && item.HasServerIp
+                    && item.HostingMode == TarkovHostingMode.Server)
+                .GroupBy(item => item.IpAddress.Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                IList<ServerSession> ordered = group
+                    .OrderByDescending(GetMetricTimestamp)
+                    .ToList();
+                ServerSession actualRttSource = ordered.FirstOrDefault(HasValidActualRtt)
+                    ?? ordered.FirstOrDefault(item => item.NetworkStatisticsObserved)
+                    ?? ordered.FirstOrDefault();
+                ServerSession packetLossSource = ordered.FirstOrDefault(HasValidPacketLoss)
+                    ?? ordered.FirstOrDefault(HasReferencePacketLoss)
+                    ?? ordered.FirstOrDefault(item => item.NetworkStatisticsObserved)
+                    ?? ordered.FirstOrDefault();
+
+                var snapshot = new BlockedServerMetricSnapshot();
+                CopyActualRttSource(snapshot, actualRttSource);
+                CopyPacketLossSource(snapshot, packetLossSource);
+                snapshots[group.Key] = snapshot;
+            }
+            return snapshots;
+        }
+
+        private static bool HasValidActualRtt(ServerSession session)
+        {
+            double ignored;
+            return RaidMetricPresentation.TryGetActualRtt(session, out ignored);
+        }
+
+        private static bool HasValidPacketLoss(ServerSession session)
+        {
+            double ignored;
+            return RaidMetricPresentation.TryGetPacketLoss(session, out ignored);
+        }
+
+        private static bool HasReferencePacketLoss(ServerSession session)
+        {
+            return session != null
+                && session.NetworkStatisticsObserved
+                && session.NetworkLoss.HasValue
+                && !double.IsNaN(session.NetworkLoss.Value)
+                && !double.IsInfinity(session.NetworkLoss.Value)
+                && session.NetworkLoss.Value >= 0;
+        }
+
+        private static void CopyActualRttSource(
+            BlockedServerMetricSnapshot snapshot,
+            ServerSession source)
+        {
+            if (snapshot == null || source == null) return;
+            double value;
+            if (RaidMetricPresentation.TryGetActualRtt(source, out value))
+                snapshot.ActualRttMs = value;
+            snapshot.ActualRttRecordedAt = GetRecordedAt(source);
+            snapshot.ActualRttStatisticsObserved = source.NetworkStatisticsObserved;
+            snapshot.ActualRttReceived = source.NetworkReceived;
+        }
+
+        private static void CopyPacketLossSource(
+            BlockedServerMetricSnapshot snapshot,
+            ServerSession source)
+        {
+            if (snapshot == null || source == null) return;
+            if (source.NetworkLoss.HasValue
+                && !double.IsNaN(source.NetworkLoss.Value)
+                && !double.IsInfinity(source.NetworkLoss.Value)
+                && source.NetworkLoss.Value >= 0)
+                snapshot.PacketLoss = source.NetworkLoss.Value;
+            snapshot.PacketLossRecordedAt = GetRecordedAt(source);
+            snapshot.PacketLossStatisticsObserved = source.NetworkStatisticsObserved;
+            snapshot.PacketLossReceived = source.NetworkReceived;
+        }
+
+        private static DateTime? GetRecordedAt(ServerSession session)
+        {
+            if (session == null) return null;
+            if (session.NetworkStatisticsAt.HasValue)
+                return session.NetworkStatisticsAt.Value;
+            DateTime fallback = GetMetricTimestamp(session);
+            return fallback == default(DateTime) ? (DateTime?)null : fallback;
+        }
+
+        private static DateTime GetMetricTimestamp(ServerSession session)
+        {
+            if (session == null) return default(DateTime);
+            if (session.NetworkStatisticsAt.HasValue)
+                return session.NetworkStatisticsAt.Value;
+            if (session.NetworkMetricAttemptStartedAt.HasValue)
+                return session.NetworkMetricAttemptStartedAt.Value;
+            if (session.DisplayDetectedAt != default(DateTime)) return session.DisplayDetectedAt;
+            return session.LastUpdated;
+        }
+    }
+
     public sealed class BlockedServersForm : BrandedForm
     {
+        internal const string CurrentPingBlockedText = "차단 중 · 측정 불가";
+        internal const string CurrentPingBlockedHelp =
+            "차단 규칙이 해당 IP의 모든 아웃바운드 통신(ICMP 포함)을 막으므로 차단 중에는 "
+            + "현재 핑을 측정할 수 없습니다. 해제 후 메인 화면에서 조회해 주세요.";
+        internal const string MetricHistoryIncompleteHelp =
+            "일부 로그를 읽지 못해 가장 최근 실게임 지표인지 확인할 수 없습니다. "
+            + "로그 경로를 확인한 뒤 메인 화면에서 다시 조회해 주세요.";
+        internal const string RecentRaidRecordMissingText = "최근 기록 없음";
+        internal const string RecentRaidRecordMissingHelp =
+            "불러온 최근 레이드 최대 100개에서 이 IP의 접속 기록을 찾지 못했습니다. "
+            + "더 오래된 기록은 이 목록에 표시되지 않을 수 있습니다.";
+        internal const string RefreshRulesOnlyHelp =
+            "차단 규칙 목록만 새로고침합니다. 실게임 지표는 이 창을 다시 열 때 최신 로그로 갱신됩니다.";
+        internal const string ActualRttHeaderHelp =
+            "불러온 최근 레이드 기록 중 해당 IP의 가장 최근 유효한 로그에서 확인된 실게임 RTT입니다. "
+            + "패킷손실과 서로 다른 레이드 시점의 값일 수 있으며 현재 측정값이 아닙니다.";
+        internal const string PacketLossHeaderHelp =
+            "불러온 최근 레이드 기록 중 해당 IP의 가장 최근 유효한 로그에서 확인된 실게임 패킷손실입니다. "
+            + "RTT와 서로 다른 레이드 시점의 값일 수 있으며 현재 측정값이 아닙니다.";
+        private const string HeaderSortInstruction =
+            "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.";
+
         private static readonly Color Background = Color.FromArgb(22, 27, 33);
         private static readonly Color Surface = Color.FromArgb(30, 37, 45);
         private static readonly Color SurfaceAlt = Color.FromArgb(37, 45, 55);
@@ -51,6 +197,9 @@ namespace TarkovServerReporter
         private readonly Button _exportButton;
         private readonly Button _importButton;
         private readonly Button _closeButton;
+        private readonly ToolTip _toolTip;
+        private readonly IDictionary<string, BlockedServerMetricSnapshot> _metricSnapshots;
+        private readonly bool _metricHistoryComplete;
         private bool _busy;
         private bool _updatingSelections;
         private string _blockedServerSortColumn;
@@ -188,6 +337,87 @@ namespace TarkovServerReporter
                 public override AccessibleStates State
                 {
                     get { return base.State | _owner.SelectionState; }
+                }
+            }
+        }
+
+        private sealed class DescribedColumnHeaderCell : DataGridViewColumnHeaderCell
+        {
+            private readonly string _accessibleName;
+            private readonly string _accessibleDescription;
+
+            internal DescribedColumnHeaderCell(
+                string accessibleName,
+                string accessibleDescription)
+            {
+                _accessibleName = accessibleName;
+                _accessibleDescription = accessibleDescription;
+            }
+
+            protected override AccessibleObject CreateAccessibilityInstance()
+            {
+                return new DescribedColumnHeaderAccessibleObject(this);
+            }
+
+            private sealed class DescribedColumnHeaderAccessibleObject
+                : DataGridViewCellAccessibleObject
+            {
+                private readonly DescribedColumnHeaderCell _owner;
+
+                internal DescribedColumnHeaderAccessibleObject(DescribedColumnHeaderCell owner)
+                    : base(owner)
+                {
+                    _owner = owner;
+                }
+
+                public override string Name
+                {
+                    get { return _owner._accessibleName; }
+                }
+
+                public override string Description
+                {
+                    get { return _owner._accessibleDescription; }
+                }
+
+                public override AccessibleRole Role
+                {
+                    get { return AccessibleRole.ColumnHeader; }
+                }
+            }
+        }
+
+        private sealed class DescribedTextBoxCell : DataGridViewTextBoxCell
+        {
+            protected override AccessibleObject CreateAccessibilityInstance()
+            {
+                return new DescribedTextBoxCellAccessibleObject(this);
+            }
+
+            public override object Clone()
+            {
+                return (DescribedTextBoxCell)base.Clone();
+            }
+
+            private sealed class DescribedTextBoxCellAccessibleObject
+                : DataGridViewCellAccessibleObject
+            {
+                private readonly DescribedTextBoxCell _owner;
+
+                internal DescribedTextBoxCellAccessibleObject(DescribedTextBoxCell owner)
+                    : base(owner)
+                {
+                    _owner = owner;
+                }
+
+                public override string Description
+                {
+                    get
+                    {
+                        return string.IsNullOrWhiteSpace(_owner.ToolTipText)
+                            ? Convert.ToString(_owner.FormattedValue)
+                            : _owner.ToolTipText;
+                    }
                 }
             }
         }
@@ -527,11 +757,28 @@ namespace TarkovServerReporter
         }
 
         public BlockedServersForm()
+            : this(null, true)
         {
+        }
+
+        public BlockedServersForm(IEnumerable<ServerSession> sessions)
+            : this(sessions, true)
+        {
+        }
+
+        public BlockedServersForm(
+            IEnumerable<ServerSession> sessions,
+            bool metricHistoryComplete)
+        {
+            _metricHistoryComplete = metricHistoryComplete;
+            _metricSnapshots = metricHistoryComplete
+                ? BlockedServerMetricSnapshotPlanner.Create(sessions)
+                : new Dictionary<string, BlockedServerMetricSnapshot>(
+                    StringComparer.OrdinalIgnoreCase);
             Text = "서버차단현황";
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(1040, 510);
-            MinimumSize = new Size(820, 410);
+            ClientSize = new Size(1320, 550);
+            MinimumSize = new Size(1040, 430);
             BackColor = Background;
             ForeColor = TextPrimary;
             Font = new Font("Malgun Gothic", 9F, FontStyle.Regular, GraphicsUnit.Point);
@@ -546,7 +793,7 @@ namespace TarkovServerReporter
                 ColumnCount = 1,
                 RowCount = 4
             };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 122F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
@@ -581,6 +828,19 @@ namespace TarkovServerReporter
                 AutoEllipsis = false,
                 AccessibleName = "앱 종료와 차단 리스트 유지 안내",
                 AccessibleDescription = FirewallPersistenceNotice.FullText
+            });
+            header.Controls.Add(new Label
+            {
+                Name = "firewallPartyScopeNotice",
+                Dock = DockStyle.Bottom,
+                Height = 22,
+                Text = FirewallPartyScopeNotice.LocalOnlyLine,
+                Font = new Font("Malgun Gothic", 8F),
+                ForeColor = TextMuted,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = false,
+                AccessibleName = "파티 매칭의 로컬 차단 적용 범위 안내",
+                AccessibleDescription = FirewallPartyScopeNotice.LocalOnlyLine
             });
             root.Controls.Add(header, 0, 0);
 
@@ -627,6 +887,10 @@ namespace TarkovServerReporter
             _removeAllButton.AccessibleName = "전체 해제";
             _removeAllButton.AccessibleDescription =
                 "목록에 있는 모든 서버의 Windows 방화벽 차단을 해제합니다.";
+            _refreshButton.AccessibleName = "차단 규칙 목록 새로고침";
+            _refreshButton.AccessibleDescription = RefreshRulesOnlyHelp;
+            _toolTip = new ToolTip();
+            _toolTip.SetToolTip(_refreshButton, RefreshRulesOnlyHelp);
             actions.Controls.Add(_closeButton);
             actions.Controls.Add(_removeAllButton);
             actions.Controls.Add(_removeSelectedButton);
@@ -665,6 +929,7 @@ namespace TarkovServerReporter
                 _statusLabel.ForeColor = Color.FromArgb(231, 184, 73);
                 _statusLabel.Text = "방화벽·파일 작업과 최종 확인이 끝난 뒤 창을 닫을 수 있습니다.";
             };
+            Disposed += delegate { _toolTip.Dispose(); };
             Shown += async delegate { await RefreshRulesAsync(); };
         }
 
@@ -701,7 +966,9 @@ namespace TarkovServerReporter
                 AccessibleDescription =
                     "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
                         + "현재 차단 서버 0개 중 0개가 선택되어 있습니다. "
-                        + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다."
+                        + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다. "
+                        + "실게임 RTT와 패킷손실은 서로 다른 최근 레이드의 값일 수 있으며, 현재 핑은 차단 규칙이 "
+                        + "ICMP를 포함한 통신을 막아 차단 중에는 측정할 수 없습니다."
             };
             grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
@@ -748,8 +1015,45 @@ namespace TarkovServerReporter
                 Name = "status",
                 HeaderText = "상태",
                 ReadOnly = true,
-                Width = 105
+                Width = 88
             });
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "currentPing",
+                HeaderCell = new DescribedColumnHeaderCell(
+                    "현재 핑 열",
+                    CurrentPingBlockedHelp),
+                CellTemplate = new DescribedTextBoxCell(),
+                HeaderText = "현재 핑",
+                ReadOnly = true,
+                Width = 132,
+                SortMode = DataGridViewColumnSortMode.NotSortable
+            });
+            grid.Columns["currentPing"].HeaderCell.ToolTipText = CurrentPingBlockedHelp;
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "actualRtt",
+                HeaderCell = new DescribedColumnHeaderCell(
+                    "실게임 RTT 열",
+                    ActualRttHeaderHelp + " " + HeaderSortInstruction),
+                CellTemplate = new DescribedTextBoxCell(),
+                HeaderText = "실게임\r\nRTT",
+                ReadOnly = true,
+                Width = 94
+            });
+            grid.Columns["actualRtt"].HeaderCell.ToolTipText = ActualRttHeaderHelp;
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "packetLoss",
+                HeaderCell = new DescribedColumnHeaderCell(
+                    "실게임 패킷손실 열",
+                    PacketLossHeaderHelp + " " + HeaderSortInstruction),
+                CellTemplate = new DescribedTextBoxCell(),
+                HeaderText = "실게임\r\n패킷손실",
+                ReadOnly = true,
+                Width = 110
+            });
+            grid.Columns["packetLoss"].HeaderCell.ToolTipText = PacketLossHeaderHelp;
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "location",
@@ -817,13 +1121,16 @@ namespace TarkovServerReporter
             grid.Columns.Add(removeColumn);
             foreach (string sortableColumn in new[]
             {
-                "ip", "status", "location", "blockedAt", "note", "kind"
+                "ip", "status", "actualRtt", "packetLoss",
+                "location", "blockedAt", "note", "kind"
             })
             {
                 DataGridViewColumn column = grid.Columns[sortableColumn];
                 column.SortMode = DataGridViewColumnSortMode.Programmatic;
-                column.HeaderCell.ToolTipText =
-                    "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.";
+                string metricHelp = column.HeaderCell.ToolTipText;
+                column.HeaderCell.ToolTipText = string.IsNullOrWhiteSpace(metricHelp)
+                    ? HeaderSortInstruction
+                    : metricHelp + " " + HeaderSortInstruction;
             }
             grid.HandleCreated += delegate { ApplyGridDpiMetrics(grid); };
             grid.DpiChangedAfterParent += delegate { ApplyGridDpiMetrics(grid); };
@@ -842,11 +1149,18 @@ namespace TarkovServerReporter
             Font buttonFont = removeColumn.DefaultCellStyle.Font ?? grid.Font;
             Size headerText;
             Size buttonText;
+            Size headerLineText;
             TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
             using (Graphics graphics = grid.CreateGraphics())
             {
                 headerText = TextRenderer.MeasureText(graphics, "개별해제", headerFont, new Size(1000, 1000), flags);
                 buttonText = TextRenderer.MeasureText(graphics, "해제", buttonFont, new Size(1000, 1000), flags);
+                headerLineText = TextRenderer.MeasureText(
+                    graphics,
+                    "가A",
+                    headerFont,
+                    new Size(1000, 1000),
+                    flags);
             }
 
             int headerWidth = headerText.Width + Math.Max(12, (int)Math.Round(18F * scale));
@@ -862,8 +1176,8 @@ namespace TarkovServerReporter
             grid.RowTemplate.Height = rowHeight;
             foreach (DataGridViewRow row in grid.Rows) row.Height = rowHeight;
             grid.ColumnHeadersHeight = Math.Max(
-                (int)Math.Round(36F * scale),
-                headerText.Height + Math.Max(8, (int)Math.Round(12F * scale)));
+                (int)Math.Round(44F * scale),
+                headerLineText.Height * 2 + Math.Max(6, (int)Math.Round(8F * scale)));
         }
 
         private static Button CreateButton(string text, bool emphasized)
@@ -914,6 +1228,9 @@ namespace TarkovServerReporter
                     false,
                     server.IpAddress,
                     server.StatusText,
+                    CurrentPingBlockedText,
+                    "로그없음",
+                    "로그없음",
                     metadata == null ? "-" : metadata.DataCenterLocationText,
                     metadata == null ? "확인 안 됨" : metadata.BlockedAtText,
                     string.Empty,
@@ -923,6 +1240,7 @@ namespace TarkovServerReporter
                 row.Tag = server;
                 _blockedServerOriginalOrder[row] = index;
                 row.Cells["status"].Style.ForeColor = Danger;
+                ApplyMetricCells(row, server.IpAddress);
                 UpdateNoteCell(row, metadata == null ? null : metadata.Note);
             }
 
@@ -1105,6 +1423,25 @@ namespace TarkovServerReporter
                     && (bool)right.Cells["note"].Tag;
                 primary = leftHasNote.CompareTo(rightHasNote);
             }
+            else if (_blockedServerSortColumn == "actualRtt"
+                || _blockedServerSortColumn == "packetLoss")
+            {
+                double leftMetric;
+                double rightMetric;
+                leftKnown = TryGetMetricSortValue(
+                    left.Cells[_blockedServerSortColumn],
+                    out leftMetric);
+                rightKnown = TryGetMetricSortValue(
+                    right.Cells[_blockedServerSortColumn],
+                    out rightMetric);
+                primary = leftMetric.CompareTo(rightMetric);
+            }
+            else if (_blockedServerSortColumn == "currentPing")
+            {
+                leftKnown = false;
+                rightKnown = false;
+                primary = 0;
+            }
             else if (_blockedServerSortColumn == "blockedAt")
             {
                 DateTime leftDate;
@@ -1132,6 +1469,22 @@ namespace TarkovServerReporter
             return _blockedServerSortOrder == SortOrder.Descending
                 ? -normalized
                 : normalized;
+        }
+
+        private static bool TryGetMetricSortValue(DataGridViewCell cell, out double value)
+        {
+            value = 0;
+            if (cell == null || cell.Tag == null) return false;
+            try
+            {
+                value = Convert.ToDouble(cell.Tag);
+                return !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0;
+            }
+            catch
+            {
+                value = 0;
+                return false;
+            }
         }
 
         private static string GetBlockedServerSortText(
@@ -1556,6 +1909,171 @@ namespace TarkovServerReporter
             _grid.InvalidateCell(cell);
         }
 
+        private void ApplyMetricCells(DataGridViewRow row, string ipAddress)
+        {
+            if (row == null) return;
+            DataGridViewCell currentPingCell = row.Cells["currentPing"];
+            currentPingCell.Value = CurrentPingBlockedText;
+            currentPingCell.Tag = null;
+            currentPingCell.ToolTipText = CurrentPingBlockedHelp;
+            currentPingCell.Style.ForeColor = TextMuted;
+
+            if (!_metricHistoryComplete)
+            {
+                ApplyUnavailableMetricCell(row.Cells["actualRtt"]);
+                ApplyUnavailableMetricCell(row.Cells["packetLoss"]);
+                return;
+            }
+
+            BlockedServerMetricSnapshot snapshot;
+            if (!_metricSnapshots.TryGetValue(ipAddress ?? string.Empty, out snapshot))
+            {
+                ApplyMissingRecentRaidCell(row.Cells["actualRtt"]);
+                ApplyMissingRecentRaidCell(row.Cells["packetLoss"]);
+                return;
+            }
+            ServerSession actualRttSource = CreateActualRttSource(snapshot);
+            ServerSession packetLossSource = CreatePacketLossSource(snapshot);
+            double actualRttSortValue;
+            double packetLossSortValue;
+            bool hasActualRtt = RaidMetricPresentation.TryGetActualRtt(
+                actualRttSource,
+                out actualRttSortValue);
+            bool hasPacketLoss = TryGetDisplayedPacketLoss(
+                packetLossSource,
+                out packetLossSortValue);
+
+            DataGridViewCell actualRttCell = row.Cells["actualRtt"];
+            actualRttCell.Value = RaidMetricPresentation.FormatActualRtt(actualRttSource);
+            actualRttCell.Tag = hasActualRtt ? (double?)actualRttSortValue : null;
+            actualRttCell.ToolTipText = CreateMetricHelp(
+                "실게임 RTT",
+                actualRttSource,
+                snapshot == null ? null : snapshot.ActualRttRecordedAt);
+            actualRttCell.Style.ForeColor = GetActualRttColor(
+                hasActualRtt ? (double?)actualRttSortValue : null);
+
+            DataGridViewCell packetLossCell = row.Cells["packetLoss"];
+            packetLossCell.Value = RaidMetricPresentation.FormatPacketLoss(packetLossSource);
+            packetLossCell.Tag = hasPacketLoss ? (double?)packetLossSortValue : null;
+            packetLossCell.ToolTipText = CreateMetricHelp(
+                "실게임 패킷손실",
+                packetLossSource,
+                snapshot == null ? null : snapshot.PacketLossRecordedAt);
+            bool referenceValue = packetLossSource.NetworkStatisticsObserved
+                && packetLossSource.NetworkReceived <= 0
+                && packetLossSource.NetworkLoss.HasValue;
+            packetLossCell.Style.ForeColor = GetPacketLossColor(
+                hasPacketLoss ? (double?)packetLossSortValue : null,
+                referenceValue);
+        }
+
+        private static void ApplyUnavailableMetricCell(DataGridViewCell cell)
+        {
+            cell.Value = "확인 불가";
+            cell.Tag = null;
+            cell.ToolTipText = MetricHistoryIncompleteHelp;
+            cell.Style.ForeColor = TextMuted;
+        }
+
+        private static void ApplyMissingRecentRaidCell(DataGridViewCell cell)
+        {
+            cell.Value = RecentRaidRecordMissingText;
+            cell.Tag = null;
+            cell.ToolTipText = RecentRaidRecordMissingHelp;
+            cell.Style.ForeColor = TextMuted;
+        }
+
+        private static ServerSession CreateActualRttSource(
+            BlockedServerMetricSnapshot snapshot)
+        {
+            return new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Server,
+                ActualRttMs = snapshot == null ? null : snapshot.ActualRttMs,
+                NetworkStatisticsObserved = snapshot != null
+                    && snapshot.ActualRttStatisticsObserved,
+                NetworkReceived = snapshot == null ? 0 : snapshot.ActualRttReceived
+            };
+        }
+
+        private static ServerSession CreatePacketLossSource(
+            BlockedServerMetricSnapshot snapshot)
+        {
+            return new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Server,
+                NetworkLoss = snapshot == null ? null : snapshot.PacketLoss,
+                NetworkStatisticsObserved = snapshot != null
+                    && snapshot.PacketLossStatisticsObserved,
+                NetworkReceived = snapshot == null ? 0 : snapshot.PacketLossReceived
+            };
+        }
+
+        private static bool TryGetDisplayedPacketLoss(
+            ServerSession source,
+            out double value)
+        {
+            value = 0;
+            if (source == null
+                || !source.NetworkLoss.HasValue
+                || double.IsNaN(source.NetworkLoss.Value)
+                || double.IsInfinity(source.NetworkLoss.Value)
+                || source.NetworkLoss.Value < 0)
+                return false;
+            value = source.NetworkLoss.Value;
+            return true;
+        }
+
+        private static string CreateMetricHelp(
+            string metricName,
+            ServerSession sourceSession,
+            DateTime? recordedAt)
+        {
+            string presentationHelp = string.Equals(
+                metricName,
+                "실게임 RTT",
+                StringComparison.Ordinal)
+                    ? RaidMetricPresentation.GetActualRttHelp(sourceSession)
+                    : RaidMetricPresentation.GetPacketLossHelp(sourceSession);
+            double ignored;
+            bool hasValue = string.Equals(
+                metricName,
+                "실게임 RTT",
+                StringComparison.Ordinal)
+                    ? RaidMetricPresentation.TryGetActualRtt(
+                        sourceSession,
+                        out ignored)
+                    : TryGetDisplayedPacketLoss(sourceSession, out ignored);
+            if (!hasValue && !sourceSession.NetworkStatisticsObserved)
+                return presentationHelp;
+            string source = recordedAt.HasValue
+                ? recordedAt.Value.ToString("yyyy-MM-dd HH:mm:ss") + " 레이드 로그"
+                : "가장 최근 레이드 로그";
+            string sourceText = source + "에서 기록된 " + metricName
+                + "입니다. 현재 측정값이 아닙니다.";
+            return string.IsNullOrWhiteSpace(presentationHelp)
+                ? sourceText
+                : sourceText + " " + presentationHelp;
+        }
+
+        private static Color GetActualRttColor(double? value)
+        {
+            if (!value.HasValue) return TextMuted;
+            if (value.Value >= 150) return Danger;
+            if (value.Value >= 100) return Color.FromArgb(231, 184, 73);
+            return Success;
+        }
+
+        private static Color GetPacketLossColor(double? value, bool referenceValue)
+        {
+            if (!value.HasValue) return TextMuted;
+            if (referenceValue) return Color.FromArgb(231, 184, 73);
+            if (value.Value >= 0.05) return Danger;
+            if (value.Value > 0) return Color.FromArgb(231, 184, 73);
+            return Success;
+        }
+
         private async Task ExportBackupAsync()
         {
             if (_busy) return;
@@ -1965,7 +2483,9 @@ namespace TarkovServerReporter
             _grid.AccessibleDescription = string.Format(
                 "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
                     + "현재 차단 서버 {0}개 중 {1}개가 선택되어 있습니다. "
-                    + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다.",
+                    + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다. "
+                    + "실게임 RTT와 패킷손실은 서로 다른 최근 레이드의 값일 수 있으며, 현재 핑은 차단 규칙이 "
+                    + "ICMP를 포함한 통신을 막아 차단 중에는 측정할 수 없습니다.",
                 count,
                 selectedCount);
             var selectionHeader = _grid.Columns["selected"].HeaderCell

@@ -30,6 +30,7 @@ namespace TarkovServerReporter.Tests
                 TestEftRaidTypesAndUserReports(tempRoot);
                 TestPvpSeasonNumberClassification(tempRoot);
                 TestNetworkEventBoundariesAndDuplicateMerge(tempRoot);
+                TestNetworkMetricSampleStates(tempRoot);
                 TestArenaRaidScanning(tempRoot);
                 TestRaidOperationDuration(tempRoot);
                 TestRaidLogQueryFiltering(tempRoot);
@@ -536,6 +537,216 @@ namespace TarkovServerReporter.Tests
                 "global SID merge does not double-count an identical copied connect event");
         }
 
+        private static void TestNetworkMetricSampleStates(string tempRoot)
+        {
+            string logs = Path.Combine(tempRoot, "NetworkMetricSampleLogs");
+            string folder = Path.Combine(logs, "log_metric_samples");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(
+                Path.Combine(folder, "application.log"),
+                "2026.08.14 09:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.120, Port: 17120, Location: Woods, Sid: JP-TK02G005_metric-missing, GameMode: deathmatch, shortId: MET001'\r\n"
+                + "2026.08.14 10:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.121, Port: 17121, Location: Woods, Sid: JP-TK02G005_metric-zero, GameMode: deathmatch, shortId: MET002'\r\n"
+                + "2026.08.14 11:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.122, Port: 17122, Location: Woods, Sid: JP-TK02G005_metric-valid, GameMode: deathmatch, shortId: MET003'\r\n"
+                + "2026.08.14 12:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.123, Port: 17123, Location: Woods, Sid: JP-TK02G005_metric-reset, GameMode: deathmatch, shortId: MET004'\r\n"
+                + "2026.08.14 13:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.124, Port: 17124, Location: Woods, Sid: JP-TK02G005_metric-reconnect-zero, GameMode: deathmatch, shortId: MET005'\r\n"
+                + "2026.08.14 14:00:00|1.1.0.1.46699|Trace|NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.125, Port: 17125, Location: Woods, Sid: JP-TK02G005_metric-invalid, GameMode: deathmatch, shortId: MET006'\r\n",
+                Encoding.UTF8);
+            File.WriteAllText(
+                Path.Combine(folder, "network-connection.log"),
+                "2026.08.14 09:00:01|Connect (address: 203.0.113.120:17120)\r\n"
+                + "2026.08.14 09:00:02|Enter to the 'Connected' state (address: 203.0.113.120:17120)\r\n"
+                + "2026.08.14 10:00:01|Connect (address: 203.0.113.121:17121)\r\n"
+                + "2026.08.14 10:00:02|Statistics (address: 203.0.113.121:17121, rtt: 0, lose: 0, sent: 16, received: 0)\r\n"
+                + "2026.08.14 11:00:01|Connect (address: 203.0.113.122:17122)\r\n"
+                + "2026.08.14 11:00:02|Statistics (address: 203.0.113.122:17122, rtt: 81.6, lose: 0.0123456, sent: 62, received: 50)\r\n"
+                + "2026.08.14 12:00:01|Connect (address: 203.0.113.123:17123)\r\n"
+                + "2026.08.14 12:00:02|Statistics (address: 203.0.113.123:17123, rtt: 220, lose: 0.2, sent: 80, received: 60)\r\n"
+                + "2026.08.14 12:00:03|Disconnect (address: 203.0.113.123:17123)\r\n"
+                + "2026.08.14 12:00:04|Connect (address: 203.0.113.123:17123)\r\n"
+                + "2026.08.14 13:00:01|Connect (address: 203.0.113.124:17124)\r\n"
+                + "2026.08.14 13:00:02|Statistics (address: 203.0.113.124:17124, rtt: 230, lose: 0.25, sent: 90, received: 70)\r\n"
+                + "2026.08.14 13:00:03|Disconnect (address: 203.0.113.124:17124)\r\n"
+                + "2026.08.14 13:00:04|Connect (address: 203.0.113.124:17124)\r\n"
+                + "2026.08.14 13:00:05|Statistics (address: 203.0.113.124:17124, rtt: 0, lose: 0, sent: 16, received: 0)\r\n"
+                + "2026.08.14 14:00:01|Connect (address: 203.0.113.125:17125)\r\n"
+                + "2026.08.14 14:00:02|Statistics (address: 203.0.113.125:17125, rtt: 1e999, lose: 0.5, sent: 100, received: 50)\r\n",
+                Encoding.UTF8);
+
+            RaidLogScanResult firstScan = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = logs },
+                100);
+            ServerSession missing = firstScan.Sessions.Single(item => item.ShortId == "MET001");
+            ServerSession zero = firstScan.Sessions.Single(item => item.ShortId == "MET002");
+            ServerSession valid = firstScan.Sessions.Single(item => item.ShortId == "MET003");
+            ServerSession reset = firstScan.Sessions.Single(item => item.ShortId == "MET004");
+            ServerSession reconnectZero = firstScan.Sessions.Single(item => item.ShortId == "MET005");
+            ServerSession invalid = firstScan.Sessions.Single(item => item.ShortId == "MET006");
+
+            Assert(!missing.NetworkStatisticsObserved
+                    && !missing.NetworkStatisticsAt.HasValue
+                    && missing.NetworkMetricAttemptStartedAt == new DateTime(2026, 8, 14, 9, 0, 1)
+                    && !missing.ActualRttMs.HasValue
+                    && !missing.NetworkLoss.HasValue
+                    && RaidMetricPresentation.FormatActualRtt(missing) == "로그없음"
+                    && RaidMetricPresentation.FormatPacketLoss(missing) == "로그없음",
+                "a connection attempt without a Statistics row remains a true missing-log metric state");
+            Assert(zero.NetworkStatisticsObserved
+                    && zero.NetworkStatisticsAt == new DateTime(2026, 8, 14, 10, 0, 2)
+                    && zero.NetworkMetricAttemptStartedAt == new DateTime(2026, 8, 14, 10, 0, 1)
+                    && !zero.ActualRttMs.HasValue
+                    && zero.NetworkLoss == 0
+                    && zero.NetworkSent == 16
+                    && zero.NetworkReceived == 0
+                    && RaidMetricPresentation.FormatActualRtt(zero) == "표본부족"
+                    && RaidMetricPresentation.FormatPacketLoss(zero) == "0% (참고)",
+                "a zero-receive Statistics row preserves its raw counters and loss without pretending RTT is measured");
+            Assert(valid.NetworkStatisticsObserved
+                    && valid.NetworkStatisticsAt == new DateTime(2026, 8, 14, 11, 0, 2)
+                    && valid.ActualRttMs == 81.6
+                    && valid.NetworkLoss == 0.0123456
+                    && valid.NetworkReceived == 50
+                    && RaidMetricPresentation.FormatActualRtt(valid) == "82 ms"
+                    && RaidMetricPresentation.FormatPacketLoss(valid) == "1.23%",
+                "one or more received samples keep the existing measured-value presentation without an arbitrary minimum");
+            Assert(reset.NetworkMetricAttemptStartedAt == new DateTime(2026, 8, 14, 12, 0, 4)
+                    && !reset.NetworkStatisticsObserved
+                    && !reset.NetworkStatisticsAt.HasValue
+                    && !reset.ActualRttMs.HasValue
+                    && !reset.NetworkLoss.HasValue
+                    && reset.NetworkSent == 0
+                    && reset.NetworkReceived == 0
+                    && RaidMetricPresentation.FormatActualRtt(reset) == "로그없음",
+                "a new connection attempt without Statistics clears the preceding attempt's entire metric snapshot");
+            Assert(reconnectZero.NetworkMetricAttemptStartedAt == new DateTime(2026, 8, 14, 13, 0, 4)
+                    && reconnectZero.NetworkStatisticsObserved
+                    && reconnectZero.NetworkStatisticsAt == new DateTime(2026, 8, 14, 13, 0, 5)
+                    && !reconnectZero.ActualRttMs.HasValue
+                    && reconnectZero.NetworkLoss == 0
+                    && reconnectZero.NetworkSent == 16
+                    && reconnectZero.NetworkReceived == 0,
+                "a reconnect's insufficient snapshot replaces rather than mixes with the preceding RTT and loss");
+            Assert(!invalid.NetworkStatisticsObserved
+                    && !invalid.NetworkStatisticsAt.HasValue
+                    && !invalid.ActualRttMs.HasValue
+                    && !invalid.NetworkLoss.HasValue
+                    && invalid.NetworkSent == 0
+                    && invalid.NetworkReceived == 0,
+                "a malformed Statistics row is rejected atomically without preserving only its loss or counters");
+
+            RaidLogScanResult cachedScan = RaidLogScanner.Scan(
+                new TarkovLogPaths { EftPath = logs },
+                100);
+            ServerSession cachedZero = cachedScan.Sessions.Single(item => item.ShortId == "MET002");
+            ServerSession cachedReset = cachedScan.Sessions.Single(item => item.ShortId == "MET004");
+            Assert(cachedZero.NetworkStatisticsObserved
+                    && cachedZero.NetworkStatisticsAt == zero.NetworkStatisticsAt
+                    && cachedZero.NetworkMetricAttemptStartedAt == zero.NetworkMetricAttemptStartedAt
+                    && cachedZero.NetworkLoss == 0
+                    && cachedZero.NetworkReceived == 0
+                    && !cachedReset.NetworkStatisticsObserved
+                    && cachedReset.NetworkMetricAttemptStartedAt == reset.NetworkMetricAttemptStartedAt
+                    && !cachedReset.ActualRttMs.HasValue
+                    && !cachedReset.NetworkLoss.HasValue,
+                "the directory-cache clone preserves measured, insufficient, and reset metric snapshots");
+
+            MethodInfo mergeMethod = typeof(RaidLogScanner).GetMethod(
+                "MergeDuplicateSessions",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(mergeMethod != null, "network metric duplicate merge helper is available for regression coverage");
+            DateTime mergeBase = new DateTime(2026, 8, 14, 14, 0, 0);
+            ServerSession olderMeasured = CreateMetricMergeCandidate(
+                "metric-merge-reset",
+                mergeBase,
+                mergeBase.AddSeconds(1),
+                mergeBase.AddSeconds(2),
+                true,
+                210,
+                0.2,
+                80,
+                60);
+            ServerSession newerAttemptWithoutStats = CreateMetricMergeCandidate(
+                "metric-merge-reset",
+                mergeBase.AddMinutes(1),
+                mergeBase.AddMinutes(1),
+                null,
+                false,
+                null,
+                null,
+                0,
+                0);
+            ServerSession mergedReset = ((IEnumerable<ServerSession>)mergeMethod.Invoke(
+                null,
+                new object[] { new[] { olderMeasured, newerAttemptWithoutStats } })).Single();
+            Assert(mergedReset.NetworkMetricAttemptStartedAt == mergeBase.AddMinutes(1)
+                    && !mergedReset.NetworkStatisticsObserved
+                    && !mergedReset.NetworkStatisticsAt.HasValue
+                    && !mergedReset.ActualRttMs.HasValue
+                    && !mergedReset.NetworkLoss.HasValue
+                    && mergedReset.NetworkSent == 0
+                    && mergedReset.NetworkReceived == 0,
+                "duplicate merging atomically selects a newer no-Statistics connection generation");
+
+            ServerSession sameAttemptMeasured = CreateMetricMergeCandidate(
+                "metric-merge-statistics",
+                mergeBase.AddMinutes(2),
+                mergeBase.AddMinutes(2),
+                mergeBase.AddMinutes(2).AddSeconds(5),
+                true,
+                240,
+                0.3,
+                100,
+                80);
+            ServerSession laterInsufficient = CreateMetricMergeCandidate(
+                "metric-merge-statistics",
+                mergeBase.AddMinutes(2).AddSeconds(10),
+                mergeBase.AddMinutes(2),
+                mergeBase.AddMinutes(2).AddSeconds(10),
+                true,
+                null,
+                0,
+                16,
+                0);
+            ServerSession mergedInsufficient = ((IEnumerable<ServerSession>)mergeMethod.Invoke(
+                null,
+                new object[] { new[] { sameAttemptMeasured, laterInsufficient } })).Single();
+            Assert(mergedInsufficient.NetworkStatisticsObserved
+                    && mergedInsufficient.NetworkStatisticsAt == laterInsufficient.NetworkStatisticsAt
+                    && !mergedInsufficient.ActualRttMs.HasValue
+                    && mergedInsufficient.NetworkLoss == 0
+                    && mergedInsufficient.NetworkSent == 16
+                    && mergedInsufficient.NetworkReceived == 0,
+                "duplicate merging selects the latest whole Statistics snapshot without retaining an older RTT");
+        }
+
+        private static ServerSession CreateMetricMergeCandidate(
+            string key,
+            DateTime lastUpdated,
+            DateTime? attemptStartedAt,
+            DateTime? statisticsAt,
+            bool statisticsObserved,
+            double? actualRtt,
+            double? networkLoss,
+            long sent,
+            long received)
+        {
+            return new ServerSession
+            {
+                Game = TarkovGame.Eft,
+                SessionKey = key,
+                SessionStarted = lastUpdated.AddMinutes(-1),
+                LastUpdated = lastUpdated,
+                HostingMode = TarkovHostingMode.Server,
+                IpAddress = "203.0.113.200",
+                NetworkMetricAttemptStartedAt = attemptStartedAt,
+                NetworkStatisticsObserved = statisticsObserved,
+                NetworkStatisticsAt = statisticsAt,
+                ActualRttMs = actualRtt,
+                NetworkLoss = networkLoss,
+                NetworkSent = sent,
+                NetworkReceived = received
+            };
+        }
+
         private static void TestArenaRaidScanning(string tempRoot)
         {
             string logs = Path.Combine(tempRoot, "ArenaLogs");
@@ -568,9 +779,10 @@ namespace TarkovServerReporter.Tests
             ServerSession session = result.Sessions.SingleOrDefault();
             Assert(session != null
                 && session.Game == TarkovGame.Arena
+                && session.HostingMode == TarkovHostingMode.Server
                 && session.IpAddress == "192.0.2.88"
                 && session.Port == 17013,
-                "Arena scanner parses the game and endpoint");
+                "Arena scanner parses the game, server-hosting mode, and endpoint");
             Assert(session != null
                 && session.MapName == "Bay5"
                 && session.GameMode == "CheckPoint"
@@ -1674,8 +1886,15 @@ namespace TarkovServerReporter.Tests
         {
             const string expectedMissingLogHelp =
                 "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
+            const string expectedInsufficientRttHelp =
+                "네트워크 통계 로그는 있지만 수신 표본이 0건이어서 실게임 RTT를 확정할 수 없습니다.";
+            const string expectedReferencePacketLossHelp =
+                "네트워크 통계 로그의 패킷손실 기록값입니다. 수신 표본이 0건이어서 참고값으로 표시합니다.";
             Assert(RaidMetricPresentation.MissingLogHelp == expectedMissingLogHelp,
                 "the missing-log help keeps the exact user-approved wording");
+            Assert(RaidMetricPresentation.InsufficientRttHelp == expectedInsufficientRttHelp
+                    && RaidMetricPresentation.ReferencePacketLossHelp == expectedReferencePacketLossHelp,
+                "insufficient-sample metric help keeps the exact explanatory wording");
 
             Assert(RaidMetricPresentation.FormatActualRtt(null) == "-"
                 && RaidMetricPresentation.FormatPacketLoss(null) == "-",
@@ -1690,6 +1909,29 @@ namespace TarkovServerReporter.Tests
                 && RaidMetricPresentation.GetActualRttHelp(missingServer) == RaidMetricPresentation.MissingLogHelp
                 && RaidMetricPresentation.GetPacketLossHelp(missingServer) == RaidMetricPresentation.MissingLogHelp,
                 "missing server samples use the same compact label and help as a missing connection result");
+
+            var insufficient = new ServerSession
+            {
+                HostingMode = TarkovHostingMode.Server,
+                NetworkStatisticsObserved = true,
+                NetworkStatisticsAt = new DateTime(2026, 8, 22, 10, 0, 0),
+                NetworkLoss = 0,
+                NetworkSent = 16,
+                NetworkReceived = 0
+            };
+            double value;
+            Assert(RaidMetricPresentation.FormatActualRtt(insufficient) == "표본부족"
+                    && RaidMetricPresentation.FormatPacketLoss(insufficient) == "0% (참고)"
+                    && RaidMetricPresentation.GetActualRttHelp(insufficient)
+                        == expectedInsufficientRttHelp
+                    && RaidMetricPresentation.GetPacketLossHelp(insufficient)
+                        == expectedReferencePacketLossHelp
+                    && !RaidMetricPresentation.TryGetActualRtt(insufficient, out value)
+                    && !RaidMetricPresentation.TryGetPacketLoss(insufficient, out value),
+                "an observed zero-receive snapshot is distinct from a missing log and remains non-authoritative");
+            insufficient.NetworkLoss = 0.0123456;
+            Assert(RaidMetricPresentation.FormatPacketLoss(insufficient) == "1.23% (참고)",
+                "an insufficient snapshot exposes the raw logged loss as an explicitly labeled reference value");
 
             var local = new ServerSession
             {
@@ -1709,7 +1951,6 @@ namespace TarkovServerReporter.Tests
                 ActualRttMs = 81.6,
                 NetworkLoss = 0
             };
-            double value;
             Assert(RaidMetricPresentation.FormatActualRtt(measured) == "82 ms"
                 && RaidMetricPresentation.FormatPacketLoss(measured) == "0%"
                 && RaidMetricPresentation.GetActualRttHelp(measured) == string.Empty

@@ -119,6 +119,19 @@ namespace TarkovServerReporter.Tests
                 && (solo.ParticipationEvidence & RaidParticipationEvidence.Conflict) != 0,
                 "conflicting solo and party evidence resolves to unknown");
 
+            var local = new ServerSession();
+            RaidClassificationModel.AddParticipationEvidence(
+                local,
+                RaidParticipationEvidence.LocalStartRoute);
+            Assert(local.ParticipationType == TarkovParticipationType.Solo,
+                "match/local/start directly confirms a local PvE solo raid");
+            RaidClassificationModel.AddParticipationEvidence(
+                local,
+                RaidParticipationEvidence.GroupStartEvent);
+            Assert(local.ParticipationType == TarkovParticipationType.Unknown
+                    && (local.ParticipationEvidence & RaidParticipationEvidence.Conflict) != 0,
+                "conflicting local-start and group-start evidence resolves to unknown");
+
             var party = new ServerSession();
             RaidClassificationModel.AddParticipationEvidence(
                 party,

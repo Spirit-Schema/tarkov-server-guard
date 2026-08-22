@@ -1303,6 +1303,10 @@ namespace TarkovServerReporter
             _pingValueLabel = AddDetailLine(details, "현재 핑", "조회 전", 144, 126);
             _actualRttValueLabel = AddDetailLine(details, "실게임 RTT", "-", 168, 126);
             _packetLossValueLabel = AddDetailLine(details, "실게임 패킷손실", "-", 192, 126);
+            _actualRttValueLabel.AccessibleName = "선택한 접속의 실게임 RTT";
+            _actualRttValueLabel.AccessibleDescription = "-";
+            _packetLossValueLabel.AccessibleName = "선택한 접속의 실게임 패킷손실";
+            _packetLossValueLabel.AccessibleDescription = "-";
 
             _advancedDetailsLayout = CreateDetailInfoLayout(out _detailInfoValueLabels);
             _advancedDetailsLayout.Location = new Point(466, 40);
@@ -1745,11 +1749,18 @@ namespace TarkovServerReporter
             _historyGrid.Columns.Add(CreateTextColumn("ip", "서버 IP", 124));
             _historyGrid.Columns.Add(CreateTextColumn("location", "데이터센터 / 지역", 172));
             _historyGrid.Columns.Add(CreateTextColumn("ping", "현재 핑", 92));
-            _historyGrid.Columns.Add(CreateTwoLineTextColumn("actualRtt", "실게임\r\nRTT", 96));
-            _historyGrid.Columns.Add(CreateTwoLineTextColumn(
+            DataGridViewTextBoxColumn actualRttColumn = CreateTwoLineTextColumn(
+                "actualRtt",
+                "실게임\r\nRTT",
+                96);
+            actualRttColumn.CellTemplate = new MetricTextBoxCell();
+            _historyGrid.Columns.Add(actualRttColumn);
+            DataGridViewTextBoxColumn packetLossColumn = CreateTwoLineTextColumn(
                 "packetLoss",
                 "실게임\r\n패킷손실",
-                96));
+                96);
+            packetLossColumn.CellTemplate = new MetricTextBoxCell();
+            _historyGrid.Columns.Add(packetLossColumn);
             DataGridViewButtonColumn blockActionColumn = CreateConnectionActionColumn("blockAction", "차단");
             DataGridViewButtonColumn unblockActionColumn = CreateConnectionActionColumn("unblockAction", "해제");
             // The action state remains on the main row. A small native DataGridView
@@ -1923,6 +1934,41 @@ namespace TarkovServerReporter
                         return string.IsNullOrWhiteSpace(value)
                             ? base.Description
                             : value;
+                    }
+                }
+            }
+        }
+
+        private sealed class MetricTextBoxCell : DataGridViewTextBoxCell
+        {
+            protected override AccessibleObject CreateAccessibilityInstance()
+            {
+                return new MetricCellAccessibleObject(this);
+            }
+
+            public override object Clone()
+            {
+                return (MetricTextBoxCell)base.Clone();
+            }
+
+            private sealed class MetricCellAccessibleObject
+                : DataGridViewCellAccessibleObject
+            {
+                private readonly MetricTextBoxCell _owner;
+
+                internal MetricCellAccessibleObject(MetricTextBoxCell owner)
+                    : base(owner)
+                {
+                    _owner = owner;
+                }
+
+                public override string Description
+                {
+                    get
+                    {
+                        return CreateMetricAccessibleDescription(
+                            Convert.ToString(_owner.FormattedValue),
+                            _owner.ToolTipText);
                     }
                 }
             }
@@ -4839,12 +4885,20 @@ namespace TarkovServerReporter
             _actualRttValueLabel.ForeColor = GetLatencyColor(session);
             _packetLossValueLabel.Text = RaidMetricPresentation.FormatPacketLoss(session);
             _packetLossValueLabel.ForeColor = GetPacketLossColor(session);
+            string actualRttHelp = RaidMetricPresentation.GetActualRttHelp(session);
+            string packetLossHelp = RaidMetricPresentation.GetPacketLossHelp(session);
             _toolTip.SetToolTip(
                 _actualRttValueLabel,
-                RaidMetricPresentation.GetActualRttHelp(session));
+                actualRttHelp);
             _toolTip.SetToolTip(
                 _packetLossValueLabel,
-                RaidMetricPresentation.GetPacketLossHelp(session));
+                packetLossHelp);
+            _actualRttValueLabel.AccessibleDescription = CreateMetricAccessibleDescription(
+                _actualRttValueLabel.Text,
+                actualRttHelp);
+            _packetLossValueLabel.AccessibleDescription = CreateMetricAccessibleDescription(
+                _packetLossValueLabel.Text,
+                packetLossHelp);
             UpdateDetailInfo(session);
             ApplySelectedMetricFonts();
 
@@ -5369,10 +5423,9 @@ namespace TarkovServerReporter
         private static void ApplyMissingMetricCellFont(DataGridViewCell cell, Font resultFont)
         {
             if (cell == null) return;
-            bool missing = string.Equals(
-                Convert.ToString(cell.Value),
-                "로그없음",
-                StringComparison.Ordinal);
+            string text = Convert.ToString(cell.Value);
+            bool missing = string.Equals(text, "로그없음", StringComparison.Ordinal)
+                || string.Equals(text, "표본부족", StringComparison.Ordinal);
             // Null restores the normal inherited metric font for measured,
             // local-PvE, and neutral values. Only the compact missing state uses
             // the connection-result font beside it.
@@ -5390,24 +5443,43 @@ namespace TarkovServerReporter
 
             Font regularFont = _mapValueLabel.Font;
             Font resultFont = _detailInfoValueLabels[2].Font;
-            _actualRttValueLabel.Font = string.Equals(
-                _actualRttValueLabel.Text,
-                "로그없음",
-                StringComparison.Ordinal)
+            _actualRttValueLabel.Font = IsCompactMetricState(_actualRttValueLabel.Text)
                     ? resultFont
                     : regularFont;
-            _packetLossValueLabel.Font = string.Equals(
-                _packetLossValueLabel.Text,
-                "로그없음",
-                StringComparison.Ordinal)
+            _packetLossValueLabel.Font = IsCompactMetricState(_packetLossValueLabel.Text)
                     ? resultFont
                     : regularFont;
+        }
+
+        private static bool IsCompactMetricState(string text)
+        {
+            return string.Equals(text, "로그없음", StringComparison.Ordinal)
+                || string.Equals(text, "표본부족", StringComparison.Ordinal);
+        }
+
+        private static string CreateMetricAccessibleDescription(string value, string help)
+        {
+            string normalizedValue = value ?? string.Empty;
+            return string.IsNullOrWhiteSpace(help)
+                ? normalizedValue
+                : normalizedValue + ". " + help;
         }
 
         private static Color GetPacketLossColor(ServerSession session)
         {
             double value;
-            if (!RaidMetricPresentation.TryGetPacketLoss(session, out value)) return TextMuted;
+            if (!RaidMetricPresentation.TryGetPacketLoss(session, out value))
+            {
+                if (session != null
+                    && session.NetworkStatisticsObserved
+                    && session.NetworkReceived <= 0
+                    && session.NetworkLoss.HasValue
+                    && !double.IsNaN(session.NetworkLoss.Value)
+                    && !double.IsInfinity(session.NetworkLoss.Value)
+                    && session.NetworkLoss.Value >= 0)
+                    return Warning;
+                return TextMuted;
+            }
             if (value >= 0.05) return Danger;
             if (value > 0) return Warning;
             return Success;
@@ -5629,13 +5701,26 @@ namespace TarkovServerReporter
 
                 _firewallStates[ipAddress] = new FirewallQueryResult { Success = true, IsBlocked = result.IsBlocked };
                 _pingResults.Remove(ipAddress);
+                RaidQualityEvidenceSummary qualityEvidence = null;
                 if (shouldBlock)
+                {
                     SaveBlockedServerMetadata(ipAddress);
+                    UpdateServerRowsFromCache(ipAddress);
+                    SetStatus(
+                        GetFirewallChangeSuccessMessage(ipAddress, true),
+                        Danger);
+                    qualityEvidence = await LoadRecentRaidQualityEvidenceAsync(ipAddress);
+                }
                 else
+                {
                     BlockedServerMetadataStore.Remove(new[] { ipAddress });
-                UpdateServerRowsFromCache(ipAddress);
+                    UpdateServerRowsFromCache(ipAddress);
+                }
                 SetStatus(
-                    GetFirewallChangeSuccessMessage(ipAddress, shouldBlock),
+                    GetFirewallChangeSuccessMessageWithEvidence(
+                        ipAddress,
+                        shouldBlock,
+                        qualityEvidence),
                     shouldBlock ? Danger : Success);
             }
             finally
@@ -5653,11 +5738,42 @@ namespace TarkovServerReporter
 
         private static string GetFirewallChangeSuccessMessage(string ipAddress, bool shouldBlock)
         {
+            return GetFirewallChangeSuccessMessageWithEvidence(ipAddress, shouldBlock, null);
+        }
+
+        private static string GetFirewallChangeSuccessMessageWithEvidence(
+            string ipAddress,
+            bool shouldBlock,
+            RaidQualityEvidenceSummary qualityEvidence)
+        {
             if (!shouldBlock)
                 return ipAddress + " 서버 차단을 해제했습니다. 핑은 다시 조회해 주세요.";
 
-            return ipAddress + " 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n"
-                + FirewallPersistenceNotice.RulesPersistLine;
+            string result = ipAddress + " 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n";
+            if (qualityEvidence != null)
+                result += qualityEvidence.ToDisplayText() + "\r\n";
+            return result + FirewallPersistenceNotice.RulesPersistLine;
+        }
+
+        private async Task<RaidQualityEvidenceSummary> LoadRecentRaidQualityEvidenceAsync(
+            string ipAddress)
+        {
+            try
+            {
+                RaidLogScanResult scan = await LoadRecentSessionsForBlockedFormAsync();
+                if (scan == null
+                    || !scan.ScanCompletedWithoutErrors
+                    || !scan.TotalMatchingSessionsIsExact
+                    || scan.Sessions == null)
+                    return null;
+                return RaidQualityEvidence.Analyze(scan.Sessions, ipAddress);
+            }
+            catch
+            {
+                // A successful firewall change must not be reported as failed merely because
+                // the optional read-only history summary could not be rebuilt.
+                return null;
+            }
         }
 
         private void UpdateServerRowsFromCache(string ipAddress)
@@ -5797,13 +5913,32 @@ namespace TarkovServerReporter
                 return;
             }
 
+            _isRefreshing = true;
+            UpdateActionButtons();
+            SetStatus("차단 서버의 최근 실게임 지표를 확인하는 중…", Accent);
+            RaidLogScanResult metricHistory;
+            try
+            {
+                metricHistory = await LoadRecentSessionsForBlockedFormAsync();
+            }
+            finally
+            {
+                _isRefreshing = false;
+                UpdateActionButtons();
+            }
             bool changed;
-            using (var form = new BlockedServersForm())
+            using (var form = new BlockedServersForm(
+                metricHistory.Sessions,
+                metricHistory.ScanCompletedWithoutErrors))
             {
                 form.ShowDialog(this);
                 changed = form.FirewallStateChanged;
             }
-            if (!changed) return;
+            if (!changed)
+            {
+                SetHistorySummaryStatus(TextMuted, false);
+                return;
+            }
 
             _initialFirewallStateRefresh.Invalidate();
 
@@ -5867,6 +6002,8 @@ namespace TarkovServerReporter
             _locationValueLabel.Text = "-";
             _actualRttValueLabel.Text = "-";
             _packetLossValueLabel.Text = "-";
+            _actualRttValueLabel.AccessibleDescription = "-";
+            _packetLossValueLabel.AccessibleDescription = "-";
             UpdateDetailInfo(null);
             _pingValueLabel.ForeColor = TextMuted;
             _locationValueLabel.ForeColor = TextMuted;
@@ -5975,6 +6112,80 @@ namespace TarkovServerReporter
             {
                 _updatingStatusAreaHeight = false;
             }
+        }
+
+        private async Task<RaidLogScanResult> LoadRecentSessionsForBlockedFormAsync()
+        {
+            if (!AreConfiguredLogSourcesAvailable(
+                _appliedEftPath,
+                _appliedArenaPath))
+            {
+                return new RaidLogScanResult
+                {
+                    Sessions = new List<ServerSession>(),
+                    TotalMatchingSessionsIsExact = false,
+                    ScanCompletedWithoutErrors = false
+                };
+            }
+
+            try
+            {
+                var paths = new TarkovLogPaths
+                {
+                    EftPath = _appliedEftPath,
+                    ArenaPath = _appliedArenaPath
+                };
+                RaidLogScanResult scan = await Task.Run(() => RaidLogScanner.Scan(
+                    paths,
+                    new RaidLogScanQuery
+                    {
+                        MaximumRecords = RaidQualityEvidence.MaximumRecentRaids
+                    }));
+                if (scan == null || scan.Sessions == null)
+                {
+                    return new RaidLogScanResult
+                    {
+                        Sessions = new List<ServerSession>(),
+                        TotalMatchingSessionsIsExact = false,
+                        ScanCompletedWithoutErrors = false
+                    };
+                }
+                if (!scan.TotalMatchingSessionsIsExact)
+                    scan.ScanCompletedWithoutErrors = false;
+                return scan;
+            }
+            catch
+            {
+                // The firewall-rule list is still useful, but incomplete history must not
+                // be presented as the latest known raid metrics.
+                return new RaidLogScanResult
+                {
+                    Sessions = new List<ServerSession>(),
+                    TotalMatchingSessionsIsExact = false,
+                    ScanCompletedWithoutErrors = false
+                };
+            }
+        }
+
+        private static bool AreConfiguredLogSourcesAvailable(
+            string eftPath,
+            string arenaPath)
+        {
+            bool hasConfiguredPath = false;
+            foreach (string path in new[] { eftPath, arenaPath })
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                hasConfiguredPath = true;
+                try
+                {
+                    if (!Directory.Exists(path)) return false;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+            return hasConfiguredPath;
         }
 
         private static int CalculateStatusAreaHeight(

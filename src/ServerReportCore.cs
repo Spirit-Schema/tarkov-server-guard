@@ -97,7 +97,8 @@ namespace TarkovServerReporter
         GroupStartRoute = 16,
         GroupStartEvent = 32,
         ValidGroupState = 64,
-        Conflict = 128
+        Conflict = 128,
+        LocalStartRoute = 256
     }
 
     [Flags]
@@ -145,6 +146,9 @@ namespace TarkovServerReporter
         public double? NetworkLoss { get; set; }
         public long NetworkSent { get; set; }
         public long NetworkReceived { get; set; }
+        public bool NetworkStatisticsObserved { get; set; }
+        public DateTime? NetworkStatisticsAt { get; set; }
+        public DateTime? NetworkMetricAttemptStartedAt { get; set; }
         public int ConnectionAttempts { get; set; }
         public HashSet<string> ConnectionAttemptKeys { get; set; }
         public int UserReportCount { get; set; }
@@ -370,7 +374,8 @@ namespace TarkovServerReporter
             | RaidParticipationEvidence.EmptyGroupId
             | RaidParticipationEvidence.GroupStartRoute
             | RaidParticipationEvidence.GroupStartEvent
-            | RaidParticipationEvidence.ValidGroupState;
+            | RaidParticipationEvidence.ValidGroupState
+            | RaidParticipationEvidence.LocalStartRoute;
 
         internal static bool IsValidPartySize(int? partySize)
         {
@@ -550,6 +555,7 @@ namespace TarkovServerReporter
         {
             RaidParticipationEvidence evidence = GetParticipationEvidence(session);
             bool hasSolo = (evidence & RaidParticipationEvidence.Solo) != 0
+                || (evidence & RaidParticipationEvidence.LocalStartRoute) != 0
                 || (evidence & (RaidParticipationEvidence.MatchJoin
                     | RaidParticipationEvidence.EmptyGroupId))
                     == (RaidParticipationEvidence.MatchJoin
@@ -600,6 +606,12 @@ namespace TarkovServerReporter
         public const string LocalRaidHelp =
             "로컬 PvE 레이드는 게임 서버 통계가 적용되지 않습니다.";
 
+        public const string InsufficientRttHelp =
+            "네트워크 통계 로그는 있지만 수신 표본이 0건이어서 실게임 RTT를 확정할 수 없습니다.";
+
+        public const string ReferencePacketLossHelp =
+            "네트워크 통계 로그의 패킷손실 기록값입니다. 수신 표본이 0건이어서 참고값으로 표시합니다.";
+
         public static string FormatActualRtt(ServerSession session)
         {
             double value;
@@ -611,10 +623,19 @@ namespace TarkovServerReporter
         public static string FormatPacketLoss(ServerSession session)
         {
             double value;
-            if (!TryGetPacketLoss(session, out value))
-                return GetUnavailableText(session);
-            if (value == 0) return "0%";
+            if (TryGetRawPacketLoss(session, out value))
+            {
+                string formatted = FormatPacketLossValue(value);
+                return HasInsufficientNetworkSample(session)
+                    ? formatted + " (참고)"
+                    : formatted;
+            }
+            return GetUnavailableText(session);
+        }
 
+        private static string FormatPacketLossValue(double value)
+        {
+            if (value == 0) return "0%";
             double percent = value * 100.0;
             return percent < 0.01
                 ? "0.01%"
@@ -623,14 +644,27 @@ namespace TarkovServerReporter
 
         public static string GetActualRttHelp(ServerSession session)
         {
+            if (session == null) return string.Empty;
+            if (session.HostingMode == TarkovHostingMode.Local) return LocalRaidHelp;
             double ignored;
-            return GetMetricHelp(session, TryGetActualRtt(session, out ignored));
+            if (TryGetActualRtt(session, out ignored)) return string.Empty;
+            if (!session.NetworkStatisticsObserved) return MissingLogHelp;
+            return session.NetworkReceived <= 0
+                ? InsufficientRttHelp
+                : "네트워크 통계 로그는 있지만 유효한 실게임 RTT 값이 없어 표본부족으로 표시합니다.";
         }
 
         public static string GetPacketLossHelp(ServerSession session)
         {
+            if (session == null) return string.Empty;
+            if (session.HostingMode == TarkovHostingMode.Local) return LocalRaidHelp;
             double ignored;
-            return GetMetricHelp(session, TryGetPacketLoss(session, out ignored));
+            if (TryGetPacketLoss(session, out ignored)) return string.Empty;
+            if (!session.NetworkStatisticsObserved) return MissingLogHelp;
+            if (HasInsufficientNetworkSample(session)
+                && TryGetRawPacketLoss(session, out ignored))
+                return ReferencePacketLossHelp;
+            return "네트워크 통계 로그는 있지만 유효한 패킷손실 값이 없어 표본부족으로 표시합니다.";
         }
 
         public static bool TryGetActualRtt(ServerSession session, out double value)
@@ -638,10 +672,11 @@ namespace TarkovServerReporter
             value = 0;
             if (session == null
                 || session.HostingMode == TarkovHostingMode.Local
+                || HasInsufficientNetworkSample(session)
                 || !session.ActualRttMs.HasValue)
                 return false;
             value = session.ActualRttMs.Value;
-            return !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0;
+            return IsFiniteNonNegative(value) && value > 0;
         }
 
         public static bool TryGetPacketLoss(ServerSession session, out double value)
@@ -649,26 +684,39 @@ namespace TarkovServerReporter
             value = 0;
             if (session == null
                 || session.HostingMode == TarkovHostingMode.Local
+                || HasInsufficientNetworkSample(session))
+                return false;
+            return TryGetRawPacketLoss(session, out value);
+        }
+
+        private static bool TryGetRawPacketLoss(ServerSession session, out double value)
+        {
+            value = 0;
+            if (session == null
+                || session.HostingMode == TarkovHostingMode.Local
                 || !session.NetworkLoss.HasValue)
                 return false;
             value = session.NetworkLoss.Value;
+            return IsFiniteNonNegative(value);
+        }
+
+        private static bool HasInsufficientNetworkSample(ServerSession session)
+        {
+            return session != null
+                && session.NetworkStatisticsObserved
+                && session.NetworkReceived <= 0;
+        }
+
+        private static bool IsFiniteNonNegative(double value)
+        {
             return !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0;
         }
 
         private static string GetUnavailableText(ServerSession session)
         {
             if (session == null) return "-";
-            return session.HostingMode == TarkovHostingMode.Local
-                ? "해당 없음"
-                : "로그없음";
-        }
-
-        private static string GetMetricHelp(ServerSession session, bool hasValue)
-        {
-            if (session == null || hasValue) return string.Empty;
-            return session.HostingMode == TarkovHostingMode.Local
-                ? LocalRaidHelp
-                : MissingLogHelp;
+            if (session.HostingMode == TarkovHostingMode.Local) return "해당 없음";
+            return session.NetworkStatisticsObserved ? "표본부족" : "로그없음";
         }
     }
 
@@ -1346,6 +1394,13 @@ namespace TarkovServerReporter
                 CharacterEvidence = session.CharacterEvidence,
                 ParticipationEvidence = session.ParticipationEvidence,
                 PartySizeEvidence = session.PartySizeEvidence,
+                ActualRttMs = session.ActualRttMs,
+                NetworkLoss = session.NetworkLoss,
+                NetworkSent = session.NetworkSent,
+                NetworkReceived = session.NetworkReceived,
+                NetworkStatisticsObserved = session.NetworkStatisticsObserved,
+                NetworkStatisticsAt = session.NetworkStatisticsAt,
+                NetworkMetricAttemptStartedAt = session.NetworkMetricAttemptStartedAt,
                 RaidEntryMeasuredSeconds = session.RaidEntryMeasuredSeconds,
                 OperationStartedAt = session.OperationStartedAt,
                 OperationEndedAt = session.OperationEndedAt,

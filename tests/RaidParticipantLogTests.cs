@@ -19,16 +19,23 @@ namespace TarkovServerReporter.Tests
             Run("24-digit profile relation and carry", TestProfileIdRelations);
             Run("PvP PMC solo", TestPmcSolo);
             Run("explicit PvP season Scav solo", TestPvpSeasonScavSolo);
+            Run("server PvE profile roles", TestServerPveProfileRoles);
             Run("2-5 member party snapshots", TestPartySizes);
+            Run("numeric aid party member", TestNumericAidPartyMember);
+            Run("observed two-member party event order", TestObservedTwoMemberPartyFlow);
             Run("unknown push type is ignored", TestUnknownPushTypeIgnored);
             Run("mismatched push payload type is rejected", TestPayloadTypeMismatchRejected);
             Run("visual side conflict is Unknown", TestVisualSideConflict);
             Run("ready transitions and member removal", TestReadyTransitionsAndRemoval);
             Run("incomplete party retains party without size", TestIncompleteParty);
+            Run("expired ready state does not leak into a new party",
+                TestExpiredReadyStateDoesNotLeak);
             Run("cancelled generation does not leak", TestCancelledGenerationDoesNotLeak);
             Run("multiple raids remain independent", TestMultipleRaids);
             Run("push changes invalidate warm directory cache", TestPushCacheInvalidation);
             Run("duplicate event ids are deduplicated", TestDuplicateEventIds);
+            Run("duplicate event ids across rotated push logs are deduplicated",
+                TestDuplicateEventIdsAcrossRotatedPushLogs);
             Run("invalid push payload fields are ignored", TestInvalidPushPayloadFields);
             Run("malformed and oversized push events are ignored", TestMalformedAndOversizedPush);
             Run("oversized push file is ignored", TestOversizedPushFile);
@@ -124,6 +131,112 @@ namespace TarkovServerReporter.Tests
                     "wrong party size for remote count " + remoteMembers);
                 Assert(session.CharacterType == TarkovCharacterType.Pmc,
                     "matching profile and Usec side did not remain PMC");
+            }
+        }
+
+        private static void TestServerPveProfileRoles()
+        {
+            ServerSession pmc = ScanSingleServerRaid(
+                "Pve",
+                "00112233445566778899aa05",
+                "00112233445566778899aa05",
+                false,
+                true,
+                null,
+                "PVE-SERVER-PMC");
+            Assert(pmc.HostingMode == TarkovHostingMode.Server
+                    && pmc.CharacterType == TarkovCharacterType.Pmc
+                    && pmc.ParticipationType == TarkovParticipationType.Solo,
+                "server PvE equal ProfileId must remain PMC solo");
+
+            ServerSession scav = ScanSingleServerRaid(
+                "Pve",
+                "00112233445566778899aa0f",
+                "00112233445566778899aa10",
+                false,
+                true,
+                null,
+                "PVE-SERVER-SCAV");
+            Assert(scav.HostingMode == TarkovHostingMode.Server
+                    && scav.CharacterType == TarkovCharacterType.Scav
+                    && scav.ParticipationType == TarkovParticipationType.Solo,
+                "server PvE +1 ProfileId must remain Scav solo");
+        }
+
+        private static void TestNumericAidPartyMember()
+        {
+            string push = PushEvent(
+                    "10:00:03.100",
+                    "GroupMatchRaidReady",
+                    ReadyJsonNumeric("numeric-ready", 900000001L, "Usec", "Usec"))
+                + PushEvent("10:00:04.000", "GroupMatchStartGame", StartJson("numeric-start"));
+            ServerSession session = ScanSingleServerRaid(
+                "Pve",
+                "00112233445566778899aa11",
+                "00112233445566778899aa11",
+                true,
+                false,
+                push,
+                "NUMERIC-AID");
+            Assert(session.ParticipationType == TarkovParticipationType.Party
+                    && session.PartySize == 2,
+                "an integral numeric aid from the real push schema must count once");
+        }
+
+        private static void TestObservedTwoMemberPartyFlow()
+        {
+            string root = CreateRoot();
+            try
+            {
+                const long remoteAid = 5000000001L;
+                string directory = CreateSessionDirectory(root);
+                var application = new StringBuilder();
+                application.Append(App("09:59:59.000", "Session mode: Pve"));
+                application.Append(App("10:00:00.000",
+                    "PrepareSelectedProfileLocally ProfileId:00112233445566778899aa20 AccountId:100"));
+                application.Append(App("10:00:01.500", "MatchingCompleted:0 real:0 diff:0"));
+                application.Append(App("10:00:02.100",
+                    "scene preset path:maps/factory_day_preset.bundle rcid:factory4_day"));
+                application.Append(App("10:00:02.500", "GameCreated:1 real:1 diff:0"));
+                application.Append(App("10:00:03.700",
+                    "Matching with group id: synthetic-observed-group"));
+                application.Append(ServerAssignment(
+                    "10:01:12.790",
+                    "00112233445566778899aa20",
+                    "OBSERVED-TWO",
+                    "OBSERVED"));
+                application.Append(App("10:01:45.000", "GameStarted:1 real:1 diff:0"));
+                Write(directory, "synthetic application_000.log", application.ToString());
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:00:03.750", "/client/match/group/start_game")
+                    + Backend("10:00:03.850", "/client/match/group/start_game"));
+                Write(directory, "synthetic push-notifications_000.log",
+                    PushEvent("10:00:01.000", "GroupMatchInviteAccept",
+                        InviteAcceptJsonNumeric(
+                            "observed-invite", remoteAid, false))
+                    + PushEvent("10:00:03.100", "GroupMatchRaidReady",
+                        ReadyJsonNumeric(
+                            "observed-ready-1", remoteAid, "Usec", "Usec"))
+                    + PushEvent("10:00:03.400", "GroupMatchRaidNotReady",
+                        SimpleAidJsonNumeric(
+                            "GroupMatchRaidNotReady", "observed-not-ready", remoteAid))
+                    + PushEvent("10:00:03.600", "GroupMatchRaidReady",
+                        ReadyJsonNumeric(
+                            "observed-ready-2", remoteAid, "Usec", "Usec"))
+                    + PushEvent("10:00:03.790", "GroupMatchStartGame",
+                        StartJson("observed-start")));
+
+                ServerSession session = Scan(root).Single();
+                Assert(session.ParticipationType == TarkovParticipationType.Party
+                        && session.PartySize == 2
+                        && session.ParticipationTypeText == "2인 파티",
+                    "the observed Ready/group/routes/Start/assignment order lost its two-member snapshot");
+                Assert(session.CharacterType == TarkovCharacterType.Pmc,
+                    "the observed nested visual side no longer agrees with the profile relation");
+            }
+            finally
+            {
+                DeleteRoot(root);
             }
         }
 
@@ -254,6 +367,35 @@ namespace TarkovServerReporter.Tests
                 "deduplication by eventId was skipped");
         }
 
+        private static void TestDuplicateEventIdsAcrossRotatedPushLogs()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateBasicServerRaid(
+                    root,
+                    "Regular",
+                    "00112233445566778899ab11",
+                    "00112233445566778899ab11",
+                    true,
+                    false,
+                    "DUP-ROTATED");
+                string push = BuildReadyPartyPush(1, "Usec", false, false);
+                Write(directory, "synthetic push-notifications_000.log", push);
+                Write(directory, "synthetic push-notifications_001.log", push);
+
+                ServerSession session = Scan(root).Single();
+                Assert(session.ParticipationType == TarkovParticipationType.Party,
+                    "a duplicated rotated group-start event removed confirmed Party state");
+                Assert(session.PartySize == 2,
+                    "a duplicated rotated group-start event erased the final member count");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
         private static void TestInvalidPushPayloadFields()
         {
             string push = PushEvent("10:00:03.100", "GroupMatchInviteAccept",
@@ -312,6 +454,45 @@ namespace TarkovServerReporter.Tests
                 Assert(session.ParticipationType == TarkovParticipationType.Solo,
                     "cancelled party generation leaked into the next solo raid");
                 Assert(!session.PartySize.HasValue, "cancelled party size leaked");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static void TestExpiredReadyStateDoesNotLeak()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                var application = new StringBuilder();
+                application.Append(App("09:59:00.000", "Session mode: Regular"));
+                application.Append(App("10:03:00.000",
+                    "Matching with group id: synthetic-new-group"));
+                application.Append(ServerAssignment(
+                    "10:03:30.000",
+                    "00112233445566778899aa40",
+                    "EXPIRED-READY",
+                    "EXPIRED"));
+                application.Append(App("10:04:00.000", "GameStarted:1 real:1 diff:0"));
+                Write(directory, "synthetic application_000.log", application.ToString());
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:03:00.500", "/client/match/group/start_game"));
+                Write(directory, "synthetic push-notifications_000.log",
+                    PushEvent("10:00:00.000", "GroupMatchRaidReady",
+                        ReadyJsonNumeric(
+                            "expired-ready", 5000000002L, "Usec", "Savage"))
+                    + PushEvent("10:03:01.000", "GroupMatchStartGame",
+                        StartJson("new-start")));
+
+                ServerSession session = Scan(root).Single();
+                Assert(session.ParticipationType == TarkovParticipationType.Party
+                        && !session.PartySize.HasValue,
+                    "a stale Ready event must yield a non-numeric Party for the new generation");
+                Assert(session.CharacterType == TarkovCharacterType.Unknown,
+                    "a stale visual Side leaked into a new generation without direct role evidence");
             }
             finally
             {
@@ -490,10 +671,10 @@ namespace TarkovServerReporter.Tests
                 false);
             Assert(session.HostingMode == TarkovHostingMode.Local,
                 "fixture did not create a local PvE session");
-            Assert(session.CharacterType == TarkovCharacterType.Pmc,
-                "local PvE +1/=profile relation should infer PMC");
+            Assert(session.CharacterType == TarkovCharacterType.Unknown,
+                "real-style local PvE logs without a raid ProfileId must not guess PMC");
             Assert(session.ParticipationType == TarkovParticipationType.Solo,
-                "local PvE match/join should infer Solo");
+                "local PvE match/local/start should directly infer Solo");
             Assert(!session.PartySize.HasValue, "local solo must not expose party size");
         }
 
@@ -510,10 +691,10 @@ namespace TarkovServerReporter.Tests
                 false);
             Assert(session.HostingMode == TarkovHostingMode.Local,
                 "fixture did not create a local PvE session");
-            Assert(session.CharacterType == TarkovCharacterType.Scav,
-                "local PvE raid profile +1 relation should infer Scav");
+            Assert(session.CharacterType == TarkovCharacterType.Unknown,
+                "real-style local PvE logs without a raid ProfileId must not guess Scav");
             Assert(session.ParticipationType == TarkovParticipationType.Solo,
-                "local PvE match/join should infer Solo");
+                "local PvE match/local/start should directly infer Solo");
             Assert(!session.PartySize.HasValue, "local solo must not expose party size");
         }
 
@@ -578,31 +759,35 @@ namespace TarkovServerReporter.Tests
             bool includeServerAssignment = true)
         {
             string directory = CreateSessionDirectory(root);
-            string application = App("09:59:59.000", "Session mode: " + mode)
-                + App("10:00:00.000",
-                    "PrepareSelectedProfileLocally ProfileId:" + baseProfile + " AccountId:100")
-                + App("10:00:02.000",
-                    "Matching with group id:" + (party ? " synthetic-group" : string.Empty))
-                + (string.Equals(mode, "Pve", StringComparison.OrdinalIgnoreCase)
-                    ? App("10:00:01.000", "MatchingCompleted:0 real:0 diff:0")
-                        + (includeServerAssignment
-                            ? ServerAssignment("10:00:01.300", raidProfile, "SID-" + suffix, "SHORT-" + suffix)
-                            : LocalAssignment("10:00:01.300", raidProfile))
-                    : string.Empty)
-                + (includeServerAssignment
-                    ? string.Empty
-                    : string.Empty)
-                + (string.Equals(mode, "Pve", StringComparison.OrdinalIgnoreCase)
-                    ? App("10:00:01.500", "scene preset path:maps/factory_day_preset.bundle rcid:factory4_day")
-                        + App("10:00:02.000", "GameCreated:1 real:1 diff:0")
-                        + App("10:00:03.000", "GameStarted:1 real:1 diff:0")
-                    : string.Empty)
-                + (string.Equals(mode, "Pve", StringComparison.OrdinalIgnoreCase) && !includeServerAssignment
-                    ? string.Empty
-                    : string.Empty)
-                + (includeServerAssignment
-                    ? ServerAssignment("10:00:05.000", raidProfile, "SID-" + suffix, "SHORT-" + suffix)
-                    : string.Empty);
+            var applicationBuilder = new StringBuilder();
+            applicationBuilder.Append(App("09:59:59.000", "Session mode: " + mode));
+            applicationBuilder.Append(App("10:00:00.000",
+                "PrepareSelectedProfileLocally ProfileId:" + baseProfile + " AccountId:100"));
+            if (string.Equals(mode, "Pve", StringComparison.OrdinalIgnoreCase))
+            {
+                applicationBuilder.Append(App("10:00:01.000", "MatchingCompleted:0 real:0 diff:0"));
+            }
+            if (includeServerAssignment)
+            {
+                applicationBuilder.Append(App("10:00:02.000",
+                    "Matching with group id:" + (party ? " synthetic-group" : string.Empty)));
+            }
+            if (string.Equals(mode, "Pve", StringComparison.OrdinalIgnoreCase))
+            {
+                applicationBuilder.Append(App("10:00:02.100",
+                    "scene preset path:maps/factory_day_preset.bundle rcid:factory4_day"));
+                applicationBuilder.Append(App("10:00:02.500", "GameCreated:1 real:1 diff:0"));
+            }
+            if (includeServerAssignment)
+            {
+                applicationBuilder.Append(ServerAssignment(
+                    "10:00:05.000", raidProfile, "SID-" + suffix, "SHORT-" + suffix));
+            }
+            if (string.Equals(mode, "Pve", StringComparison.OrdinalIgnoreCase))
+            {
+                applicationBuilder.Append(App("10:00:06.000", "GameStarted:1 real:1 diff:0"));
+            }
+            string application = applicationBuilder.ToString();
             Write(directory, "synthetic application_000.log", application);
             if (party)
             {
@@ -612,7 +797,11 @@ namespace TarkovServerReporter.Tests
             else if (matchJoin)
             {
                 Write(directory, "synthetic backend_000.log",
-                    Backend("10:00:03.000", "/client/match/join"));
+                    Backend(
+                        "10:00:03.000",
+                        includeServerAssignment
+                            ? "/client/match/join"
+                            : "/client/match/local/start"));
             }
             return directory;
         }
@@ -666,6 +855,25 @@ namespace TarkovServerReporter.Tests
                 + "}";
         }
 
+        private static string ReadyJsonNumeric(
+            string eventId,
+            long aid,
+            string baseSide,
+            string visualSide)
+        {
+            return "{\r\n"
+                + "  \"type\": \"GroupMatchRaidReady\",\r\n"
+                + "  \"eventId\": \"" + eventId + "\",\r\n"
+                + "  \"extendedProfile\": {\r\n"
+                + "    \"aid\": " + aid.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\r\n"
+                + "    \"Info\": { \"Side\": \"" + baseSide + "\" },\r\n"
+                + "    \"PlayerVisualRepresentation\": {\r\n"
+                + "      \"Info\": { \"Side\": \"" + visualSide + "\" }\r\n"
+                + "    }\r\n"
+                + "  }\r\n"
+                + "}";
+        }
+
         private static string InviteAcceptJson(
             string eventId,
             string aid,
@@ -674,7 +882,7 @@ namespace TarkovServerReporter.Tests
             bool invalidAid = false)
         {
             string aidValue = invalidAid
-                ? "1234"
+                ? "true"
                 : "\"" + aid + "\"";
 
             return "{\r\n"
@@ -685,12 +893,37 @@ namespace TarkovServerReporter.Tests
                 + "}";
         }
 
+        private static string InviteAcceptJsonNumeric(
+            string eventId,
+            long aid,
+            bool isReady)
+        {
+            return "{\r\n"
+                + "  \"type\": \"GroupMatchInviteAccept\",\r\n"
+                + "  \"eventId\": \"" + eventId + "\",\r\n"
+                + "  \"aid\": " + aid.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\r\n"
+                + "  \"isReady\": " + (isReady ? "true" : "false") + "\r\n"
+                + "}";
+        }
+
         private static string SimpleAidJson(string type, string eventId, string aid)
         {
             return "{\r\n"
                 + "  \"type\": \"" + type + "\",\r\n"
                 + "  \"eventId\": \"" + eventId + "\",\r\n"
                 + "  \"aid\": \"" + aid + "\"\r\n"
+                + "}";
+        }
+
+        private static string SimpleAidJsonNumeric(
+            string type,
+            string eventId,
+            long aid)
+        {
+            return "{\r\n"
+                + "  \"type\": \"" + type + "\",\r\n"
+                + "  \"eventId\": \"" + eventId + "\",\r\n"
+                + "  \"aid\": " + aid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\r\n"
                 + "}";
         }
 
@@ -740,13 +973,6 @@ namespace TarkovServerReporter.Tests
                 + ", Status: Busy, RaidMode: Online, Ip: 203.0.113.42, Port: 17000"
                 + ", Location: factory4_day, Sid:" + sid
                 + ", GameMode: deathmatch, shortId:" + shortId + "'");
-        }
-
-        private static string LocalAssignment(string time, string profile)
-        {
-            return App(time,
-                "TRACE-NetworkGameCreate profileStatus: 'Profileid:" + profile
-                + ", Status: Busy, RaidMode: Local'");
         }
 
         private static IList<ServerSession> Scan(string root)

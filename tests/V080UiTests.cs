@@ -81,9 +81,10 @@ namespace TarkovServerReporter.Tests
                             new Rectangle(Point.Empty, bitmap.Size));
                     }
 
-                    AssertMissingLogTooltips(application, mainFormType);
+                    AssertMissingLogTooltips(application, mainFormType, grid);
                     AssertPrivacyNoticeText(form);
                     AssertFirewallPersistenceUi(application, mainFormType, form);
+                    AssertMetricHistoryRequiresConfiguredLogSource(mainFormType, form);
                     AssertInitialFirewallStatePresentation(mainFormType, form);
                     AssertNoPersistentPatchNotesOrUninstallButtons(form);
                 }
@@ -1301,6 +1302,43 @@ namespace TarkovServerReporter.Tests
                 statusLabel.Font = originalFont;
             }
 
+            Type evidenceType = application.GetType(
+                "TarkovServerReporter.RaidQualityEvidenceSummary",
+                true);
+            ConstructorInfo evidenceConstructor = evidenceType.GetConstructor(
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(int), typeof(int), typeof(int) },
+                null);
+            MethodInfo evidenceMessageMethod = mainFormType.GetMethod(
+                "GetFirewallChangeSuccessMessageWithEvidence",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(evidenceConstructor != null && evidenceMessageMethod != null,
+                "최근 레이드 근거를 차단 완료 상태에 결합하는 경계를 찾지 못했습니다.");
+            object evidence = evidenceConstructor.Invoke(new object[] { 100, 7, 3 });
+            string evidenceMessage = Convert.ToString(evidenceMessageMethod.Invoke(
+                null,
+                new[] { (object)"203.0.113.42", true, evidence }));
+            string expectedEvidenceMessage =
+                "203.0.113.42 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n"
+                + "최근 레이드 100개 중 이 IP가 사용된 7개를 확인했고, 그중 3개에서 "
+                + "높은 지연·패킷 손실·시간초과 징후가 확인되었습니다.\r\n"
+                + rulesPersistLine;
+            Assert(evidenceMessage == expectedEvidenceMessage,
+                "차단 근거는 인과관계를 단정하지 않는 확정된 세 줄 문구여야 합니다.");
+            setStatusMethod.Invoke(mainForm, new object[] { evidenceMessage, Color.Red });
+            mainForm.PerformLayout();
+            Application.DoEvents();
+            Assert(statusLabel.Text == evidenceMessage
+                && toolTip.GetToolTip(statusLabel) == evidenceMessage
+                && statusLabel.AccessibleDescription == evidenceMessage
+                && statusLabel.Text.Split(
+                    new[] { "\r\n" },
+                    StringSplitOptions.None).Length == 3,
+                "차단 근거 세 줄은 화면·툴팁·접근성 설명에 동일하게 제공되어야 합니다.");
+            AssertStatusTextFits(statusLabel, evidenceMessage,
+                "최소 지원 창 크기에서도 차단 근거를 포함한 세 줄 안내가 잘리면 안 됩니다.");
+
             MethodInfo calculateHeightMethod = mainFormType.GetMethod(
                 "CalculateStatusAreaHeight",
                 BindingFlags.Static | BindingFlags.NonPublic);
@@ -1376,7 +1414,8 @@ namespace TarkovServerReporter.Tests
 
         private static void AssertMissingLogTooltips(
             Assembly application,
-            Type mainFormType)
+            Type mainFormType,
+            DataGridView historyGrid)
         {
             const string expected =
                 "레이드 진행 중 또는 게임의 버그 · 비정상 종료로 필요한 로그가 기록되지 않았을 수 있습니다.";
@@ -1419,6 +1458,53 @@ namespace TarkovServerReporter.Tests
                 "실게임 RTT의 로그 없음 툴팁이 공통 확정 문구와 달라졌습니다.");
             Assert(Convert.ToString(packetLossHelpMethod.Invoke(null, new[] { session })) == expected,
                 "패킷손실의 로그 없음 툴팁이 공통 확정 문구와 달라졌습니다.");
+
+            sessionType.GetProperty("NetworkStatisticsObserved").SetValue(session, true, null);
+            sessionType.GetProperty("NetworkReceived").SetValue(session, 0L, null);
+            sessionType.GetProperty("NetworkLoss").SetValue(session, 0D, null);
+            MethodInfo formatActualRttMethod = presentationType.GetMethod(
+                "FormatActualRtt",
+                publicStatic);
+            MethodInfo formatPacketLossMethod = presentationType.GetMethod(
+                "FormatPacketLoss",
+                publicStatic);
+            string insufficientRttHelp = GetStaticString(
+                presentationType,
+                "InsufficientRttHelp",
+                publicStatic);
+            string referenceLossHelp = GetStaticString(
+                presentationType,
+                "ReferencePacketLossHelp",
+                publicStatic);
+            Assert(Convert.ToString(formatActualRttMethod.Invoke(null, new[] { session }))
+                    == "표본부족"
+                && Convert.ToString(formatPacketLossMethod.Invoke(null, new[] { session }))
+                    == "0% (참고)"
+                && Convert.ToString(actualRttHelpMethod.Invoke(null, new[] { session }))
+                    == insufficientRttHelp
+                && Convert.ToString(packetLossHelpMethod.Invoke(null, new[] { session }))
+                    == referenceLossHelp,
+                "수신 표본 0건은 RTT 표본부족과 손실 참고값으로 정확히 구분되어야 합니다.");
+
+            int rowIndex = historyGrid.Rows.Add();
+            try
+            {
+                DataGridViewCell rttCell = historyGrid.Rows[rowIndex].Cells["actualRtt"];
+                DataGridViewCell lossCell = historyGrid.Rows[rowIndex].Cells["packetLoss"];
+                rttCell.Value = "표본부족";
+                rttCell.ToolTipText = insufficientRttHelp;
+                lossCell.Value = "0% (참고)";
+                lossCell.ToolTipText = referenceLossHelp;
+                Assert(rttCell.AccessibilityObject.Description
+                        == "표본부족. " + insufficientRttHelp
+                    && lossCell.AccessibilityObject.Description
+                        == "0% (참고). " + referenceLossHelp,
+                    "메인 목록의 지표 셀도 표시값과 전체 도움말을 접근성 설명으로 제공해야 합니다.");
+            }
+            finally
+            {
+                historyGrid.Rows.RemoveAt(rowIndex);
+            }
         }
 
         private static void AssertPrivacyNoticeText(Form mainForm)
@@ -1447,6 +1533,187 @@ namespace TarkovServerReporter.Tests
                 "메인 화면의 개인정보·지역 DB 안내를 찾지 못했습니다.");
             Assert(privacyNotice.Text == expected,
                 "메인 화면의 지역 DB 용량 안내 문구와 띄어쓰기가 확정안과 달라졌습니다.");
+        }
+
+        private static void AssertMetricHistoryRequiresConfiguredLogSource(
+            Type mainFormType,
+            Form mainForm)
+        {
+            const BindingFlags instanceFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+            const BindingFlags staticFlags = BindingFlags.Static | BindingFlags.NonPublic;
+            FieldInfo eftPathField = mainFormType.GetField("_appliedEftPath", instanceFlags);
+            FieldInfo arenaPathField = mainFormType.GetField("_appliedArenaPath", instanceFlags);
+            FieldInfo sessionsField = mainFormType.GetField("_allSessions", instanceFlags);
+            FieldInfo incompleteField = mainFormType.GetField("_logScanIncomplete", instanceFlags);
+            FieldInfo periodField = mainFormType.GetField("_sessionPeriod", instanceFlags);
+            MethodInfo availabilityMethod = mainFormType.GetMethod(
+                "AreConfiguredLogSourcesAvailable",
+                staticFlags);
+            MethodInfo historyMethod = mainFormType.GetMethod(
+                "LoadRecentSessionsForBlockedFormAsync",
+                instanceFlags);
+            MethodInfo evidenceMethod = mainFormType.GetMethod(
+                "LoadRecentRaidQualityEvidenceAsync",
+                instanceFlags);
+            Assert(eftPathField != null
+                    && arenaPathField != null
+                    && sessionsField != null
+                    && incompleteField != null
+                    && periodField != null
+                    && availabilityMethod != null
+                    && historyMethod != null
+                    && evidenceMethod != null,
+                "차단현황 로그 원본 가용성 판정 경계를 찾지 못했습니다.");
+
+            object originalEftPath = eftPathField.GetValue(mainForm);
+            object originalArenaPath = arenaPathField.GetValue(mainForm);
+            object originalSessions = sessionsField.GetValue(mainForm);
+            object originalIncomplete = incompleteField.GetValue(mainForm);
+            object originalPeriod = periodField.GetValue(mainForm);
+            string emptyLogDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "TsgEmptyMetricHistory-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Type sessionType = sessionsField.FieldType.GetGenericArguments()[0];
+                object emptySessions = Activator.CreateInstance(
+                    typeof(List<>).MakeGenericType(sessionType));
+                sessionsField.SetValue(mainForm, emptySessions);
+                incompleteField.SetValue(mainForm, false);
+                periodField.SetValue(
+                    mainForm,
+                    Enum.Parse(periodField.FieldType, "Recent100"));
+                eftPathField.SetValue(mainForm, null);
+                arenaPathField.SetValue(mainForm, null);
+
+                Assert(!(bool)availabilityMethod.Invoke(
+                        null,
+                        new object[] { null, null }),
+                    "적용된 로그 경로가 하나도 없으면 완전한 로그 원본으로 간주하면 안 됩니다.");
+                object unavailableHistory = AwaitReflectedTaskResult(
+                    historyMethod.Invoke(mainForm, null));
+                Assert(!GetBooleanProperty(
+                        unavailableHistory,
+                        "ScanCompletedWithoutErrors")
+                    && GetCollectionCount(unavailableHistory, "Sessions") == 0,
+                    "로그 경로가 없으면 차단현황 지표를 로그없음이 아닌 확인 불가로 전달해야 합니다.");
+                Assert(AwaitReflectedTaskResult(evidenceMethod.Invoke(
+                        mainForm,
+                        new object[] { "203.0.113.42" })) == null,
+                    "로그 경로가 없을 때 선택적 차단 근거를 생성하면 안 됩니다.");
+
+                Directory.CreateDirectory(emptyLogDirectory);
+                eftPathField.SetValue(mainForm, emptyLogDirectory);
+                periodField.SetValue(
+                    mainForm,
+                    Enum.Parse(periodField.FieldType, "Today"));
+                Assert((bool)availabilityMethod.Invoke(
+                        null,
+                        new object[] { emptyLogDirectory, null }),
+                    "존재하는 빈 로그 폴더는 구성된 정상 원본으로 구분해야 합니다.");
+                object emptyHistory = AwaitReflectedTaskResult(
+                    historyMethod.Invoke(mainForm, null));
+                Assert(GetBooleanProperty(emptyHistory, "ScanCompletedWithoutErrors")
+                    && GetCollectionCount(emptyHistory, "Sessions") == 0,
+                    "정상 로그 경로의 실제 0건 결과까지 불완전으로 바꾸면 안 됩니다.");
+                Assert(AwaitReflectedTaskResult(evidenceMethod.Invoke(
+                        mainForm,
+                        new object[] { "203.0.113.42" })) != null,
+                    "정상 로그 경로의 실제 0건 결과는 결정적인 빈 차단 근거로 구분해야 합니다.");
+
+                DateTime firstRaidAt = new DateTime(2026, 8, 22, 1, 0, 0);
+                for (int index = 0; index < 101; index++)
+                {
+                    string folder = Path.Combine(
+                        emptyLogDirectory,
+                        "log_metric_history_" + index.ToString("D3"));
+                    Directory.CreateDirectory(folder);
+                    string ipAddress = "198.51.100." + (index + 1);
+                    string line = firstRaidAt.AddMinutes(index).ToString("yyyy.MM.dd HH:mm:ss")
+                        + "|1.1.0.1.46777|Debug|application|TRACE-NetworkGameCreate profileStatus: "
+                        + "'RaidMode: Online, Ip: " + ipAddress
+                        + ", Port: 17000, Location: Woods, Sid: JP-TK02G005_metric-"
+                        + index.ToString("D3")
+                        + ", GameMode: deathmatch, shortId: MH"
+                        + index.ToString("D3") + "'\r\n";
+                    File.WriteAllText(
+                        Path.Combine(folder, "application.log"),
+                        line,
+                        System.Text.Encoding.UTF8);
+                }
+                periodField.SetValue(
+                    mainForm,
+                    Enum.Parse(periodField.FieldType, "Recent100"));
+                sessionsField.SetValue(mainForm, emptySessions);
+                object latestHistory = AwaitReflectedTaskResult(
+                    historyMethod.Invoke(mainForm, null));
+                Assert(GetBooleanProperty(latestHistory, "ScanCompletedWithoutErrors")
+                    && GetBooleanProperty(latestHistory, "TotalMatchingSessionsIsExact")
+                    && GetCollectionCount(latestHistory, "Sessions") == 100
+                    && GetIntegerProperty(latestHistory, "TotalMatchingSessions") == 101,
+                    "차단현황을 열 때 화면의 오래된 Recent100 캐시 대신 전체 로그에서 최신 100개를 다시 확정해야 합니다.");
+                object latestEvidence = AwaitReflectedTaskResult(evidenceMethod.Invoke(
+                    mainForm,
+                    new object[] { "198.51.100.101" }));
+                Assert(latestEvidence != null
+                    && GetIntegerProperty(latestEvidence, "WindowRaidCount") == 100
+                    && GetIntegerProperty(latestEvidence, "MatchingRaidCount") == 1,
+                    "차단 근거도 기간 필터나 오래된 화면 캐시가 아닌 같은 최신 100개 원본을 사용해야 합니다.");
+            }
+            finally
+            {
+                eftPathField.SetValue(mainForm, originalEftPath);
+                arenaPathField.SetValue(mainForm, originalArenaPath);
+                sessionsField.SetValue(mainForm, originalSessions);
+                incompleteField.SetValue(mainForm, originalIncomplete);
+                periodField.SetValue(mainForm, originalPeriod);
+                if (Directory.Exists(emptyLogDirectory))
+                    Directory.Delete(emptyLogDirectory, true);
+            }
+        }
+
+        private static object AwaitReflectedTaskResult(object taskValue)
+        {
+            var task = taskValue as System.Threading.Tasks.Task;
+            Assert(task != null, "비동기 로그 원본 판정 결과를 받을 수 없습니다.");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!task.IsCompleted && DateTime.UtcNow < deadline)
+            {
+                Application.DoEvents();
+                System.Threading.Thread.Sleep(1);
+            }
+            Assert(task.IsCompleted, "비동기 로그 원본 판정이 제한 시간 안에 끝나지 않았습니다.");
+            task.GetAwaiter().GetResult();
+            PropertyInfo resultProperty = taskValue.GetType().GetProperty("Result");
+            Assert(resultProperty != null, "비동기 로그 원본 판정 결과 속성을 찾지 못했습니다.");
+            return resultProperty.GetValue(taskValue, null);
+        }
+
+        private static bool GetBooleanProperty(object source, string propertyName)
+        {
+            Assert(source != null, propertyName + " 결과가 없습니다.");
+            PropertyInfo property = source.GetType().GetProperty(propertyName);
+            Assert(property != null, propertyName + " 속성을 찾지 못했습니다.");
+            return Convert.ToBoolean(property.GetValue(source, null));
+        }
+
+        private static int GetCollectionCount(object source, string propertyName)
+        {
+            Assert(source != null, propertyName + " 결과가 없습니다.");
+            PropertyInfo property = source.GetType().GetProperty(propertyName);
+            var collection = property == null
+                ? null
+                : property.GetValue(source, null) as ICollection;
+            Assert(collection != null, propertyName + " 목록을 찾지 못했습니다.");
+            return collection.Count;
+        }
+
+        private static int GetIntegerProperty(object source, string propertyName)
+        {
+            Assert(source != null, propertyName + " 결과가 없습니다.");
+            PropertyInfo property = source.GetType().GetProperty(propertyName);
+            Assert(property != null, propertyName + " 속성을 찾지 못했습니다.");
+            return Convert.ToInt32(property.GetValue(source, null));
         }
 
         private static void AssertBlockedServerBackupUi(
