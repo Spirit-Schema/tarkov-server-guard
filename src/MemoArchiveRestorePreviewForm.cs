@@ -334,6 +334,13 @@ namespace TarkovServerReporter
                 {
                     MemoArchiveBackupParsedItem source = item.Source;
                     bool selectable = item.Status == MemoArchiveRestoreStatus.New;
+                    string mapAndGameType = BuildMapAndGameType(
+                        source.Kind == MemoArchiveBackupKind.RaidNote
+                            ? source.RaidNote.MapName
+                            : source.UserReportMemo.MapName,
+                        source.Kind == MemoArchiveBackupKind.RaidNote
+                            ? source.RaidNote.GameType
+                            : source.UserReportMemo.GameType);
                     int rowIndex = _grid.Rows.Add(
                         selectable && item.Selected,
                         GetStatusText(item.Status),
@@ -343,13 +350,7 @@ namespace TarkovServerReporter
                         Empty(source.Kind == MemoArchiveBackupKind.RaidNote
                             ? source.RaidNote.Game
                             : source.UserReportMemo.Game),
-                        BuildMapAndGameType(
-                            source.Kind == MemoArchiveBackupKind.RaidNote
-                                ? source.RaidNote.MapName
-                                : source.UserReportMemo.MapName,
-                            source.Kind == MemoArchiveBackupKind.RaidNote
-                                ? source.RaidNote.GameType
-                                : source.UserReportMemo.GameType),
+                        mapAndGameType,
                         FormatDate(source.Kind == MemoArchiveBackupKind.RaidNote
                             ? source.RaidNote.RaidStartedUtc
                             : source.UserReportMemo.RaidStartedUtc),
@@ -357,6 +358,7 @@ namespace TarkovServerReporter
                         item.Detail ?? string.Empty);
                     DataGridViewRow row = _grid.Rows[rowIndex];
                     row.Tag = item;
+                    row.Cells["map"].ToolTipText = mapAndGameType;
                     row.Cells["selected"].ReadOnly = !selectable;
                     row.Cells["status"].Style.ForeColor = item.Status == MemoArchiveRestoreStatus.New
                         ? Success

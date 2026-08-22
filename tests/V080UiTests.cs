@@ -68,6 +68,8 @@ namespace TarkovServerReporter.Tests
                     AssertTwoLineMeasurementColumn(grid, "packetLoss", "패킷손실");
                     AssertPathActionButtonTextAlignment(mainFormType, form);
                     AssertMainHeaderSortToolTips(mainFormType, form, grid);
+                    AssertRaidContextPresentation(application, mainFormType, form, grid);
+                    AssertIncompleteRefreshClassificationMerge(application, mainFormType);
                     AssertMainActionHeaderSorting(mainFormType, form, grid);
 
                     using (var bitmap = new Bitmap(
@@ -457,6 +459,184 @@ namespace TarkovServerReporter.Tests
                             StringComparison.Ordinal),
                     columnName + " 고정 작업 헤더의 3단계 안내가 정확하지 않습니다.");
             }
+        }
+
+        private static void AssertRaidContextPresentation(
+            Assembly application,
+            Type mainFormType,
+            Form mainForm,
+            DataGridView historyGrid)
+        {
+            Assert(historyGrid.Columns.Contains("mapMode"),
+                "맵·게임유형·캐릭터·참가 형태 표시 열이 없습니다.");
+            DataGridViewColumn column = historyGrid.Columns["mapMode"];
+            Assert(column.HeaderText == "맵 · 게임유형"
+                    && column.DefaultCellStyle.WrapMode == DataGridViewTriState.False,
+                "레이드 문맥 열은 기존 헤더와 한 줄 표시를 유지해야 합니다.");
+
+            string[] expectedRows =
+            {
+                "Streets of Tarkov · PvP시즌1 · PMC · 2인 파티",
+                "Bay 5 · CheckPoint",
+                "Woods · PvE(서버) · 스캐브 · 3인 파티",
+                "Factory · PvE(로컬) · PMC · 솔로"
+            };
+            foreach (string expected in expectedRows)
+            {
+                DataGridViewCell cell = null;
+                foreach (DataGridViewRow row in historyGrid.Rows)
+                {
+                    DataGridViewCell candidate = row.Cells["mapMode"];
+                    if (!string.Equals(
+                        Convert.ToString(candidate.Value),
+                        expected,
+                        StringComparison.Ordinal))
+                        continue;
+                    cell = candidate;
+                    Assert(row.Height == historyGrid.RowTemplate.Height,
+                        "레이드 문맥이 길어져도 접속 기록 행 높이가 바뀌면 안 됩니다.");
+                    break;
+                }
+                Assert(cell != null, "레이드 문맥 표시가 정확하지 않습니다: " + expected);
+                Assert(cell.ToolTipText == expected,
+                    "잘린 레이드 문맥의 툴팁은 전문과 같아야 합니다: " + expected);
+                Assert(cell.AccessibilityObject.Description == expected,
+                    "보조기술용 레이드 문맥 설명은 전문과 같아야 합니다: " + expected);
+            }
+
+            const BindingFlags instanceFlags = BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic;
+            FieldInfo mapLabelField = mainFormType.GetField("_mapValueLabel", instanceFlags);
+            FieldInfo toolTipField = mainFormType.GetField("_toolTip", instanceFlags);
+            var mapLabel = mapLabelField == null ? null : mapLabelField.GetValue(mainForm) as Label;
+            var toolTip = toolTipField == null ? null : toolTipField.GetValue(mainForm) as ToolTip;
+            string selectedText = "EFT · " + expectedRows[0];
+            Assert(mapLabel != null && toolTip != null
+                    && mapLabel.Text == selectedText
+                    && mapLabel.AccessibleName == "선택한 접속의 게임·맵·유형"
+                    && mapLabel.AccessibleDescription == selectedText
+                    && toolTip.GetToolTip(mapLabel) == selectedText,
+                "선택 서버 상세의 레이드 문맥·툴팁·접근성 설명이 서로 달라졌습니다.");
+
+            Type sessionType = application.GetType("TarkovServerReporter.ServerSession", true);
+            object partial = Activator.CreateInstance(sessionType);
+            SetProperty(partial, "MapName", "Factory");
+            SetEnumProperty(partial, "Game", "Eft");
+            SetEnumProperty(partial, "ProgressionMode", "PvpSeason");
+            SetProperty(partial, "PvpSeasonNumber", 2);
+            SetEnumProperty(partial, "ParticipationType", "Solo");
+            MethodInfo formatter = mainFormType.GetMethod(
+                "GetMapAndTypeText",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(formatter != null, "레이드 문맥 표시 생성기를 찾지 못했습니다.");
+            Assert(Convert.ToString(formatter.Invoke(null, new[] { partial }))
+                    == "Factory · PvP시즌2 · 솔로",
+                "알 수 없는 캐릭터는 생략하고 확인된 참가 형태만 표시해야 합니다.");
+            SetEnumProperty(partial, "ParticipationType", "Unknown");
+            SetEnumProperty(partial, "CharacterType", "Pmc");
+            Assert(Convert.ToString(formatter.Invoke(null, new[] { partial }))
+                    == "Factory · PvP시즌2 · PMC",
+                "알 수 없는 참가 형태는 생략하고 확인된 캐릭터만 표시해야 합니다.");
+        }
+
+        private static void AssertIncompleteRefreshClassificationMerge(
+            Assembly application,
+            Type mainFormType)
+        {
+            Type sessionType = application.GetType("TarkovServerReporter.ServerSession", true);
+            MethodInfo merge = mainFormType.GetMethod(
+                "MergeRefreshedSessions",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(merge != null, "불완전 새로고침의 기록 병합 경계를 찾지 못했습니다.");
+
+            object refreshed = CreateClassificationSession(
+                sessionType, "same-raid", "Unknown", "Unknown", null);
+            object existing = CreateClassificationSession(
+                sessionType, "same-raid", "Pmc", "Party", 2);
+            object retained = InvokeSingleSessionMerge(merge, sessionType, refreshed, existing);
+            Assert(GetPropertyText(retained, "CharacterType") == "Pmc"
+                    && GetPropertyText(retained, "ParticipationType") == "Party"
+                    && Convert.ToInt32(GetPropertyValue(retained, "PartySize")) == 2,
+                "불완전 새로고침은 같은 레이드의 기존 분류 근거를 잃으면 안 됩니다.");
+
+            object conflictingRefresh = CreateClassificationSession(
+                sessionType, "conflict-raid", "Pmc", "Solo", null);
+            object conflictingExisting = CreateClassificationSession(
+                sessionType, "conflict-raid", "Scav", "Solo", null);
+            object conflict = InvokeSingleSessionMerge(
+                merge, sessionType, conflictingRefresh, conflictingExisting);
+            Assert(GetPropertyText(conflict, "CharacterType") == "Unknown"
+                    && GetPropertyText(conflict, "ParticipationType") == "Solo",
+                "서로 충돌한 캐릭터 근거를 불완전 새로고침에서 임의 선택하면 안 됩니다.");
+        }
+
+        private static object CreateClassificationSession(
+            Type sessionType,
+            string key,
+            string character,
+            string participation,
+            int? partySize)
+        {
+            object session = Activator.CreateInstance(sessionType);
+            SetProperty(session, "SessionKey", key);
+            SetEnumProperty(session, "Game", "Eft");
+            SetEnumProperty(session, "CharacterType", character);
+            SetEnumProperty(session, "ParticipationType", participation);
+            if (partySize.HasValue) SetProperty(session, "PartySize", partySize.Value);
+            return session;
+        }
+
+        private static object InvokeSingleSessionMerge(
+            MethodInfo merge,
+            Type sessionType,
+            object refreshed,
+            object existing)
+        {
+            Array refreshedArray = Array.CreateInstance(sessionType, 1);
+            refreshedArray.SetValue(refreshed, 0);
+            Array existingArray = Array.CreateInstance(sessionType, 1);
+            existingArray.SetValue(existing, 0);
+            var result = merge.Invoke(null, new object[] { refreshedArray, existingArray })
+                as IEnumerable;
+            Assert(result != null, "불완전 새로고침 병합 결과를 읽을 수 없습니다.");
+            object retained = null;
+            int count = 0;
+            foreach (object item in result)
+            {
+                retained = item;
+                count++;
+            }
+            Assert(count == 1 && retained != null,
+                "같은 identity의 새·기존 레이드는 한 행으로 병합되어야 합니다.");
+            return retained;
+        }
+
+        private static void SetEnumProperty(object target, string name, string value)
+        {
+            PropertyInfo property = target.GetType().GetProperty(name);
+            Assert(property != null && property.PropertyType.IsEnum,
+                "enum 속성을 찾지 못했습니다: " + name);
+            property.SetValue(target, Enum.Parse(property.PropertyType, value), null);
+        }
+
+        private static void SetProperty(object target, string name, object value)
+        {
+            PropertyInfo property = target.GetType().GetProperty(name);
+            Assert(property != null, "속성을 찾지 못했습니다: " + name);
+            property.SetValue(target, value, null);
+        }
+
+        private static object GetPropertyValue(object target, string name)
+        {
+            PropertyInfo property = target.GetType().GetProperty(name);
+            Assert(property != null, "속성을 찾지 못했습니다: " + name);
+            return property.GetValue(target, null);
+        }
+
+        private static string GetPropertyText(object target, string name)
+        {
+            return Convert.ToString(GetPropertyValue(target, name));
         }
 
         private static void AssertMainActionHeaderSorting(

@@ -30,6 +30,7 @@ namespace TarkovServerReporter.Tests
                 TestArchiveAndLegacyPlaceholder(testRoot);
                 TestArchiveBatchSelection(testRoot);
                 TestArchiveHeaderSorting(testRoot);
+                TestRaidContextStorageAndArchiveDisplay(testRoot);
                 TestArchiveBackupUi(testRoot);
                 TestStructuredEditorAndEntryLimit(testRoot);
                 TestSaveButtonBehavior(testRoot);
@@ -857,6 +858,9 @@ namespace TarkovServerReporter.Tests
                     && Convert.ToString(FindRowByMap(grid, "MemoAlpha").Cells["map"].Value)
                         == "MemoAlpha · 미확인",
                     "메모보관함은 맵 열에 저장된 게임유형을 함께 표시해야 합니다.");
+                Assert(FindRowByMap(grid, "MemoAlpha").Cells["map"].ToolTipText
+                        == "MemoAlpha · 미확인",
+                    "메모보관함의 맵·게임유형 툴팁은 저장된 전문과 같아야 합니다.");
                 Assert(grid.Columns.Cast<DataGridViewColumn>()
                     .Where(column => column.SortMode == DataGridViewColumnSortMode.Programmatic)
                     .All(column => column.HeaderCell.ToolTipText
@@ -915,6 +919,89 @@ namespace TarkovServerReporter.Tests
                 Assert(IsChecked(FindRowByMap(grid, "MemoAlpha")),
                     "기본 순서 복귀 뒤에도 체크 상태를 보존해야 합니다.");
             }
+        }
+
+        private static void TestRaidContextStorageAndArchiveDisplay(string testRoot)
+        {
+            string raidFolder = Path.Combine(testRoot, "raid-context-raids");
+            string reportFolder = Path.Combine(testRoot, "raid-context-reports");
+            var raidStore = new RaidNoteStore(raidFolder);
+            var reportStore = new UserReportMemoStore(reportFolder);
+            ServerSession session = CreateSensitiveSession(1, "raid-context");
+            session.SessionStarted = new DateTime(2026, 8, 17, 12, 30, 0, DateTimeKind.Utc);
+            session.MapName = "Factory";
+            session.ProgressionMode = TarkovProgressionMode.PvpSeason;
+            session.PvpSeasonNumber = 2;
+            session.CharacterType = TarkovCharacterType.Scav;
+            session.ParticipationType = TarkovParticipationType.Party;
+            session.PartySize = 4;
+            const string expectedType = "PvP시즌2 · 스캐브 · 4인 파티";
+            const string expectedDisplay = "Factory · " + expectedType;
+
+            RaidNoteRecord raid = raidStore.CreateFor(session);
+            raid.NoteText = "raid context";
+            raidStore.Save(session, raid);
+            UserReportMemoRecord report = reportStore.CreateFor(session);
+            report.Entries.Add(new UserReportMemoEntry
+            {
+                Nickname = "SyntheticMember",
+                Reason = "synthetic reason"
+            });
+            reportStore.Save(session, report);
+            Assert(raid.GameType == expectedType && report.GameType == expectedType,
+                "새 메모는 EFT 게임유형·캐릭터·참가 형태 전문을 저장해야 합니다.");
+
+            raid.GameType = "tampered";
+            report.GameType = "tampered";
+            raidStore.Save(session, raid);
+            reportStore.Save(session, report);
+            Assert(raid.GameType == expectedType && report.GameType == expectedType,
+                "세션으로 다시 저장하면 메모의 레이드 문맥을 최신 판정으로 갱신해야 합니다.");
+
+            ServerSession legacySession = CreateSensitiveSession(1, "type-only");
+            legacySession.SessionStarted = session.SessionStarted.AddMinutes(-1);
+            legacySession.MapName = "LegacyMap";
+            RaidNoteRecord legacyTypeOnly = raidStore.CreateFor(legacySession);
+            legacyTypeOnly.GameType = "PvP";
+            legacyTypeOnly.NoteText = "type-only legacy memo";
+            raidStore.Save(legacyTypeOnly.Key, legacyTypeOnly);
+
+            using (var archive = new RaidNoteArchiveForm(raidStore, reportStore))
+            {
+                ShowOffScreen(archive);
+                DataGridView grid = GetPrivateField<DataGridView>(archive, "_grid");
+                DataGridViewRow[] rows = grid.Rows.Cast<DataGridViewRow>()
+                    .Where(row => Convert.ToString(row.Cells["map"].Value) == expectedDisplay)
+                    .ToArray();
+                Assert(rows.Length == 2
+                        && rows.All(row => row.Cells["map"].ToolTipText == expectedDisplay),
+                    "일반·유저신고 메모 모두 레이드 문맥 전문과 같은 툴팁을 표시해야 합니다.");
+                DataGridViewRow legacyRow = FindRowByMap(grid, "LegacyMap");
+                Assert(Convert.ToString(legacyRow.Cells["map"].Value) == "LegacyMap · PvP"
+                        && legacyRow.Cells["map"].ToolTipText == "LegacyMap · PvP",
+                    "기존 GameType-only 메모는 값을 추측하지 않고 그대로 표시해야 합니다.");
+            }
+
+            var arenaSession = new ServerSession
+            {
+                Game = TarkovGame.Arena,
+                SessionKey = "synthetic-arena-context",
+                SessionStarted = session.SessionStarted,
+                MapName = "Bay 5",
+                GameMode = "TeamFight"
+            };
+            RaidNoteRecord boundedArena = raidStore.CreateFor(arenaSession);
+            UserReportMemoRecord boundedArenaReport = reportStore.CreateFor(arenaSession);
+            Assert(boundedArena.GameType == "TeamFight"
+                    && boundedArenaReport.GameType == "TeamFight",
+                "두 메모 종류의 Arena 게임 모드 표시는 변경하지 않아야 합니다.");
+            arenaSession.GameMode = new string('M', 100);
+            boundedArena = raidStore.CreateFor(arenaSession);
+            boundedArenaReport = reportStore.CreateFor(arenaSession);
+            Assert(boundedArena.GameType.Length == 64
+                    && boundedArena.GameType == new string('M', 64)
+                    && boundedArenaReport.GameType == boundedArena.GameType,
+                "두 메모 종류의 Arena 게임 모드는 기존 64자 경계를 유지해야 합니다.");
         }
 
         private static void TestArchiveBackupUi(string testRoot)
@@ -1080,10 +1167,15 @@ namespace TarkovServerReporter.Tests
                     "새 메모만 기본 선택하고 기존 메모는 선택할 수 없어야 합니다.");
                 Assert(grid.Columns["map"].HeaderText == "맵 · 게임유형"
                     && Convert.ToString(FindRowByMap(grid, "NewRaid").Cells["map"].Value)
-                        == "NewRaid · PvP시즌2"
+                        == "NewRaid · PvP시즌2 · PMC · 2인 파티"
                     && Convert.ToString(FindRowByMap(grid, "NewReport").Cells["map"].Value)
-                        == "NewReport · PvP",
+                        == "NewReport · PvP · 스캐브 · 솔로",
                     "복원 미리보기에도 맵과 백업된 게임유형을 함께 표시해야 합니다.");
+                Assert(FindRowByMap(grid, "NewRaid").Cells["map"].ToolTipText
+                        == "NewRaid · PvP시즌2 · PMC · 2인 파티"
+                    && FindRowByMap(grid, "NewReport").Cells["map"].ToolTipText
+                        == "NewReport · PvP · 스캐브 · 솔로",
+                    "복원 미리보기의 레이드 문맥 툴팁은 표시 전문과 같아야 합니다.");
 
                 selectNone.PerformClick();
                 Assert(grid.Rows.Cast<DataGridViewRow>().All(row => !IsChecked(row))
@@ -1304,7 +1396,7 @@ namespace TarkovServerReporter.Tests
                 {
                     Key = key,
                     Game = "EFT",
-                    GameType = "PvP시즌2",
+                    GameType = "PvP시즌2 · PMC · 2인 파티",
                     MapName = mapName,
                     RaidStartedUtc = raidStartedUtc,
                     NoteText = preview,
@@ -1318,7 +1410,7 @@ namespace TarkovServerReporter.Tests
                 {
                     Key = key,
                     Game = "EFT",
-                    GameType = "PvP",
+                    GameType = "PvP · 스캐브 · 솔로",
                     MapName = mapName,
                     RaidStartedUtc = raidStartedUtc,
                     ReportCount = 1,

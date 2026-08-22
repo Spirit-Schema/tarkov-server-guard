@@ -119,6 +119,19 @@ if (-not $SkipTests) {
     ))
     Invoke-TestExecutable $coreTestOutput
 
+    $raidClassificationTestOutput = Join-Path $buildRoot 'RaidClassificationTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $raidClassificationTestOutput)
+    ) + $commonReferences + @(
+        (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
+        (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
+        (Join-Path $sourceRoot 'ServerReportCore.cs'),
+        (Join-Path $sourceRoot 'TarkovLogServices.cs'),
+        (Join-Path $testRoot 'RaidClassificationTests.cs')
+    ))
+    Invoke-TestExecutable $raidClassificationTestOutput
+
     $dbIpTestOutput = Join-Path $buildRoot 'DbIpLiteGeoTests.exe'
     Invoke-CSharpCompiler (@(
         '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
@@ -177,6 +190,20 @@ if (-not $SkipTests) {
         (Join-Path $testRoot 'UserReportMemoTests.cs')
     ))
     Invoke-TestExecutable $memoTestOutput
+
+    $raidParticipantTestOutput = Join-Path $buildRoot 'RaidParticipantLogTests.exe'
+    Invoke-CSharpCompiler (@(
+        '/nologo', '/target:exe', '/platform:anycpu', '/optimize+', '/warn:4',
+        ('/out:' + $raidParticipantTestOutput)
+    ) + $commonReferences + @(
+        (Join-Path $sourceRoot 'DbIpLiteMmdbReader.cs'),
+        (Join-Path $sourceRoot 'DbIpLiteGeoService.cs'),
+        (Join-Path $sourceRoot 'ServerReportCore.cs'),
+        (Join-Path $sourceRoot 'FirewallRuleManager.cs'),
+        (Join-Path $sourceRoot 'TarkovLogServices.cs'),
+        (Join-Path $testRoot 'RaidParticipantLogTests.cs')
+    ))
+    Invoke-TestExecutable $raidParticipantTestOutput
 
     $githubUpdateTestOutput = Join-Path $buildRoot 'GitHubUpdateTests.exe'
     Invoke-CSharpCompiler (@(

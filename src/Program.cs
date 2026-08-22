@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Spirit-Schema")]
 [assembly: AssemblyProduct("Tarkov Server Guard")]
 [assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema. All rights reserved.")]
-[assembly: AssemblyVersion("0.8.2.0")]
-[assembly: AssemblyFileVersion("0.8.2.0")]
+[assembly: AssemblyVersion("0.8.3.0")]
+[assembly: AssemblyFileVersion("0.8.3.0")]
 
 namespace TarkovServerReporter
 {

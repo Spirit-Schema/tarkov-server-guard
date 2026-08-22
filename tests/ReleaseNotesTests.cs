@@ -36,14 +36,21 @@ namespace TarkovServerReporter.Tests
 
         private static void TestBundledNotes()
         {
-            ReleaseNotesEntry current = ReleaseNotesCatalog.FindBundled("v0.8.2");
-            Assert(current != null && current.VersionText == "0.8.2",
-                "The v0.8.2 bundled completion notes are missing.");
-            Assert(current.NotesText.Contains("세로 위치를 중단")
-                && current.NotesText.Contains("하나의 파일")
-                && current.NotesText.Contains("없는 메모만")
-                && current.NotesText.Contains("로컬 이미지 연결 경로"),
-                "The v0.8.2 bundled completion notes lost a required improvement.");
+            ReleaseNotesEntry current = ReleaseNotesCatalog.FindBundled("v0.8.3");
+            Assert(current != null && current.VersionText == "0.8.3",
+                "The v0.8.3 bundled completion notes are missing.");
+            Assert(current.NotesText.Contains("PMC·스캐브")
+                && current.NotesText.Contains("솔로·파티")
+                && current.NotesText.Contains("2~5인")
+                && current.NotesText.Contains("추측하지 않고"),
+                "The v0.8.3 bundled completion notes lost a required improvement.");
+
+            ReleaseNotesEntry prior = ReleaseNotesCatalog.FindBundled("v0.8.2");
+            Assert(prior != null && prior.VersionText == "0.8.2"
+                && prior.NotesText.Contains("세로 위치를 중단")
+                && prior.NotesText.Contains("하나의 파일")
+                && prior.NotesText.Contains("로컬 이미지 연결 경로"),
+                "The retained v0.8.2 bundled completion notes are incomplete.");
 
             ReleaseNotesEntry previous = ReleaseNotesCatalog.FindBundled("v0.8.1");
             Assert(previous != null && previous.VersionText == "0.8.1",
@@ -77,23 +84,23 @@ namespace TarkovServerReporter.Tests
         {
             WithTemporaryRoot(delegate(string root)
             {
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.2"),
                     "The after-update marker was not recorded.");
                 string claimed;
-                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed)
-                    && claimed == "0.8.1",
+                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.2", out claimed)
+                    && claimed == "0.8.2",
                     "The matching completed update was not claimed.");
-                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.1", out claimed),
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.2", out claimed),
                     "The same update notice was displayed more than once.");
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.1"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.2"),
                     "Replaying the same Velopack hook should remain harmless.");
                 Assert(!File.Exists(Path.Combine(root, UpdateCompletionNotice.PendingFileName)),
                     "An acknowledged version was queued again.");
 
-                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.2"),
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.3"),
                     "A later version was not queued independently.");
-                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.2", out claimed)
-                    && claimed == "0.8.2",
+                Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.3", out claimed)
+                    && claimed == "0.8.3",
                     "A later version did not receive its own one-time claim.");
             });
         }
@@ -150,7 +157,7 @@ namespace TarkovServerReporter.Tests
         private static void TestCompletionDialog()
         {
             using (var form = new PatchNotesForm(
-                ReleaseNotesCatalog.FindBundled("0.8.2")))
+                ReleaseNotesCatalog.FindBundled("0.8.3")))
             {
                 Button[] buttons = Descendants(form).OfType<Button>().ToArray();
                 Assert(buttons.Length == 1 && buttons[0].Text == "확인",
@@ -175,7 +182,7 @@ namespace TarkovServerReporter.Tests
 
         private static void TestUpdatePrompt()
         {
-            using (var form = new UpdatePromptForm("0.8.2"))
+            using (var form = new UpdatePromptForm("0.8.3"))
             {
                 string[] labels = Descendants(form)
                     .OfType<Button>()

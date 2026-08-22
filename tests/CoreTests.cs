@@ -1509,8 +1509,8 @@ namespace TarkovServerReporter.Tests
 
         private static void TestProductUserAgent()
         {
-            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.2",
-                "network requests use the v0.8.2 product user agent");
+            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.3",
+                "network requests use the v0.8.3 product user agent");
         }
 
         private static void TestGeoFormatting()

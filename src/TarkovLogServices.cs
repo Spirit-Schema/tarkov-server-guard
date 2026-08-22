@@ -838,6 +838,72 @@ namespace TarkovServerReporter
             public DateTime Timestamp { get; set; }
         }
 
+        private enum ParticipantEventKind
+        {
+            Mode,
+            PrepareProfile,
+            EmptyGroup,
+            NonEmptyGroup,
+            MatchJoin,
+            GroupStartRoute,
+            GroupInviteAccept,
+            GroupReady,
+            GroupNotReady,
+            GroupMemberRemoved,
+            GroupRemoved,
+            GroupStart,
+            Assignment,
+            MatchingCancelled,
+            GameStarted
+        }
+
+        private sealed class ParticipantLogEvent
+        {
+            public DateTime Timestamp { get; set; }
+            public int Order { get; set; }
+            public ParticipantEventKind Kind { get; set; }
+            public TarkovProgressionMode Mode { get; set; }
+            public string ProfileId { get; set; }
+            public string MemberId { get; set; }
+            public bool? Ready { get; set; }
+            public TarkovCharacterType VisualCharacter { get; set; }
+        }
+
+        private sealed class GroupMemberState
+        {
+            public bool? Ready { get; set; }
+            public TarkovCharacterType VisualCharacter { get; set; }
+        }
+
+        private sealed class ParticipantGeneration
+        {
+            public DateTime StartedAt { get; set; }
+            public TarkovProgressionMode Mode { get; set; }
+            public string BaseProfileId { get; set; }
+            public bool HasApplicationMatch { get; set; }
+            public bool HasEmptyGroup { get; set; }
+            public bool HasMatchJoin { get; set; }
+            public bool HasPartyRoute { get; set; }
+            public bool HasPartyStart { get; set; }
+            public int? PartySize { get; set; }
+            public bool VisualPmc { get; set; }
+            public bool VisualScav { get; set; }
+        }
+
+        private sealed class ParticipantAssignment
+        {
+            public DateTime Timestamp { get; set; }
+            public TarkovProgressionMode Mode { get; set; }
+            public TarkovCharacterType ProfileCharacter { get; set; }
+            public bool HasEmptyGroup { get; set; }
+            public bool HasMatchJoin { get; set; }
+            public bool HasPartyRoute { get; set; }
+            public bool HasPartyStart { get; set; }
+            public int? PartySize { get; set; }
+            public bool VisualPmc { get; set; }
+            public bool VisualScav { get; set; }
+        }
+
         private sealed class GameStartedEvent
         {
             public DateTime Timestamp { get; set; }
@@ -919,6 +985,24 @@ namespace TarkovServerReporter
         private static readonly Regex BackendRequestIdRegex = new Regex(
             @"\bid\s+\[(?<id>[^\]\r\n]{1,64})\]\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex PrepareProfileIdRegex = new Regex(
+            @"\bPrepareSelectedProfileLocally\b.*?\bProfileId:(?<id>[0-9A-Fa-f]{24})(?![0-9A-Fa-f])",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex AssignmentProfileIdRegex = new Regex(
+            @"\bTRACE-NetworkGameCreate\b.*?\bProfileid:\s*(?<id>[0-9A-Fa-f]{24})(?![0-9A-Fa-f])",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex MatchingGroupIdRegex = new Regex(
+            @"\bMatching with group id:(?<id>[^\r\n]*)$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex PushNotificationMarkerRegex = new Regex(
+            @"\bGot notification\s*\|\s*(?<type>GroupMatch[A-Za-z0-9_]+)\s*$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private const long MaximumPushNotificationFileBytes = 4L * 1024 * 1024;
+        private const int MaximumPushNotificationEventChars = 256 * 1024;
+        private const int MaximumPushNotificationEventLines = 4096;
+        private const int MaximumPushNotificationLineChars = 16 * 1024;
+        private const int MaximumOpaqueIdentifierChars = 128;
 
         private static readonly Dictionary<string, string> EftMapNames =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -1432,6 +1516,7 @@ namespace TarkovServerReporter
                     relevantFiles.Where(file => file.Name.IndexOf(
                         "network-connection",
                         StringComparison.OrdinalIgnoreCase) >= 0)));
+                ApplyRaidParticipantEvents(sessions, relevantFiles);
             }
 
             ApplyNetworkEvents(
@@ -1877,6 +1962,807 @@ namespace TarkovServerReporter
             return false;
         }
 
+        private static void ApplyRaidParticipantEvents(
+            IList<ServerSession> sessions,
+            IEnumerable<FileInfo> relevantFiles)
+        {
+            if (sessions == null || sessions.Count == 0) return;
+
+            IList<ParticipantLogEvent> events = ReadParticipantLogEvents(relevantFiles);
+            IList<ParticipantAssignment> assignments = InferParticipantAssignments(events);
+            foreach (ParticipantAssignment assignment in assignments)
+            {
+                ServerSession session = sessions
+                    .Where(item => item != null
+                        && item.Game == TarkovGame.Eft
+                        && Math.Abs((item.DisplayDetectedAt - assignment.Timestamp).TotalSeconds) <= 1)
+                    .OrderBy(item => Math.Abs((item.DisplayDetectedAt - assignment.Timestamp).TotalMilliseconds))
+                    .FirstOrDefault();
+                if (session == null) continue;
+                if (assignment.Mode != TarkovProgressionMode.Unknown
+                    && session.ProgressionMode != TarkovProgressionMode.Unknown
+                    && assignment.Mode != session.ProgressionMode)
+                    continue;
+
+                if (assignment.ProfileCharacter == TarkovCharacterType.Pmc
+                    || assignment.ProfileCharacter == TarkovCharacterType.Scav)
+                {
+                    RaidClassificationModel.AddCharacterEvidence(
+                        session,
+                        assignment.ProfileCharacter,
+                        RaidCharacterEvidence.ProfileIdRelation);
+                }
+                if (assignment.VisualPmc)
+                {
+                    RaidClassificationModel.AddCharacterEvidence(
+                        session,
+                        TarkovCharacterType.Pmc,
+                        RaidCharacterEvidence.PlayerVisualSide);
+                }
+                if (assignment.VisualScav)
+                {
+                    RaidClassificationModel.AddCharacterEvidence(
+                        session,
+                        TarkovCharacterType.Scav,
+                        RaidCharacterEvidence.PlayerVisualSide);
+                }
+
+                if (assignment.HasEmptyGroup)
+                {
+                    RaidClassificationModel.AddParticipationEvidence(
+                        session,
+                        RaidParticipationEvidence.EmptyGroupId);
+                }
+                if (assignment.HasMatchJoin)
+                {
+                    RaidClassificationModel.AddParticipationEvidence(
+                        session,
+                        RaidParticipationEvidence.MatchJoin);
+                }
+                if (assignment.HasPartyRoute)
+                {
+                    RaidClassificationModel.AddParticipationEvidence(
+                        session,
+                        RaidParticipationEvidence.GroupStartRoute);
+                }
+                if (assignment.HasPartyStart)
+                {
+                    RaidClassificationModel.AddParticipationEvidence(
+                        session,
+                        RaidParticipationEvidence.GroupStartEvent);
+                }
+                if (assignment.PartySize.HasValue)
+                    RaidClassificationModel.AddPartySizeEvidence(session, assignment.PartySize);
+            }
+        }
+
+        private static IList<ParticipantLogEvent> ReadParticipantLogEvents(
+            IEnumerable<FileInfo> relevantFiles)
+        {
+            var events = new List<ParticipantLogEvent>();
+            int order = 0;
+            FileInfo[] files = (relevantFiles ?? Enumerable.Empty<FileInfo>()).ToArray();
+
+            foreach (FileInfo file in files
+                .Where(item => item.Name.IndexOf("application", StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (string line in ReadLines(file.FullName))
+                {
+                    DateTime timestamp;
+                    if (!TryParseTimestamp(line, out timestamp)) continue;
+
+                    Match modeMatch = SessionModeRegex.Match(line);
+                    if (modeMatch.Success)
+                    {
+                        events.Add(new ParticipantLogEvent
+                        {
+                            Timestamp = timestamp,
+                            Order = order++,
+                            Kind = ParticipantEventKind.Mode,
+                            Mode = ParseProgressionMode(modeMatch.Groups["mode"].Value)
+                        });
+                    }
+
+                    Match prepare = PrepareProfileIdRegex.Match(line);
+                    if (prepare.Success)
+                    {
+                        events.Add(new ParticipantLogEvent
+                        {
+                            Timestamp = timestamp,
+                            Order = order++,
+                            Kind = ParticipantEventKind.PrepareProfile,
+                            ProfileId = prepare.Groups["id"].Value.ToLowerInvariant()
+                        });
+                    }
+
+                    Match group = MatchingGroupIdRegex.Match(line);
+                    if (group.Success)
+                    {
+                        string value = group.Groups["id"].Value.Trim().Trim('\'', '"');
+                        events.Add(new ParticipantLogEvent
+                        {
+                            Timestamp = timestamp,
+                            Order = order++,
+                            Kind = string.IsNullOrWhiteSpace(value)
+                                ? ParticipantEventKind.EmptyGroup
+                                : ParticipantEventKind.NonEmptyGroup
+                        });
+                    }
+
+                    Match assignment = AssignmentProfileIdRegex.Match(line);
+                    if (assignment.Success)
+                    {
+                        events.Add(new ParticipantLogEvent
+                        {
+                            Timestamp = timestamp,
+                            Order = order++,
+                            Kind = ParticipantEventKind.Assignment,
+                            ProfileId = assignment.Groups["id"].Value.ToLowerInvariant()
+                        });
+                    }
+
+                    if (line.IndexOf("Network game matching cancelled.", StringComparison.OrdinalIgnoreCase) >= 0
+                        || line.IndexOf("Network game matching aborted.", StringComparison.OrdinalIgnoreCase) >= 0
+                        || line.IndexOf("Local game matching cancelled.", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        events.Add(new ParticipantLogEvent
+                        {
+                            Timestamp = timestamp,
+                            Order = order++,
+                            Kind = ParticipantEventKind.MatchingCancelled
+                        });
+                    }
+                    if (GameStartedRegex.IsMatch(line))
+                    {
+                        events.Add(new ParticipantLogEvent
+                        {
+                            Timestamp = timestamp,
+                            Order = order++,
+                            Kind = ParticipantEventKind.GameStarted
+                        });
+                    }
+                }
+            }
+
+            foreach (FileInfo file in files
+                .Where(item => item.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (string line in ReadLines(file.FullName))
+                {
+                    if (line.IndexOf("---> Request HTTPS", StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    ParticipantEventKind kind;
+                    if (line.IndexOf("/client/match/group/start_game", StringComparison.OrdinalIgnoreCase) >= 0)
+                        kind = ParticipantEventKind.GroupStartRoute;
+                    else if (line.IndexOf("/client/match/join", StringComparison.OrdinalIgnoreCase) >= 0)
+                        kind = ParticipantEventKind.MatchJoin;
+                    else
+                        continue;
+                    DateTime timestamp;
+                    if (!TryParseTimestamp(line, out timestamp)) continue;
+                    events.Add(new ParticipantLogEvent
+                    {
+                        Timestamp = timestamp,
+                        Order = order++,
+                        Kind = kind
+                    });
+                }
+            }
+
+            foreach (FileInfo file in files
+                .Where(item => item.Name.IndexOf("push-notifications", StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(item => item.LastWriteTimeUtc)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                ReadPushParticipantEvents(file, events, ref order);
+            }
+
+            return events
+                .OrderBy(item => item.Timestamp)
+                .ThenBy(item => GetParticipantEventPriority(item.Kind))
+                .ThenBy(item => item.Order)
+                .ToList();
+        }
+
+        private static int GetParticipantEventPriority(ParticipantEventKind kind)
+        {
+            if (kind == ParticipantEventKind.Mode) return 0;
+            if (kind == ParticipantEventKind.PrepareProfile) return 1;
+            if (kind == ParticipantEventKind.GroupInviteAccept
+                || kind == ParticipantEventKind.GroupReady
+                || kind == ParticipantEventKind.GroupNotReady
+                || kind == ParticipantEventKind.GroupMemberRemoved
+                || kind == ParticipantEventKind.GroupRemoved)
+                return 2;
+            if (kind == ParticipantEventKind.EmptyGroup
+                || kind == ParticipantEventKind.NonEmptyGroup)
+                return 3;
+            if (kind == ParticipantEventKind.MatchJoin
+                || kind == ParticipantEventKind.GroupStartRoute
+                || kind == ParticipantEventKind.GroupStart)
+                return 4;
+            if (kind == ParticipantEventKind.Assignment) return 8;
+            if (kind == ParticipantEventKind.MatchingCancelled) return 9;
+            if (kind == ParticipantEventKind.GameStarted) return 10;
+            return 5;
+        }
+
+        private static IList<ParticipantAssignment> InferParticipantAssignments(
+            IEnumerable<ParticipantLogEvent> source)
+        {
+            var results = new List<ParticipantAssignment>();
+            var members = new Dictionary<string, GroupMemberState>(StringComparer.Ordinal);
+            ParticipantGeneration generation = null;
+            TarkovProgressionMode currentMode = TarkovProgressionMode.Unknown;
+            string pendingProfileId = null;
+            DateTime pendingProfileAt = DateTime.MinValue;
+            TarkovProgressionMode pendingProfileMode = TarkovProgressionMode.Unknown;
+
+            foreach (ParticipantLogEvent item in source ?? Enumerable.Empty<ParticipantLogEvent>())
+            {
+                if (item.Kind == ParticipantEventKind.Mode)
+                {
+                    currentMode = item.Mode;
+                    generation = null;
+                    members.Clear();
+                    pendingProfileId = null;
+                    pendingProfileAt = DateTime.MinValue;
+                    pendingProfileMode = TarkovProgressionMode.Unknown;
+                    continue;
+                }
+                if (item.Kind == ParticipantEventKind.PrepareProfile)
+                {
+                    pendingProfileId = item.ProfileId;
+                    pendingProfileAt = item.Timestamp;
+                    pendingProfileMode = currentMode;
+                    if (generation != null && generation.Mode == currentMode)
+                        generation.BaseProfileId = pendingProfileId;
+                    continue;
+                }
+                if (item.Kind == ParticipantEventKind.MatchingCancelled
+                    || item.Kind == ParticipantEventKind.GroupRemoved
+                    || item.Kind == ParticipantEventKind.GameStarted)
+                {
+                    generation = null;
+                    members.Clear();
+                    pendingProfileId = null;
+                    pendingProfileAt = DateTime.MinValue;
+                    pendingProfileMode = TarkovProgressionMode.Unknown;
+                    continue;
+                }
+
+                if (item.Kind == ParticipantEventKind.GroupInviteAccept
+                    || item.Kind == ParticipantEventKind.GroupReady
+                    || item.Kind == ParticipantEventKind.GroupNotReady)
+                {
+                    if (string.IsNullOrWhiteSpace(item.MemberId)) continue;
+                    GroupMemberState member;
+                    if (!members.TryGetValue(item.MemberId, out member))
+                    {
+                        member = new GroupMemberState();
+                        members[item.MemberId] = member;
+                    }
+                    if (item.Ready.HasValue) member.Ready = item.Ready;
+                    if (item.VisualCharacter == TarkovCharacterType.Pmc
+                        || item.VisualCharacter == TarkovCharacterType.Scav)
+                        member.VisualCharacter = item.VisualCharacter;
+                    continue;
+                }
+                if (item.Kind == ParticipantEventKind.GroupMemberRemoved)
+                {
+                    if (!string.IsNullOrWhiteSpace(item.MemberId)) members.Remove(item.MemberId);
+                    continue;
+                }
+
+                if (item.Kind == ParticipantEventKind.EmptyGroup
+                    || item.Kind == ParticipantEventKind.NonEmptyGroup)
+                {
+                    bool replace = generation == null
+                        || generation.HasApplicationMatch
+                        || item.Timestamp - generation.StartedAt > TimeSpan.FromMinutes(2);
+                    if (replace)
+                    {
+                        generation = CreateParticipantGeneration(
+                            item.Timestamp,
+                            currentMode,
+                            pendingProfileId,
+                            pendingProfileAt,
+                            pendingProfileMode);
+                    }
+                    generation.HasApplicationMatch = true;
+                    if (item.Kind == ParticipantEventKind.EmptyGroup)
+                        generation.HasEmptyGroup = true;
+                    else
+                        generation.HasPartyStart = true;
+                    continue;
+                }
+
+                if (item.Kind == ParticipantEventKind.MatchJoin
+                    || item.Kind == ParticipantEventKind.GroupStartRoute
+                    || item.Kind == ParticipantEventKind.GroupStart)
+                {
+                    if (generation == null
+                        || item.Timestamp - generation.StartedAt > TimeSpan.FromMinutes(2))
+                    {
+                        generation = CreateParticipantGeneration(
+                            item.Timestamp,
+                            currentMode,
+                            pendingProfileId,
+                            pendingProfileAt,
+                            pendingProfileMode);
+                    }
+                    if (item.Kind == ParticipantEventKind.MatchJoin)
+                        generation.HasMatchJoin = true;
+                    else if (item.Kind == ParticipantEventKind.GroupStartRoute)
+                    {
+                        generation.HasPartyRoute = true;
+                    }
+                    else
+                    {
+                        generation.HasPartyStart = true;
+                        CaptureFinalGroupState(generation, members);
+                        members.Clear();
+                    }
+                    continue;
+                }
+
+                if (item.Kind != ParticipantEventKind.Assignment) continue;
+                if (generation == null)
+                {
+                    generation = CreateParticipantGeneration(
+                        item.Timestamp,
+                        currentMode,
+                        pendingProfileId,
+                        pendingProfileAt,
+                        pendingProfileMode);
+                }
+
+                results.Add(new ParticipantAssignment
+                {
+                    Timestamp = item.Timestamp,
+                    Mode = generation.Mode,
+                    ProfileCharacter = CompareProfileIds(
+                        generation.BaseProfileId,
+                        item.ProfileId),
+                    HasEmptyGroup = generation.HasEmptyGroup,
+                    HasMatchJoin = generation.HasMatchJoin,
+                    HasPartyRoute = generation.HasPartyRoute,
+                    HasPartyStart = generation.HasPartyStart,
+                    PartySize = generation.PartySize,
+                    VisualPmc = generation.VisualPmc,
+                    VisualScav = generation.VisualScav
+                });
+                generation = null;
+                members.Clear();
+                pendingProfileId = null;
+                pendingProfileAt = DateTime.MinValue;
+                pendingProfileMode = TarkovProgressionMode.Unknown;
+            }
+            return results;
+        }
+
+        private static ParticipantGeneration CreateParticipantGeneration(
+            DateTime timestamp,
+            TarkovProgressionMode mode,
+            string pendingProfileId,
+            DateTime pendingProfileAt,
+            TarkovProgressionMode pendingProfileMode)
+        {
+            bool profileIsCurrent = !string.IsNullOrWhiteSpace(pendingProfileId)
+                && pendingProfileAt <= timestamp
+                && timestamp - pendingProfileAt <= TimeSpan.FromMinutes(30)
+                && pendingProfileMode == mode;
+            return new ParticipantGeneration
+            {
+                StartedAt = timestamp,
+                Mode = mode,
+                BaseProfileId = profileIsCurrent ? pendingProfileId : null
+            };
+        }
+
+        private static void CaptureFinalGroupState(
+            ParticipantGeneration generation,
+            IDictionary<string, GroupMemberState> members)
+        {
+            if (generation == null || members == null) return;
+            generation.PartySize = null;
+            generation.VisualPmc = false;
+            generation.VisualScav = false;
+            if (members.Count < 1 || members.Count > 4) return;
+            if (members.Values.Any(item => !item.Ready.HasValue || !item.Ready.Value)) return;
+
+            generation.PartySize = members.Count + 1;
+            bool everyVisualKnown = members.Values.All(item =>
+                item.VisualCharacter == TarkovCharacterType.Pmc
+                || item.VisualCharacter == TarkovCharacterType.Scav);
+            if (!everyVisualKnown) return;
+            generation.VisualPmc = members.Values.Any(item =>
+                item.VisualCharacter == TarkovCharacterType.Pmc);
+            generation.VisualScav = members.Values.Any(item =>
+                item.VisualCharacter == TarkovCharacterType.Scav);
+        }
+
+        internal static TarkovCharacterType CompareProfileIds(
+            string baseProfileId,
+            string raidProfileId)
+        {
+            if (!IsHexObjectId(baseProfileId) || !IsHexObjectId(raidProfileId))
+                return TarkovCharacterType.Unknown;
+            if (string.Equals(baseProfileId, raidProfileId, StringComparison.OrdinalIgnoreCase))
+                return TarkovCharacterType.Pmc;
+
+            char[] incremented = baseProfileId.ToLowerInvariant().ToCharArray();
+            int carry = 1;
+            for (int index = incremented.Length - 1; index >= 0 && carry != 0; index--)
+            {
+                int value = HexValue(incremented[index]) + carry;
+                incremented[index] = HexDigit(value & 15);
+                carry = value >> 4;
+            }
+            if (carry != 0) return TarkovCharacterType.Unknown;
+            return string.Equals(
+                new string(incremented),
+                raidProfileId,
+                StringComparison.OrdinalIgnoreCase)
+                    ? TarkovCharacterType.Scav
+                    : TarkovCharacterType.Unknown;
+        }
+
+        private static bool IsHexObjectId(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length != 24) return false;
+            return value.All(character => HexValue(character) >= 0);
+        }
+
+        private static int HexValue(char value)
+        {
+            if (value >= '0' && value <= '9') return value - '0';
+            if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+            if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+            return -1;
+        }
+
+        private static char HexDigit(int value)
+        {
+            return (char)(value < 10 ? '0' + value : 'a' + value - 10);
+        }
+
+        private static void ReadPushParticipantEvents(
+            FileInfo file,
+            ICollection<ParticipantLogEvent> events,
+            ref int order)
+        {
+            if (file == null || events == null) return;
+            try
+            {
+                file.Refresh();
+                if (file.Length < 0 || file.Length > MaximumPushNotificationFileBytes) return;
+            }
+            catch
+            {
+                return;
+            }
+
+            var seenEventIds = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                using (var stream = new FileStream(
+                    file.FullName,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (line.Length > MaximumPushNotificationLineChars) continue;
+                        Match marker = PushNotificationMarkerRegex.Match(line);
+                        DateTime timestamp;
+                        if (!marker.Success || !TryParseTimestamp(line, out timestamp)) continue;
+                        string json;
+                        if (!TryReadPushJsonObject(reader, out json)) continue;
+                        ParticipantLogEvent parsed;
+                        string eventId;
+                        if (!TryParsePushParticipantEvent(
+                            marker.Groups["type"].Value,
+                            timestamp,
+                            json,
+                            out parsed,
+                            out eventId))
+                            continue;
+                        if (!seenEventIds.Add(eventId)) continue;
+                        parsed.Order = order++;
+                        events.Add(parsed);
+                    }
+                }
+            }
+            catch
+            {
+                // A rotating or malformed push log cannot invalidate the normal raid scan.
+            }
+        }
+
+        private static bool TryReadPushJsonObject(StreamReader reader, out string json)
+        {
+            json = null;
+            if (reader == null) return false;
+            var builder = new StringBuilder();
+            int depth = 0;
+            int lines = 0;
+            bool started = false;
+            bool inString = false;
+            bool escaped = false;
+            bool rejected = false;
+            string line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                lines++;
+                if (lines > MaximumPushNotificationEventLines
+                    || line.Length > MaximumPushNotificationLineChars)
+                    rejected = true;
+                if (!started && string.IsNullOrWhiteSpace(line) && lines <= 3) continue;
+                if (!started && line.Trim() != "{") return false;
+
+                if (!rejected)
+                {
+                    if (builder.Length + line.Length + 1 > MaximumPushNotificationEventChars)
+                        rejected = true;
+                    else
+                        builder.AppendLine(line);
+                }
+
+                foreach (char character in line)
+                {
+                    if (inString)
+                    {
+                        if (escaped)
+                            escaped = false;
+                        else if (character == '\\')
+                            escaped = true;
+                        else if (character == '"')
+                            inString = false;
+                        continue;
+                    }
+                    if (character == '"')
+                    {
+                        inString = true;
+                    }
+                    else if (character == '{')
+                    {
+                        depth++;
+                        started = true;
+                    }
+                    else if (character == '}')
+                    {
+                        depth--;
+                        if (depth < 0) return false;
+                    }
+                }
+                if (started && depth == 0)
+                {
+                    if (rejected || inString) return false;
+                    json = builder.ToString();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool TryParsePushParticipantEvent(
+            string markerType,
+            DateTime timestamp,
+            string json,
+            out ParticipantLogEvent result,
+            out string eventId)
+        {
+            result = null;
+            eventId = null;
+            if (string.IsNullOrWhiteSpace(markerType)
+                || string.IsNullOrWhiteSpace(json)
+                || json.Length > MaximumPushNotificationEventChars)
+                return false;
+
+            ParticipantEventKind mappedKind;
+            if (!TryMapPushParticipantType(markerType, out mappedKind))
+                return false;
+
+            IDictionary<string, object> root;
+            try
+            {
+                var serializer = new JavaScriptSerializer
+                {
+                    MaxJsonLength = MaximumPushNotificationEventChars,
+                    RecursionLimit = 64
+                };
+                root = serializer.DeserializeObject(json) as IDictionary<string, object>;
+            }
+            catch
+            {
+                return false;
+            }
+                if (root == null) return false;
+            string payloadType = GetJsonString(root, "type");
+            if (!string.Equals(markerType, payloadType, StringComparison.OrdinalIgnoreCase))
+                return false;
+            eventId = GetOpaqueJsonId(root, "eventId");
+            if (string.IsNullOrWhiteSpace(eventId)) return false;
+
+            var parsed = new ParticipantLogEvent { Timestamp = timestamp };
+            if (mappedKind == ParticipantEventKind.GroupInviteAccept)
+            {
+                bool? isReady;
+                bool parsedIsReady;
+                if (!TryParseOptionalBoolean(root, "isReady", out isReady, out parsedIsReady))
+                    return false;
+
+                parsed.Kind = mappedKind;
+                parsed.MemberId = GetOpaqueJsonId(root, "aid");
+                parsed.Ready = isReady;
+                if (string.IsNullOrWhiteSpace(parsed.MemberId)) return false;
+            }
+            else if (mappedKind == ParticipantEventKind.GroupReady)
+            {
+                IDictionary<string, object> profile = GetJsonObject(root, "extendedProfile");
+                IDictionary<string, object> visual = GetJsonObject(profile, "PlayerVisualRepresentation");
+                IDictionary<string, object> info = GetJsonObject(visual, "Info");
+                parsed.Kind = mappedKind;
+                parsed.MemberId = GetOpaqueJsonId(profile, "aid");
+                parsed.Ready = true;
+                parsed.VisualCharacter = ParseVisualSide(GetJsonString(info, "Side"));
+                if (string.IsNullOrWhiteSpace(parsed.MemberId)) return false;
+            }
+            else if (mappedKind == ParticipantEventKind.GroupNotReady)
+            {
+                parsed.Kind = mappedKind;
+                parsed.MemberId = GetOpaqueJsonId(root, "aid");
+                parsed.Ready = false;
+                if (string.IsNullOrWhiteSpace(parsed.MemberId)) return false;
+            }
+            else if (mappedKind == ParticipantEventKind.GroupMemberRemoved)
+            {
+                parsed.Kind = mappedKind;
+                parsed.MemberId = GetOpaqueJsonId(root, "aid");
+                if (string.IsNullOrWhiteSpace(parsed.MemberId)) return false;
+            }
+            else if (mappedKind == ParticipantEventKind.GroupRemoved)
+            {
+                parsed.Kind = mappedKind;
+            }
+            else if (mappedKind == ParticipantEventKind.GroupStart)
+            {
+                parsed.Kind = mappedKind;
+            }
+            else
+            {
+                return false;
+            }
+            result = parsed;
+            return true;
+        }
+
+        private static bool TryMapPushParticipantType(
+            string markerType,
+            out ParticipantEventKind kind)
+        {
+            kind = ParticipantEventKind.Mode;
+            if (string.IsNullOrWhiteSpace(markerType)) return false;
+            if (string.Equals(markerType, "GroupMatchInviteAccept", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ParticipantEventKind.GroupInviteAccept;
+                return true;
+            }
+            if (string.Equals(markerType, "GroupMatchRaidReady", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ParticipantEventKind.GroupReady;
+                return true;
+            }
+            if (string.Equals(markerType, "GroupMatchRaidNotReady", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ParticipantEventKind.GroupNotReady;
+                return true;
+            }
+            if (string.Equals(markerType, "GroupMatchUserLeave", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(markerType, "GroupMatchInviteDecline", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(markerType, "GroupMatchInviteExpired", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ParticipantEventKind.GroupMemberRemoved;
+                return true;
+            }
+            if (string.Equals(markerType, "GroupMatchWasRemoved", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ParticipantEventKind.GroupRemoved;
+                return true;
+            }
+            if (string.Equals(markerType, "GroupMatchStartGame", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ParticipantEventKind.GroupStart;
+                return true;
+            }
+            return false;
+        }
+
+        private static bool TryParseOptionalBoolean(
+            IDictionary<string, object> source,
+            string name,
+            out bool? value,
+            out bool parsed)
+        {
+            value = null;
+            parsed = false;
+            if (source == null || string.IsNullOrWhiteSpace(name)) return true;
+            object raw;
+            if (!source.TryGetValue(name, out raw))
+                return true;
+            parsed = true;
+            if (!(raw is bool)) return false;
+            value = (bool)raw;
+            return true;
+        }
+
+        private static IDictionary<string, object> GetJsonObject(
+            IDictionary<string, object> source,
+            string name)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(name)) return null;
+            object value;
+            return source.TryGetValue(name, out value)
+                ? value as IDictionary<string, object>
+                : null;
+        }
+
+        private static string GetJsonString(IDictionary<string, object> source, string name)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(name)) return null;
+            object value;
+            if (!source.TryGetValue(name, out value) || value == null) return null;
+            return value as string;
+        }
+
+        private static string GetOpaqueJsonId(IDictionary<string, object> source, string name)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(name)) return null;
+            object value;
+            if (!source.TryGetValue(name, out value) || value == null) return null;
+            string result = value as string;
+            if (result == null || result.Length > MaximumOpaqueIdentifierChars) return null;
+            if (HasInvalidOpaqueIdCharacter(result)) return null;
+            return result;
+        }
+
+        private static bool? GetJsonBoolean(IDictionary<string, object> source, string name)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(name)) return null;
+            object value;
+            if (!source.TryGetValue(name, out value) || !(value is bool)) return null;
+            return (bool)value;
+        }
+
+        private static TarkovCharacterType ParseVisualSide(string side)
+        {
+            if (string.Equals(side, "Savage", StringComparison.OrdinalIgnoreCase))
+                return TarkovCharacterType.Scav;
+            if (string.Equals(side, "Usec", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(side, "Bear", StringComparison.OrdinalIgnoreCase))
+                return TarkovCharacterType.Pmc;
+            return TarkovCharacterType.Unknown;
+        }
+
+        private static bool HasInvalidOpaqueIdCharacter(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return true;
+            for (int index = 0; index < value.Length; index++)
+            {
+                char character = value[index];
+                if (char.IsWhiteSpace(character) || char.IsControl(character)) return true;
+            }
+            return false;
+        }
+
         private static void ApplyUserReportEvents(
             IList<ServerSession> sessions,
             IEnumerable<FileInfo> backendFiles)
@@ -2092,6 +2978,8 @@ namespace TarkovServerReporter
                             || file.Name.IndexOf("network-connection", StringComparison.OrdinalIgnoreCase) >= 0
                             || (game == TarkovGame.Eft
                                 && file.Name.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0)
+                            || (game == TarkovGame.Eft
+                                && file.Name.IndexOf("push-notifications", StringComparison.OrdinalIgnoreCase) >= 0)
                             || (game == TarkovGame.Arena
                                 && file.Name.IndexOf("lifecycle", StringComparison.OrdinalIgnoreCase) >= 0))
                         .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
@@ -2267,6 +3155,7 @@ namespace TarkovServerReporter
                 if (existing.RaidPurpose == TarkovRaidPurpose.Unknown
                     && candidate.RaidPurpose != TarkovRaidPurpose.Unknown)
                     existing.RaidPurpose = candidate.RaidPurpose;
+                RaidClassificationModel.MergeInto(existing, candidate);
                 if (!existing.MatchmakingSeconds.HasValue && candidate.MatchmakingSeconds.HasValue)
                     existing.MatchmakingSeconds = candidate.MatchmakingSeconds;
                 int candidateOperationPriority = GetOperationStatePriority(candidate.OperationState);
@@ -2345,6 +3234,12 @@ namespace TarkovServerReporter
                 PvpSeasonEvidence = source.PvpSeasonEvidence,
                 HostingMode = source.HostingMode,
                 RaidPurpose = source.RaidPurpose,
+                CharacterType = source.CharacterType,
+                ParticipationType = source.ParticipationType,
+                PartySize = source.PartySize,
+                CharacterEvidence = source.CharacterEvidence,
+                ParticipationEvidence = source.ParticipationEvidence,
+                PartySizeEvidence = source.PartySizeEvidence,
                 ServerId = source.ServerId,
                 ShortId = source.ShortId,
                 DataCenterCode = source.DataCenterCode,

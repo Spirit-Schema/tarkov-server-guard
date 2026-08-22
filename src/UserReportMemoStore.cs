@@ -27,6 +27,8 @@ namespace TarkovServerReporter
         // Kept for lossless compatibility with the free-form v0.6.6 memo format.
         public string MemoText { get; set; }
         public string Game { get; set; }
+        // Retains the v0.8.2 serialized field name. EFT stores the bounded
+        // game-type/character/participation display suffix; older type-only values remain valid.
         public string GameType { get; set; }
         public DateTime RaidStartedUtc { get; set; }
         public string MapName { get; set; }
@@ -523,7 +525,7 @@ namespace TarkovServerReporter
         {
             if (session == null) return string.Empty;
             return session.Game == TarkovGame.Eft
-                ? session.RaidTypeText
+                ? session.RaidTypeAndParticipantText
                 : session.Game == TarkovGame.Arena ? session.GameMode : string.Empty;
         }
 

@@ -1296,6 +1296,8 @@ namespace TarkovServerReporter
             details.Controls.Add(_ipLabel);
 
             _mapValueLabel = AddDetailLine(details, "게임 · 맵/유형", "-", 72, 126);
+            _mapValueLabel.AccessibleName = "선택한 접속의 게임·맵·유형";
+            _mapValueLabel.AccessibleDescription = "-";
             _timeValueLabel = AddDetailLine(details, "접속 시각", "-", 96, 126);
             _locationValueLabel = AddDetailLine(details, "데이터센터/지역", "조회 전", 120, 126);
             _pingValueLabel = AddDetailLine(details, "현재 핑", "조회 전", 144, 126);
@@ -1733,7 +1735,13 @@ namespace TarkovServerReporter
             _historyGrid.Columns["note"].HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
             _historyGrid.Columns["note"].HeaderCell.Style.WrapMode = DataGridViewTriState.False;
             _historyGrid.Columns["note"].HeaderCell.Style.Padding = new Padding(0);
-            _historyGrid.Columns.Add(CreateTextColumn("mapMode", "맵 · 게임유형", 195));
+            DataGridViewTextBoxColumn mapModeColumn = CreateTextColumn(
+                "mapMode",
+                "맵 · 게임유형",
+                195);
+            mapModeColumn.CellTemplate = new RaidContextTextBoxCell();
+            mapModeColumn.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
+            _historyGrid.Columns.Add(mapModeColumn);
             _historyGrid.Columns.Add(CreateTextColumn("ip", "서버 IP", 124));
             _historyGrid.Columns.Add(CreateTextColumn("location", "데이터센터 / 지역", 172));
             _historyGrid.Columns.Add(CreateTextColumn("ping", "현재 핑", 92));
@@ -1882,6 +1890,42 @@ namespace TarkovServerReporter
                 Width = width,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             };
+        }
+
+        private sealed class RaidContextTextBoxCell : DataGridViewTextBoxCell
+        {
+            protected override AccessibleObject CreateAccessibilityInstance()
+            {
+                return new RaidContextCellAccessibleObject(this);
+            }
+
+            public override object Clone()
+            {
+                return (RaidContextTextBoxCell)base.Clone();
+            }
+
+            private sealed class RaidContextCellAccessibleObject
+                : DataGridViewCellAccessibleObject
+            {
+                private readonly RaidContextTextBoxCell _owner;
+
+                internal RaidContextCellAccessibleObject(RaidContextTextBoxCell owner)
+                    : base(owner)
+                {
+                    _owner = owner;
+                }
+
+                public override string Description
+                {
+                    get
+                    {
+                        string value = Convert.ToString(_owner.FormattedValue);
+                        return string.IsNullOrWhiteSpace(value)
+                            ? base.Description
+                            : value;
+                    }
+                }
+            }
         }
 
         private static void AppendHeaderSortToolTip(DataGridViewColumn column)
@@ -3048,14 +3092,25 @@ namespace TarkovServerReporter
             IEnumerable<ServerSession> existing)
         {
             var merged = new List<ServerSession>();
-            var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var sessionsByIdentity = new Dictionary<string, ServerSession>(
+                StringComparer.OrdinalIgnoreCase);
             foreach (IEnumerable<ServerSession> source in new[] { refreshed, existing })
             {
                 if (source == null) continue;
                 foreach (ServerSession session in source.Where(item => item != null))
                 {
                     string identity = GetSessionRefreshIdentity(session);
-                    if (identities.Add(identity)) merged.Add(session);
+                    ServerSession retained;
+                    if (sessionsByIdentity.TryGetValue(identity, out retained))
+                    {
+                        // This path is used only when a refresh is incomplete. Keep the
+                        // freshly parsed row, but do not discard classification evidence
+                        // that an earlier complete read found for the same raid.
+                        RaidClassificationModel.MergeInto(retained, session);
+                        continue;
+                    }
+                    sessionsByIdentity.Add(identity, session);
+                    merged.Add(session);
                 }
             }
             return merged;
@@ -4639,12 +4694,13 @@ namespace TarkovServerReporter
                 _geoResults.TryGetValue(session.IpAddress ?? string.Empty, out geo);
                 _firewallStates.TryGetValue(session.IpAddress ?? string.Empty, out firewall);
                 bool hasNote = _noteStore.Exists(session);
+                string mapAndTypeText = GetMapAndTypeText(session);
                 int rowIndex = _historyGrid.Rows.Add(
                     session.GameDisplayName,
                     session.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                     session.UserReportCount > 0 ? "유저신고x" + session.UserReportCount : string.Empty,
                     string.Empty,
-                    GetMapAndTypeText(session),
+                    mapAndTypeText,
                     session.HasServerIp ? session.IpAddress : "-",
                     GetLocationCellText(session, geo),
                     GetPingCellText(session, ping, firewall),
@@ -4655,6 +4711,7 @@ namespace TarkovServerReporter
                     FormatConnectionResultCell(session));
                 DataGridViewRow row = _historyGrid.Rows[rowIndex];
                 row.Tag = session;
+                row.Cells["mapMode"].ToolTipText = mapAndTypeText;
                 row.Cells["userReport"].ToolTipText = session.UserReportCount > 0
                     ? "클릭하여 신고한 유저의 닉네임과 신고 사유를 메모합니다."
                     : string.Empty;
@@ -4674,7 +4731,7 @@ namespace TarkovServerReporter
             if (session == null) return "-";
             string map = string.IsNullOrWhiteSpace(session.MapName) ? "-" : session.MapName;
             if (session.Game == TarkovGame.Eft)
-                return map + " · " + session.RaidTypeText;
+                return map + " · " + session.RaidTypeAndParticipantText;
             return string.IsNullOrWhiteSpace(session.GameMode)
                 ? map
                 : map + " · " + session.GameMode;
@@ -4773,7 +4830,10 @@ namespace TarkovServerReporter
                 ? session.IpAddress
                 : (session.HostingMode == TarkovHostingMode.Local ? "로컬 실행" : "매칭 IP 없음");
             _ipLabel.ForeColor = session.HasServerIp ? TextPrimary : TextMuted;
-            _mapValueLabel.Text = session.GameDisplayName + " · " + GetMapAndTypeText(session);
+            string mapAndTypeText = session.GameDisplayName + " · " + GetMapAndTypeText(session);
+            _mapValueLabel.Text = mapAndTypeText;
+            _mapValueLabel.AccessibleDescription = mapAndTypeText;
+            _toolTip.SetToolTip(_mapValueLabel, mapAndTypeText);
             _timeValueLabel.Text = session.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm:ss");
             _actualRttValueLabel.Text = RaidMetricPresentation.FormatActualRtt(session);
             _actualRttValueLabel.ForeColor = GetLatencyColor(session);
@@ -5800,6 +5860,8 @@ namespace TarkovServerReporter
             _ipLabel.Text = "서버를 찾지 못했습니다";
             _ipLabel.ForeColor = TextMuted;
             _mapValueLabel.Text = "-";
+            _mapValueLabel.AccessibleDescription = "-";
+            _toolTip.SetToolTip(_mapValueLabel, string.Empty);
             _timeValueLabel.Text = "-";
             _pingValueLabel.Text = "-";
             _locationValueLabel.Text = "-";
@@ -5969,6 +6031,9 @@ namespace TarkovServerReporter
                     GameMode = "Online",
                     ProgressionMode = TarkovProgressionMode.PvpSeason,
                     PvpSeasonNumber = 1,
+                    CharacterType = TarkovCharacterType.Pmc,
+                    ParticipationType = TarkovParticipationType.Party,
+                    PartySize = 2,
                     HostingMode = TarkovHostingMode.Server,
                     RaidPurpose = TarkovRaidPurpose.Progression,
                     ServerId = "SG-SIN01G001_demo",
@@ -6029,6 +6094,9 @@ namespace TarkovServerReporter
                     MapName = "Woods",
                     GameMode = "Online",
                     ProgressionMode = TarkovProgressionMode.Pve,
+                    CharacterType = TarkovCharacterType.Scav,
+                    ParticipationType = TarkovParticipationType.Party,
+                    PartySize = 3,
                     HostingMode = TarkovHostingMode.Server,
                     RaidPurpose = TarkovRaidPurpose.Progression,
                     ServerId = "KR-SEL01G002_demo",
@@ -6055,6 +6123,8 @@ namespace TarkovServerReporter
                     LogFilePath = "application.log",
                     MapName = "Factory",
                     ProgressionMode = TarkovProgressionMode.Pve,
+                    CharacterType = TarkovCharacterType.Pmc,
+                    ParticipationType = TarkovParticipationType.Solo,
                     HostingMode = TarkovHostingMode.Local,
                     RaidPurpose = TarkovRaidPurpose.Progression,
                     ClientVersion = "1.1.0.1.46699",

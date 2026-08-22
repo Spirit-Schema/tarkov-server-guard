@@ -61,6 +61,54 @@ namespace TarkovServerReporter
         Completed
     }
 
+    public enum TarkovCharacterType
+    {
+        Unknown,
+        Pmc,
+        Scav
+    }
+
+    public enum TarkovParticipationType
+    {
+        Unknown,
+        Solo,
+        Party
+    }
+
+    [Flags]
+    internal enum RaidCharacterEvidence
+    {
+        None = 0,
+        Pmc = 1,
+        Scav = 2,
+        ProfileIdRelation = 4,
+        PlayerVisualSide = 8,
+        Conflict = 16
+    }
+
+    [Flags]
+    internal enum RaidParticipationEvidence
+    {
+        None = 0,
+        Solo = 1,
+        Party = 2,
+        MatchJoin = 4,
+        EmptyGroupId = 8,
+        GroupStartRoute = 16,
+        GroupStartEvent = 32,
+        ValidGroupState = 64,
+        Conflict = 128
+    }
+
+    [Flags]
+    internal enum RaidPartySizeEvidence
+    {
+        None = 0,
+        FinalGroupState = 1,
+        Invalid = 2,
+        Conflict = 4
+    }
+
     public sealed class ServerSession
     {
         internal const double MaximumRaidEntrySeconds = 30 * 60;
@@ -82,6 +130,12 @@ namespace TarkovServerReporter
         internal PvpSeasonEvidence PvpSeasonEvidence { get; set; }
         public TarkovHostingMode HostingMode { get; set; }
         public TarkovRaidPurpose RaidPurpose { get; set; }
+        public TarkovCharacterType CharacterType { get; set; }
+        public TarkovParticipationType ParticipationType { get; set; }
+        public int? PartySize { get; set; }
+        internal RaidCharacterEvidence CharacterEvidence { get; set; }
+        internal RaidParticipationEvidence ParticipationEvidence { get; set; }
+        internal RaidPartySizeEvidence PartySizeEvidence { get; set; }
         public string ServerId { get; set; }
         public string ShortId { get; set; }
         public string DataCenterCode { get; set; }
@@ -230,6 +284,41 @@ namespace TarkovServerReporter
             }
         }
 
+        public string CharacterTypeText
+        {
+            get
+            {
+                if (CharacterType == TarkovCharacterType.Pmc) return "PMC";
+                if (CharacterType == TarkovCharacterType.Scav) return "스캐브";
+                return string.Empty;
+            }
+        }
+
+        public string ParticipationTypeText
+        {
+            get
+            {
+                if (ParticipationType == TarkovParticipationType.Solo) return "솔로";
+                if (ParticipationType != TarkovParticipationType.Party) return string.Empty;
+                return RaidClassificationModel.IsValidPartySize(PartySize)
+                    ? PartySize.Value.ToString(CultureInfo.InvariantCulture) + "인 파티"
+                    : "파티";
+            }
+        }
+
+        public string RaidTypeAndParticipantText
+        {
+            get
+            {
+                string result = RaidTypeText;
+                if (!string.IsNullOrWhiteSpace(CharacterTypeText))
+                    result += " · " + CharacterTypeText;
+                if (!string.IsNullOrWhiteSpace(ParticipationTypeText))
+                    result += " · " + ParticipationTypeText;
+                return result;
+            }
+        }
+
         public string ConnectionStateText
         {
             get
@@ -267,6 +356,238 @@ namespace TarkovServerReporter
                 return ReconnectCount > 0
                     ? ConnectionStateText + " · 재접속 " + ReconnectCount + "회"
                     : ConnectionStateText;
+            }
+        }
+    }
+
+    internal static class RaidClassificationModel
+    {
+        private const RaidCharacterEvidence CharacterSourceMask =
+            RaidCharacterEvidence.ProfileIdRelation
+            | RaidCharacterEvidence.PlayerVisualSide;
+        private const RaidParticipationEvidence ParticipationSignalMask =
+            RaidParticipationEvidence.MatchJoin
+            | RaidParticipationEvidence.EmptyGroupId
+            | RaidParticipationEvidence.GroupStartRoute
+            | RaidParticipationEvidence.GroupStartEvent
+            | RaidParticipationEvidence.ValidGroupState;
+
+        internal static bool IsValidPartySize(int? partySize)
+        {
+            return partySize.HasValue && partySize.Value >= 2 && partySize.Value <= 5;
+        }
+
+        internal static void AddCharacterEvidence(
+            ServerSession session,
+            TarkovCharacterType characterType,
+            RaidCharacterEvidence source)
+        {
+            if (session == null) throw new ArgumentNullException("session");
+            if (characterType != TarkovCharacterType.Pmc
+                && characterType != TarkovCharacterType.Scav)
+                throw new ArgumentOutOfRangeException("characterType");
+            if ((source & CharacterSourceMask) == RaidCharacterEvidence.None
+                || (source & ~CharacterSourceMask) != RaidCharacterEvidence.None)
+                throw new ArgumentOutOfRangeException("source");
+
+            session.CharacterEvidence = GetCharacterEvidence(session)
+                | source
+                | (characterType == TarkovCharacterType.Pmc
+                    ? RaidCharacterEvidence.Pmc
+                    : RaidCharacterEvidence.Scav);
+            NormalizeCharacter(session);
+        }
+
+        internal static void AddParticipationEvidence(
+            ServerSession session,
+            RaidParticipationEvidence evidence)
+        {
+            if (session == null) throw new ArgumentNullException("session");
+            if (evidence == RaidParticipationEvidence.None
+                || (evidence & ~ParticipationSignalMask) != RaidParticipationEvidence.None)
+                throw new ArgumentOutOfRangeException("evidence");
+
+            session.ParticipationEvidence = GetParticipationEvidence(session) | evidence;
+            NormalizeParticipation(session);
+            NormalizePartySize(session);
+        }
+
+        internal static void AddPartySizeEvidence(ServerSession session, int? partySize)
+        {
+            if (session == null) throw new ArgumentNullException("session");
+            if (!partySize.HasValue) return;
+
+            session.ParticipationEvidence = GetParticipationEvidence(session)
+                | RaidParticipationEvidence.GroupStartEvent;
+            int? existing = IsValidPartySize(session.PartySize)
+                ? session.PartySize
+                : (int?)null;
+            if (!IsValidPartySize(partySize))
+            {
+                session.PartySizeEvidence |= RaidPartySizeEvidence.Invalid;
+                session.PartySize = null;
+            }
+            else if (existing.HasValue && existing.Value != partySize.Value)
+            {
+                session.PartySizeEvidence |= RaidPartySizeEvidence.Conflict;
+                session.PartySize = null;
+            }
+            else
+            {
+                session.PartySize = partySize;
+                session.PartySizeEvidence |= RaidPartySizeEvidence.FinalGroupState;
+            }
+            Normalize(session);
+        }
+
+        internal static void MergeInto(ServerSession target, ServerSession source)
+        {
+            if (target == null) throw new ArgumentNullException("target");
+            if (source == null) return;
+
+            target.CharacterEvidence = GetCharacterEvidence(target)
+                | GetCharacterEvidence(source);
+            target.ParticipationEvidence = GetParticipationEvidence(target)
+                | GetParticipationEvidence(source);
+
+            int? targetSize = IsValidPartySize(target.PartySize)
+                ? target.PartySize
+                : (int?)null;
+            int? sourceSize = IsValidPartySize(source.PartySize)
+                ? source.PartySize
+                : (int?)null;
+            if (targetSize.HasValue || sourceSize.HasValue)
+            {
+                target.ParticipationEvidence |= RaidParticipationEvidence.ValidGroupState;
+            }
+            target.PartySizeEvidence |= source.PartySizeEvidence;
+            if ((target.PartySize.HasValue && !targetSize.HasValue)
+                || (source.PartySize.HasValue && !sourceSize.HasValue))
+            {
+                target.PartySizeEvidence |= RaidPartySizeEvidence.Invalid;
+            }
+            if (targetSize.HasValue && sourceSize.HasValue
+                && targetSize.Value != sourceSize.Value)
+            {
+                target.PartySizeEvidence |= RaidPartySizeEvidence.Conflict;
+                target.PartySize = null;
+            }
+            else
+            {
+                target.PartySize = targetSize ?? sourceSize;
+                if (target.PartySize.HasValue)
+                    target.PartySizeEvidence |= RaidPartySizeEvidence.FinalGroupState;
+            }
+
+            Normalize(target);
+        }
+
+        internal static void Normalize(ServerSession session)
+        {
+            if (session == null) throw new ArgumentNullException("session");
+
+            if (session.PartySize.HasValue)
+            {
+                if (IsValidPartySize(session.PartySize))
+                {
+                    session.PartySizeEvidence |= RaidPartySizeEvidence.FinalGroupState;
+                    session.ParticipationEvidence = GetParticipationEvidence(session)
+                        | RaidParticipationEvidence.ValidGroupState;
+                }
+                else
+                {
+                    session.PartySizeEvidence |= RaidPartySizeEvidence.Invalid;
+                }
+            }
+
+            session.CharacterEvidence = GetCharacterEvidence(session);
+            session.ParticipationEvidence = GetParticipationEvidence(session);
+            NormalizeCharacter(session);
+            NormalizeParticipation(session);
+            NormalizePartySize(session);
+        }
+
+        private static RaidCharacterEvidence GetCharacterEvidence(ServerSession session)
+        {
+            RaidCharacterEvidence evidence = session.CharacterEvidence;
+            if (session.CharacterType == TarkovCharacterType.Pmc)
+                evidence |= RaidCharacterEvidence.Pmc;
+            else if (session.CharacterType == TarkovCharacterType.Scav)
+                evidence |= RaidCharacterEvidence.Scav;
+            return evidence;
+        }
+
+        private static RaidParticipationEvidence GetParticipationEvidence(ServerSession session)
+        {
+            RaidParticipationEvidence evidence = session.ParticipationEvidence;
+            if (session.ParticipationType == TarkovParticipationType.Solo)
+                evidence |= RaidParticipationEvidence.Solo;
+            else if (session.ParticipationType == TarkovParticipationType.Party)
+                evidence |= RaidParticipationEvidence.Party;
+            return evidence;
+        }
+
+        private static void NormalizeCharacter(ServerSession session)
+        {
+            RaidCharacterEvidence evidence = GetCharacterEvidence(session);
+            bool hasPmc = (evidence & RaidCharacterEvidence.Pmc) != 0;
+            bool hasScav = (evidence & RaidCharacterEvidence.Scav) != 0;
+            if ((evidence & RaidCharacterEvidence.Conflict) != 0 || hasPmc && hasScav)
+            {
+                session.CharacterEvidence = evidence | RaidCharacterEvidence.Conflict;
+                session.CharacterType = TarkovCharacterType.Unknown;
+            }
+            else
+            {
+                session.CharacterEvidence = evidence;
+                session.CharacterType = hasPmc
+                    ? TarkovCharacterType.Pmc
+                    : hasScav ? TarkovCharacterType.Scav : TarkovCharacterType.Unknown;
+            }
+        }
+
+        private static void NormalizeParticipation(ServerSession session)
+        {
+            RaidParticipationEvidence evidence = GetParticipationEvidence(session);
+            bool hasSolo = (evidence & RaidParticipationEvidence.Solo) != 0
+                || (evidence & (RaidParticipationEvidence.MatchJoin
+                    | RaidParticipationEvidence.EmptyGroupId))
+                    == (RaidParticipationEvidence.MatchJoin
+                        | RaidParticipationEvidence.EmptyGroupId);
+            bool hasParty = (evidence & RaidParticipationEvidence.Party) != 0
+                || (evidence & (RaidParticipationEvidence.GroupStartRoute
+                    | RaidParticipationEvidence.GroupStartEvent
+                    | RaidParticipationEvidence.ValidGroupState)) != 0;
+            if ((evidence & RaidParticipationEvidence.Conflict) != 0 || hasSolo && hasParty)
+            {
+                session.ParticipationEvidence = evidence | RaidParticipationEvidence.Conflict;
+                session.ParticipationType = TarkovParticipationType.Unknown;
+            }
+            else if (hasParty)
+            {
+                session.ParticipationEvidence = evidence | RaidParticipationEvidence.Party;
+                session.ParticipationType = TarkovParticipationType.Party;
+            }
+            else if (hasSolo)
+            {
+                session.ParticipationEvidence = evidence | RaidParticipationEvidence.Solo;
+                session.ParticipationType = TarkovParticipationType.Solo;
+            }
+            else
+            {
+                session.ParticipationEvidence = evidence;
+                session.ParticipationType = TarkovParticipationType.Unknown;
+            }
+        }
+
+        private static void NormalizePartySize(ServerSession session)
+        {
+            if ((session.PartySizeEvidence & (RaidPartySizeEvidence.Invalid
+                | RaidPartySizeEvidence.Conflict)) != 0
+                || session.ParticipationType != TarkovParticipationType.Party
+                || !IsValidPartySize(session.PartySize))
+            {
+                session.PartySize = null;
             }
         }
     }
@@ -1019,6 +1340,12 @@ namespace TarkovServerReporter
                 LogFilePath = session.LogFilePath,
                 IpAddress = session.IpAddress,
                 MapName = session.MapName,
+                CharacterType = session.CharacterType,
+                ParticipationType = session.ParticipationType,
+                PartySize = session.PartySize,
+                CharacterEvidence = session.CharacterEvidence,
+                ParticipationEvidence = session.ParticipationEvidence,
+                PartySizeEvidence = session.PartySizeEvidence,
                 RaidEntryMeasuredSeconds = session.RaidEntryMeasuredSeconds,
                 OperationStartedAt = session.OperationStartedAt,
                 OperationEndedAt = session.OperationEndedAt,
@@ -1055,7 +1382,7 @@ namespace TarkovServerReporter
 
     public static class NetworkServices
     {
-        internal const string ProductUserAgent = "TarkovServerGuard/0.8.2";
+        internal const string ProductUserAgent = "TarkovServerGuard/0.8.3";
         private static readonly DbIpLiteGeoService GeoService = CreateGeoService();
 
         private static DbIpLiteGeoService CreateGeoService()
