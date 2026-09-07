@@ -9,7 +9,7 @@
 All the servers you've selected...<br> For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
 </p>
 
-<br><br><br>
+<br><br><br><br><br><br>
 
 ### [Tarkov Server Guard]
 
@@ -106,7 +106,7 @@ This is not an official tool from Battlestate Games or Escape from Tarkov.
 유저가 선택한 모든 서버..<br> ex)미국서부, 중국서버 내에서도 여러 데이터센터와 서버IP가 존재하며 품질은 제각각이다.<br> 이 중에서 하이핑, 디싱크를 유발하는 저품질 서버 IP가 존재한다.
 </p>
 
-<br><br><br>
+<br><br><br><br><br><br>
 
 ### [타르코프 서버 가드]
 

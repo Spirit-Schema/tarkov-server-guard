@@ -12,7 +12,7 @@
 All the servers you've selected...<br> For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
 </p>
 
-<br><br><br>
+<br><br><br><br><br><br>
 
 ### [Tarkov Server Guard]
 
