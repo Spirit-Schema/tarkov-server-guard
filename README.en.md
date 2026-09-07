@@ -9,16 +9,20 @@
 <br>
 
 <p align="center">
-All the servers you've selected...<br><br> For example, even within US West or China, there are multiple data centers and server IPs,<br> and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
+All the servers you've selected...<br> For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
 </p>
 
-<br><br>
+<br><br><br>
 
 ### [Tarkov Server Guard]
 
 I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
 
+<br>
+
 It automatically reads the official Tarkov and Arena logs,<br> so you can view and manage the quality of servers you've connected to and your raid history on one screen.
+
+<br>
 
 Current public release: **v0.8.3**. The app interface is in Korean; this page provides English instructions.
 

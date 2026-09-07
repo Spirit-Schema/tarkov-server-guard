@@ -6,16 +6,20 @@
 <br>
 
 <p align="center">
-All the servers you've selected...<br><br> For example, even within US West or China, there are multiple data centers and server IPs,<br> and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
+All the servers you've selected...<br> For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
 </p>
 
-<br><br>
+<br><br><br>
 
 ### [Tarkov Server Guard]
 
 I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
 
+<br>
+
 It automatically reads the official Tarkov and Arena logs,<br> so you can view and manage the quality of servers you've connected to and your raid history on one screen.
+
+<br>
 
 **v0.8.3 has a Korean interface.** The following is English documentation for this release.
 
@@ -99,16 +103,20 @@ This is not an official tool from Battlestate Games or Escape from Tarkov.
 <br>
 
 <p align="center">
-유저가 선택한 모든 서버..<br><br> ex)미국서부, 중국서버 내에서도 여러 데이터센터와 서버IP가 존재하며 품질은 제각각이다.<br> 이 중에서 하이핑, 디싱크를 유발하는 저품질 서버 IP가 존재한다.
+유저가 선택한 모든 서버..<br> ex)미국서부, 중국서버 내에서도 여러 데이터센터와 서버IP가 존재하며 품질은 제각각이다.<br> 이 중에서 하이핑, 디싱크를 유발하는 저품질 서버 IP가 존재한다.
 </p>
 
-<br><br>
+<br><br><br>
 
 ### [타르코프 서버 가드]
 
 레이드 들어간 뒤 핑이 튀어서 강제로 쫓겨나<br> 시간과 장비를 잃어버리는 상황을 없애려고 만들기 시작한 무.료 Windows 프로그램임.
 
+<br>
+
 타르코프와 아레나의 공식 로그를 자동으로 읽어서<br> 지금까지 접속했던 서버 품질과 레이드 기록을 한 화면에서 확인 및 관리 할 수 있음.
+
+<br>
 
 <br>
 
