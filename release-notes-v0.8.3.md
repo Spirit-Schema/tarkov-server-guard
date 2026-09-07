@@ -3,19 +3,30 @@
 <details>
 <summary><strong>English — Overview, download, release notes and features</strong></summary>
 
-**You wait to get into a raid, only for a ping spike to get you kicked.** The time you spent preparing and queuing, and the gear you brought in, can be lost in an instant.
+All the servers you've selected...
 
-Even within the same selected region, you can connect to different server IPs with different connection quality.
+For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.
+Some of these are low-quality server IPs that cause high ping and desync.
 
-**Tarkov Server Guard (TSG) is a free Windows app built to help reduce the time and gear lost to repeated high-ping kicks.** It uses EFT and Arena logs to review past connections, helping you identify servers with recurring problems and block further connections to them.
+[Tarkov Server Guard]
+
+I started building this free Windows app to stop those situations where your ping spikes after you enter a raid, you get kicked, and you lose your time and gear.
+
+It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
 **v0.8.3 has a Korean interface.** The following is English documentation for this release.
 
 ## At a glance
 
-- **Reduce high-ping kick risk** — Compare ping and packet loss, then block problematic servers to prevent further connections to them.
-- **Browse raid history** — Look up past EFT and Arena raids and their connection results.
-- **Keep your notes** — Save raid and player-report notes, even after the game logs are deleted.
+- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers, reduce the risk of high-ping kicks and prevent the resulting gear loss.
+
+  (In EFT, if you are assigned to a blocked server, TSG prevents the connection. You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
+
+- Review maps, game modes, server allocation, connection results and report activity from past EFT and Arena raids by date range.
+
+- Save raid notes, player-report notes, tags and screenshot paths, and find them again in the note archive even after the game logs are deleted.
+
+  (Report activity is available, but reported players' nicknames cannot be retrieved. Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
 
 ## Download
 
@@ -61,17 +72,28 @@ This is not an official tool from Battlestate Games or Escape from Tarkov.
 
 </details>
 
-**한참 기다려 들어간 레이드에서 핑이 치솟고, 결국 강제로 연결이 끊기는 순간.** 들인 시간도, 챙겨 간 장비도 허무하게 잃을 수 있습니다.
+유저가 선택한 모든 서버..
 
-같은 서버 지역을 선택해도 실제 접속하는 서버 IP는 여럿이고, 연결 품질도 다를 수 있습니다.
+ex)미국서부, 중국서버 내에서도 여러 데이터센터와 서버IP가 존재하며 품질은 제각각이다.
+이 중에서 하이핑, 디싱크를 유발하는 저품질 서버 IP가 존재한다.
 
-**타르코프 서버 가드(TSG)는 핑킥으로 반복되는 시간·장비 손실을 줄이고 싶어 만든 무료 Windows 프로그램입니다.** EFT·아레나의 게임 로그로 지난 접속 기록을 살펴보고, 문제가 반복되는 서버를 골라 차단해 같은 서버로 다시 연결되는 것을 막을 수 있습니다.
+[타르코프 서버 가드]
+
+레이드 들어간 뒤 핑이 튀어서 강제로 쫓겨나 시간과 장비를 잃어버리는 상황을 없애려고 만들기 시작한 무.료 Windows 프로그램임.
+
+타르코프와 아레나의 공식 로그를 자동으로 읽어서 지금까지 접속했던 서버 품질과 레이드 기록을 한 화면에서 확인 및 관리 할 수 있음.
 
 ## 핵심 기능
 
-- **핑킥 위험 줄이기** — 핑·패킷 손실을 비교해 문제가 반복되는 서버를 차단하고, 같은 서버에 다시 접속하는 것을 막습니다.
-- **레이드 기록 조회** — EFT·아레나의 지난 레이드와 연결 결과를 찾아봅니다.
-- **메모 보관** — 레이드·신고 메모를 남기고, 게임 로그를 지운 뒤에도 확인합니다.
+- 현재 핑·실게임 핑(RTT)·패킷 손실을 비교해 품질이 좋지 않은 서버만 골라 차단하여 핑킥 위험을 줄이고, 그로 인한 장비 손실을 막아줍니다.
+
+  (EFT에서 차단한 서버에 배정되면 해당 서버로의 접속을 막아주며, 바로 `나가기 확인`을 눌러도 장비가 보존됩니다.)
+
+- EFT·아레나 과거 레이드의 맵·게임 유형·서버 배정·연결 결과·신고 기록을 기간별로 확인할 수 있습니다.
+
+- 레이드 메모·신고 유저 메모·태그·스크린샷(경로)를 저장하고, 로그 삭제 후에도 메모 보관함에서 다시 확인할 수 있습니다.
+
+  (신고 기록은 조회할 수 있지만 닉네임은 조회할 수 없습니다. 신고 메모는 `유저신고` 텍스트를, 레이드 메모는 노란색 메모 말풍선을 클릭해 작성합니다.)
 
 ## 다운로드
 

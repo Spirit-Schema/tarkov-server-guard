@@ -6,19 +6,30 @@
   <img src="assets/branding/tarkov-server-guard-tsg-icon-master.png" width="128" alt="Tarkov Server Guard shield logo">
 </p>
 
-**You wait to get into a raid, only for a ping spike to get you kicked.** The time you spent preparing and queuing, and the gear you brought in, can be lost in an instant.
+All the servers you've selected...
 
-Even within the same selected region, you can connect to different server IPs with different connection quality.
+For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.
+Some of these are low-quality server IPs that cause high ping and desync.
 
-**Tarkov Server Guard (TSG) is a free Windows app built to help reduce the time and gear lost to repeated high-ping kicks.** It uses EFT and Arena logs to review past connections, helping you identify servers with recurring problems and block further connections to them.
+[Tarkov Server Guard]
+
+I started building this free Windows app to stop those situations where your ping spikes after you enter a raid, you get kicked, and you lose your time and gear.
+
+It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
 Current public release: **v0.8.3**. The app interface is in Korean; this page provides English instructions.
 
 ## At a glance
 
-- **Reduce high-ping kick risk** — Compare ping and packet loss, then block problematic servers to prevent further connections to them.
-- **Browse raid history** — Look up past EFT and Arena raids and their connection results.
-- **Keep your notes** — Save raid and player-report notes, even after the game logs are deleted.
+- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers, reduce the risk of high-ping kicks and prevent the resulting gear loss.
+
+  (In EFT, if you are assigned to a blocked server, TSG prevents the connection. You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
+
+- Review maps, game modes, server allocation, connection results and report activity from past EFT and Arena raids by date range.
+
+- Save raid notes, player-report notes, tags and screenshot paths, and find them again in the note archive even after the game logs are deleted.
+
+  (Report activity is available, but reported players' nicknames cannot be retrieved. Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
 
 ## Download
 
