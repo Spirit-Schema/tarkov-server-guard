@@ -6,30 +6,41 @@
   <img src="assets/branding/tarkov-server-guard-tsg-icon-master.png" width="128" alt="Tarkov Server Guard shield logo">
 </p>
 
-All the servers you've selected...
+<br>
 
-For example, even within US West or China, there are multiple data centers and server IPs, and quality varies from server to server.
-Some of these are low-quality server IPs that cause high ping and desync.
+<p align="center">
+All the servers you've selected...<br><br> For example, even within US West or China, there are multiple data centers and server IPs,<br> and quality varies from server to server.<br> Some of these are low-quality server IPs that cause high ping and desync.
+</p>
 
-[Tarkov Server Guard]
+<br><br>
 
-I started building this free Windows app to stop those situations where your ping spikes after you enter a raid, you get kicked, and you lose your time and gear.
+### [Tarkov Server Guard]
 
-It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
+I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
+
+It automatically reads the official Tarkov and Arena logs,<br> so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
 Current public release: **v0.8.3**. The app interface is in Korean; this page provides English instructions.
 
+<br>
+
 ## At a glance
 
-- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers, reduce the risk of high-ping kicks and prevent the resulting gear loss.
+- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers,<br> reduce the risk of high-ping kicks and prevent the resulting gear loss.
 
-  (In EFT, if you are assigned to a blocked server, TSG prevents the connection. You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
+  (In EFT, if you are assigned to a blocked server, TSG prevents the connection.<br> You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
 
-- Review maps, game modes, server allocation, connection results and report activity from past EFT and Arena raids by date range.
+  <br>
 
-- Save raid notes, player-report notes, tags and screenshot paths, and find them again in the note archive even after the game logs are deleted.
+- Review maps, game modes, server allocation, connection results and report activity<br> from past EFT and Arena raids by date range.
 
-  (Report activity is available, but reported players' nicknames cannot be retrieved. Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
+  <br>
+
+- Save raid notes, player-report notes, tags and screenshot paths,<br> and find them again in the note archive even after the game logs are deleted.
+
+  (Report activity is available, but reported players' nicknames cannot be retrieved.<br> Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
+
+<br>
 
 ## Download
 
@@ -40,14 +51,23 @@ Windows 10/11 · .NET Framework 4.8. For Portable, extract the ZIP and keep its 
 
 The executable is unsigned, so Windows may show an unknown-publisher warning. Use the official downloads above; [SHA-256 checksums](https://github.com/Spirit-Schema/tarkov-server-guard/releases/latest/download/SHA256SUMS.txt) are available.
 
+<br>
+
 ## Main features
 
 - **Review and manage raid records:** Check maps, game modes, connection results and report activity, and keep notes, tags and screenshot links alongside your records.
+
 - **History filters:** Find up to 100 recent records by date range, game and data-center region.
+
 - **Server comparison:** View current ping, in-game latency (RTT), packet loss, data center and estimated location.
+
 - **Block-list management:** Add a reason for each block, unblock individual, selected or all entries, and export or import the list. Blocks remain manageable after logs are deleted.
+
 - **Note backup and restore:** Export raid and player-report notes together and restore missing entries without overwriting existing notes. Original screenshot files are not included.
+
 - **Convenience features:** Detect official-launcher and Steam installations, show the selected server regions, and install app updates after your confirmation.
+
+<br>
 
 ## Getting started
 
@@ -57,12 +77,16 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 
 The in-app guide is available through `사용방법` (Usage guide). See [Troubleshooting — Korean](TROUBLESHOOTING.md) for additional help.
 
+<br>
+
 ## Before you use TSG
 
 - If you are assigned to a blocked server, loading may stall or the connection may fail. If a block prevents you from joining an EFT raid, leave the failed connection through the game's confirmation dialog and match again.
 - Blocks apply **only to this PC and remain active after the app closes or Windows restarts**. They are not automatically shared with party members.
 - It has not been confirmed whether blocking an Arena server results in a penalty for leaving the match. Read the separate warning before blocking.
 - Current ping is measured now; in-game RTT and packet loss come from saved logs. A blocked server's current ping cannot be measured, and location data is an estimate.
+
+<br>
 
 ## Privacy and license
 
