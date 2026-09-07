@@ -159,8 +159,8 @@ namespace TarkovServerReporter
             try
             {
                 return CreateExport(
-                    raidStore.LoadAll(),
-                    userReportMemoStore.LoadAll(),
+                    raidStore.LoadAllForBackup(),
+                    userReportMemoStore.LoadAllForBackup(),
                     createdUtc);
             }
             catch
@@ -714,7 +714,7 @@ namespace TarkovServerReporter
                 if (string.IsNullOrWhiteSpace(screenshotPath)
                     || screenshotPath.Length > MaximumScreenshotPathLength
                     || !HasValidUnicode(screenshotPath)
-                    || !RaidNoteStore.IsSafeScreenshotAttachmentPath(screenshotPath)
+                    || !RaidNoteStore.IsSafeAttachmentPath(screenshotPath)
                     || !seenScreenshotPaths.Add(screenshotPath))
                     return ParseItemFailure(
                         prefix, "screenshot-path-invalid",
@@ -1109,7 +1109,7 @@ namespace TarkovServerReporter
                 if (string.IsNullOrWhiteSpace(screenshotPath)
                     || screenshotPath.Length > MaximumScreenshotPathLength
                     || !HasValidUnicode(screenshotPath)
-                    || !RaidNoteStore.IsSafeScreenshotAttachmentPath(screenshotPath)
+                    || !RaidNoteStore.IsSafeAttachmentPath(screenshotPath)
                     || !seenScreenshotPaths.Add(screenshotPath))
                     throw Validation(
                         "raid-screenshot-path-invalid",

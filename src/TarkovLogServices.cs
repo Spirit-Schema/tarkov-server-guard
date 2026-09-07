@@ -78,12 +78,15 @@ namespace TarkovServerReporter
         public string EftSelection { get; set; }
         public string ArenaSelection { get; set; }
         public DateTime? EftUpdatedAt { get; set; }
+        public bool EftSelectionInvalidated { get; set; }
         public DateTime? ArenaUpdatedAt { get; set; }
 
         public string GetDisplay(TarkovGame game)
         {
             string value = game == TarkovGame.Arena ? ArenaSelection : EftSelection;
-            return string.IsNullOrWhiteSpace(value) ? "선택 기록 없음" : value;
+            return string.IsNullOrWhiteSpace(value)
+                ? (game == TarkovGame.Eft ? "런처에서 확인" : "선택 기록 없음")
+                : value;
         }
     }
 
@@ -802,9 +805,8 @@ namespace TarkovServerReporter
     {
         private sealed class CachedDirectory
         {
-            public long Length { get; set; }
+            public string Fingerprint { get; set; }
             public DateTime LastWriteUtc { get; set; }
-            public int FileCount { get; set; }
             public IList<ServerSession> Sessions { get; set; }
         }
 
@@ -926,6 +928,8 @@ namespace TarkovServerReporter
         private static readonly object CacheLock = new object();
         private static readonly Dictionary<string, CachedDirectory> DirectoryCache =
             new Dictionary<string, CachedDirectory>(StringComparer.OrdinalIgnoreCase);
+        private const int MaximumCachedDirectories = 256;
+        private const int MaximumCachedSessionsPerDirectory = 2048;
 
         private static readonly Regex TimestampRegex = new Regex(
             @"(?<date>\d{4}[-.]\d{2}[-.]\d{2})[ T](?<time>\d{2}:\d{2}:\d{2})(?<fraction>\.\d{1,7})?",
@@ -1221,7 +1225,14 @@ namespace TarkovServerReporter
                 foreach (DirectoryInfo directory in directories)
                 {
                     foldersScanned++;
-                    sessions.AddRange(ReadDirectory(directory, game));
+                    try { sessions.AddRange(ReadDirectory(directory, game)); }
+                    catch
+                    {
+                        // One rotating, locked, or removed folder must not
+                        // hide the other readable raid history folders.
+                        allFoldersScanned = false;
+                        readSucceeded = false;
+                    }
                 }
             }
             catch
@@ -1242,41 +1253,56 @@ namespace TarkovServerReporter
             FileInfo[] relevantFiles = GetRelevantFiles(directory, game);
             if (relevantFiles.Length == 0) return new List<ServerSession>();
 
-            long combinedLength = 0;
             DateTime latestWriteUtc = DateTime.MinValue;
             foreach (FileInfo file in relevantFiles)
             {
-                combinedLength += file.Length;
                 if (file.LastWriteTimeUtc > latestWriteUtc) latestWriteUtc = file.LastWriteTimeUtc;
             }
+            string fingerprint = LogFileAccess.Fingerprint(relevantFiles);
 
             string cacheKey = game + "|" + directory.FullName;
             lock (CacheLock)
             {
                 CachedDirectory cached;
                 if (DirectoryCache.TryGetValue(cacheKey, out cached)
-                    && cached.Length == combinedLength
-                    && cached.LastWriteUtc == latestWriteUtc
-                    && cached.FileCount == relevantFiles.Length)
+                    && cached.Fingerprint == fingerprint)
                 {
                     return cached.Sessions.Select(CloneSession).ToList();
                 }
             }
 
-            IList<ServerSession> scanned = ParseDirectory(directory, relevantFiles, game);
+            IList<ServerSession> scanned;
+            try { scanned = ParseDirectory(directory, relevantFiles, game); }
+            catch (IOException)
+            {
+                // A streaming pass cannot safely replay already yielded
+                // lines. Retry the whole local parse once instead, with new
+                // event lists, so no report or participant is counted twice.
+                scanned = ParseDirectory(directory, relevantFiles, game);
+            }
             // An in-progress value depends on wall-clock freshness even when the file length and
             // write timestamp do not change. Reparse that single live folder so it naturally
             // becomes Unknown after the conservative activity window instead of being cached
             // as "in progress" forever.
-            if (!scanned.Any(session => session.OperationState == RaidOperationState.InProgress))
+            if (scanned.Count <= MaximumCachedSessionsPerDirectory
+                && !scanned.Any(session => session.OperationState == RaidOperationState.InProgress)
+                && LogFileAccess.Fingerprint(GetRelevantFiles(directory, game)) == fingerprint)
             {
                 lock (CacheLock)
                 {
+                    if (!DirectoryCache.ContainsKey(cacheKey)
+                        && DirectoryCache.Count >= MaximumCachedDirectories)
+                    {
+                        // Retain recent logs when a full-history scan walks
+                        // through more old folders than the cache can hold.
+                        var oldest = DirectoryCache.OrderBy(item => item.Value.LastWriteUtc).First();
+                        if (latestWriteUtc <= oldest.Value.LastWriteUtc) return scanned;
+                        DirectoryCache.Remove(oldest.Key);
+                    }
                     DirectoryCache[cacheKey] = new CachedDirectory
                     {
-                        Length = combinedLength,
+                        Fingerprint = fingerprint,
                         LastWriteUtc = latestWriteUtc,
-                        FileCount = relevantFiles.Length,
                         Sessions = scanned.Select(CloneSession).ToList()
                     };
                 }
@@ -2457,15 +2483,17 @@ namespace TarkovServerReporter
             DateTime pendingProfileAt,
             TarkovProgressionMode pendingProfileMode)
         {
-            bool profileIsCurrent = !string.IsNullOrWhiteSpace(pendingProfileId)
+            // The pending profile belongs to this log directory and progression
+            // mode. Explicit lifecycle boundaries clear it in the event loop; a
+            // long lobby wait by itself must not erase the PMC/Scav relation.
+            bool profileMatchesContext = !string.IsNullOrWhiteSpace(pendingProfileId)
                 && pendingProfileAt <= timestamp
-                && timestamp - pendingProfileAt <= TimeSpan.FromMinutes(30)
                 && pendingProfileMode == mode;
             return new ParticipantGeneration
             {
                 StartedAt = timestamp,
                 Mode = mode,
-                BaseProfileId = profileIsCurrent ? pendingProfileId : null
+                BaseProfileId = profileMatchesContext ? pendingProfileId : null
             };
         }
 
@@ -2926,7 +2954,12 @@ namespace TarkovServerReporter
                 }
             }
 
-            foreach (UserReportRequest request in requests.Values)
+            var lastAcceptedRequestAtBySession =
+                new Dictionary<ServerSession, DateTime>();
+            foreach (UserReportRequest request in requests.Values
+                .Where(item => item.RequestedAt.HasValue)
+                .OrderBy(item => item.RequestedAt.Value)
+                .ThenBy(item => item.SuccessfulResponseAt ?? DateTime.MaxValue))
             {
                 if (!request.RequestedAt.HasValue || !request.SuccessfulResponseAt.HasValue
                     || request.SuccessfulResponseAt.Value < request.RequestedAt.Value)
@@ -2939,6 +2972,23 @@ namespace TarkovServerReporter
                     .OrderByDescending(session => session.DisplayDetectedAt)
                     .FirstOrDefault();
                 if (target == null) continue;
+
+                DateTime lastAcceptedRequestAt;
+                if (lastAcceptedRequestAtBySession.TryGetValue(
+                        target,
+                        out lastAcceptedRequestAt)
+                    && reportedAt >= lastAcceptedRequestAt
+                    && reportedAt - lastAcceptedRequestAt <= TimeSpan.FromMilliseconds(50))
+                {
+                    // A single player-report action is sometimes emitted as two
+                    // successful backend transactions with different request IDs a
+                    // few milliseconds apart.  Coalesce only within the same raid
+                    // and exact route, using request start time so response latency
+                    // cannot turn the duplicate into an extra report.
+                    continue;
+                }
+                lastAcceptedRequestAtBySession[target] = reportedAt;
+
                 if (target.UserReportKeys == null)
                     target.UserReportKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string eventKey = reportedAt.Ticks.ToString(CultureInfo.InvariantCulture)
@@ -3192,30 +3242,7 @@ namespace TarkovServerReporter
 
         private static IEnumerable<string> ReadLines(string path)
         {
-            Exception lastException = null;
-            for (int attempt = 0; attempt < 2; attempt++)
-            {
-                var lines = new List<string>();
-                try
-                {
-                    using (var stream = new FileStream(
-                        path,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete))
-                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
-                    {
-                        string line;
-                        while ((line = reader.ReadLine()) != null) lines.Add(line);
-                    }
-                    return lines;
-                }
-                catch (Exception ex)
-                {
-                    lastException = ex;
-                }
-            }
-            throw new IOException("로그 파일을 읽지 못했습니다.", lastException);
+            return LogFileAccess.ReadLines(path);
         }
 
         private static string GetVersion(string line)
@@ -3653,6 +3680,7 @@ namespace TarkovServerReporter
                                 {
                                     result.EftSelection = pendingPreviousSelection;
                                     result.EftUpdatedAt = pendingPreviousUpdatedAt;
+                                    result.EftSelectionInvalidated = string.IsNullOrWhiteSpace(pendingPreviousSelection);
                                 }
                                 pendingGame = null;
                                 pendingAppliedAt = null;
@@ -3696,6 +3724,7 @@ namespace TarkovServerReporter
                                     pendingPreviousUpdatedAt = result.EftUpdatedAt;
                                     pendingAppliedAt = timestamp == DateTime.MinValue ? (DateTime?)null : timestamp;
                                     result.EftSelection = display;
+                                    result.EftSelectionInvalidated = false;
                                     result.EftUpdatedAt = timestamp == DateTime.MinValue ? (DateTime?)null : timestamp;
                                 }
                             }

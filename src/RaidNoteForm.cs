@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -31,8 +31,14 @@ namespace TarkovServerReporter
 
         public static bool ShowArchive(IWin32Window owner)
         {
-            using (var form = new RaidNoteArchiveForm(new RaidNoteStore()))
+            return ShowArchive(owner, false);
+        }
+
+        public static bool ShowArchive(IWin32Window owner, bool sourceReadOnly)
+        {
+            using (var form = new RaidNoteArchiveForm(new RaidNoteStore(), sourceReadOnly))
             {
+                ColumnWidthPersistence.Attach(form, "notes", AppPreferencesStore.GetDefaultStorageRoot());
                 form.ShowDialog(owner);
                 return form.Changed;
             }
@@ -55,6 +61,7 @@ namespace TarkovServerReporter
 
         private readonly ServerSession _session;
         private readonly RaidNoteStore _store;
+        private readonly bool _readOnly;
         private RaidNoteRecord _record;
         private TextBox _noteTextBox;
         private Label _notePlaceholderLabel;
@@ -63,6 +70,10 @@ namespace TarkovServerReporter
         private TextBox _tagTextBox;
         private Label _timestampLabel;
         private Label _statusLabel;
+        private Button _attachButton;
+        private Button _detachButton;
+        private Button _saveButton;
+        private Button _deleteButton;
         private bool _loading;
         private bool _dirty;
 
@@ -72,6 +83,7 @@ namespace TarkovServerReporter
             if (store == null) throw new ArgumentNullException("store");
             _session = session;
             _store = store;
+            _readOnly = false;
             _record = _store.Load(session) ?? _store.CreateFor(session);
             InitializeWindow();
             BuildInterface();
@@ -80,17 +92,24 @@ namespace TarkovServerReporter
         }
 
         public RaidNoteForm(RaidNoteRecord record, RaidNoteStore store)
+            : this(record, store, false)
+        {
+        }
+
+        public RaidNoteForm(RaidNoteRecord record, RaidNoteStore store, bool readOnly)
         {
             if (record == null) throw new ArgumentNullException("record");
             if (store == null) throw new ArgumentNullException("store");
             if (string.IsNullOrWhiteSpace(record.Key))
-                throw new ArgumentException("저장된 메모 키가 없습니다.", "record");
+                throw new ArgumentException(AppText.Get("RaidNote.MissingRecordKey"), "record");
             _session = null;
             _store = store;
+            _readOnly = readOnly;
             _record = record;
             InitializeWindow();
             BuildInterface();
             LoadRecord();
+            ApplyReadOnlyMode();
             FormClosing += RaidNoteFormClosing;
         }
 
@@ -98,7 +117,7 @@ namespace TarkovServerReporter
 
         private void InitializeWindow()
         {
-            Text = "레이드 메모";
+            Text = AppText.Get("Memo.Legacy.RaidNoteTitle");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(820, 750);
             MinimumSize = new Size(680, 620);
@@ -152,7 +171,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(1, 0),
-                Text = "레이드 메모",
+                Text = AppText.Get("Memo.Legacy.RaidNoteTitle"),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = TextPrimary
             });
@@ -169,7 +188,7 @@ namespace TarkovServerReporter
 
         private Control BuildNoteSection()
         {
-            TableLayoutPanel section = CreateSection("자유메모", 24);
+            TableLayoutPanel section = CreateSection(AppText.Get("RaidNote.Section.Free"), 24);
             var noteHost = new Panel
             {
                 Dock = DockStyle.Fill,
@@ -212,7 +231,7 @@ namespace TarkovServerReporter
                 AutoEllipsis = true,
                 Cursor = Cursors.IBeam,
                 UseMnemonic = false,
-                Text = "예시) 귀중품 파밍 장소, 이동 동선, 저격 포인트, 보스 스폰 위치 등을 자유롭게 기록해 보세요."
+                Text = AppText.Get("RaidNote.Placeholder")
             };
             _notePlaceholderLabel.Click += delegate
             {
@@ -233,7 +252,7 @@ namespace TarkovServerReporter
                 TextAlign = ContentAlignment.TopLeft,
                 Cursor = Cursors.IBeam,
                 UseMnemonic = false,
-                Text = NicknamePlaceholderText
+                Text = AppText.Get("RaidNote.NicknamePlaceholder")
             };
             _nicknamePlaceholderLabel.Click += delegate
             {
@@ -244,6 +263,10 @@ namespace TarkovServerReporter
             {
                 if (_notePlaceholderLabel != null)
                     _notePlaceholderLabel.Width = Math.Max(0, _noteTextBox.ClientSize.Width - 34);
+                if (_nicknamePlaceholderLabel != null)
+                    _nicknamePlaceholderLabel.Top = Math.Max(_notePlaceholderLabel.Bottom + 8,
+                        Math.Min(5 + noteLineHeight * 9,
+                            _noteTextBox.ClientSize.Height - _nicknamePlaceholderLabel.Height - 8));
             };
             _noteTextBox.Controls.Add(_notePlaceholderLabel);
             _noteTextBox.Controls.Add(_nicknamePlaceholderLabel);
@@ -275,7 +298,7 @@ namespace TarkovServerReporter
         private Control BuildScreenshotSection()
         {
             TableLayoutPanel section = CreateSection(
-                "스크린샷 첨부 · 파일은 복사하거나 업로드하지 않고 경로만 저장합니다",
+                AppText.Get("RaidNote.Attachments.Section"),
                 24);
             var layout = new TableLayoutPanel
             {
@@ -305,25 +328,27 @@ namespace TarkovServerReporter
                 Padding = new Padding(0, 5, 0, 5),
                 Margin = new Padding(0)
             };
-            Button attach = CreateSmallButton("첨부");
-            attach.Click += delegate { AttachScreenshots(); };
-            Button open = CreateSmallButton("열기");
+            _attachButton = CreateSmallButton(AppText.Get("RaidNote.Attach"));
+            _attachButton.Name = "RaidNoteAttachButton";
+            _attachButton.Click += delegate { AttachScreenshots(); };
+            Button open = CreateSmallButton(AppText.Get("Common.Open"));
             open.Click += delegate { OpenSelectedScreenshot(); };
-            Button openFolder = CreateSmallButton("폴더 열기");
+            Button openFolder = CreateSmallButton(AppText.Get("RaidNote.OpenFolder"));
             openFolder.Click += delegate { OpenSelectedScreenshotFolder(); };
-            Button detach = CreateSmallButton("첨부 해제");
-            detach.Click += delegate { DetachSelectedScreenshot(); };
-            buttons.Controls.Add(attach);
+            _detachButton = CreateSmallButton(AppText.Get("RaidNote.Detach"));
+            _detachButton.Name = "RaidNoteDetachButton";
+            _detachButton.Click += delegate { DetachSelectedScreenshot(); };
+            buttons.Controls.Add(_attachButton);
             buttons.Controls.Add(open);
             buttons.Controls.Add(openFolder);
-            buttons.Controls.Add(detach);
+            buttons.Controls.Add(_detachButton);
             layout.Controls.Add(buttons, 0, 1);
             return section;
         }
 
         private Control BuildTagSection()
         {
-            TableLayoutPanel section = CreateSection("태그 (,)쉼표로 구분", 24);
+            TableLayoutPanel section = CreateSection(AppText.Get("RaidNote.Tags"), 24);
             _tagTextBox = CreateTextBox();
             _tagTextBox.MaxLength = 6499;
             _tagTextBox.TextChanged += delegate { MarkDirty(); };
@@ -362,7 +387,7 @@ namespace TarkovServerReporter
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = TextMuted,
                 AutoEllipsis = true,
-                Text = "이 메모는 게임 로그와 별도로 로컬에 보관됩니다."
+                Text = AppText.Get("RaidNote.LocalOnly")
             };
             layout.Controls.Add(_statusLabel, 0, 1);
 
@@ -376,19 +401,21 @@ namespace TarkovServerReporter
                 Padding = new Padding(0, 1, 0, 0),
                 Margin = new Padding(8, 0, 0, 0)
             };
-            Button save = CreateSmallButton("저장");
-            save.BackColor = Accent;
-            save.ForeColor = Color.FromArgb(29, 24, 17);
-            save.FlatAppearance.BorderColor = Accent;
-            save.Click += delegate { SaveNote(true); };
-            Button delete = CreateSmallButton("삭제");
-            delete.BackColor = Danger;
-            delete.FlatAppearance.BorderColor = Danger;
-            delete.Click += delegate { DeleteNote(); };
-            Button folder = CreateSmallButton("메모 저장 폴더 열기");
+            _saveButton = CreateSmallButton(AppText.Get("Common.Save"));
+            _saveButton.Name = "RaidNoteSaveButton";
+            _saveButton.BackColor = Accent;
+            _saveButton.ForeColor = Color.FromArgb(29, 24, 17);
+            _saveButton.FlatAppearance.BorderColor = Accent;
+            _saveButton.Click += delegate { SaveNote(true); };
+            _deleteButton = CreateSmallButton(AppText.Get("Common.Delete"));
+            _deleteButton.Name = "RaidNoteDeleteButton";
+            _deleteButton.BackColor = Danger;
+            _deleteButton.FlatAppearance.BorderColor = Danger;
+            _deleteButton.Click += delegate { DeleteNote(); };
+            Button folder = CreateSmallButton(AppText.Get("RaidNote.OpenStorage"));
             folder.Click += delegate { OpenNoteFolder(); };
-            buttons.Controls.Add(save);
-            buttons.Controls.Add(delete);
+            buttons.Controls.Add(_saveButton);
+            buttons.Controls.Add(_deleteButton);
             buttons.Controls.Add(folder);
             layout.Controls.Add(buttons, 1, 1);
             return layout;
@@ -499,6 +526,29 @@ namespace TarkovServerReporter
             }
         }
 
+        private void ApplyReadOnlyMode()
+        {
+            if (!_readOnly) return;
+            _noteTextBox.ReadOnly = true;
+            _tagTextBox.ReadOnly = true;
+            _screenshotList.AllowDrop = false;
+            _attachButton.Enabled = false;
+            _detachButton.Enabled = false;
+            _saveButton.Enabled = false;
+            _deleteButton.Enabled = false;
+            string notice = AppText.Get("Memo.Legacy.ReadOnlySourceNotice");
+            _statusLabel.Text = notice;
+            _statusLabel.ForeColor = Accent;
+            _statusLabel.AccessibleName = notice;
+            foreach (Button button in new[]
+            {
+                _attachButton, _detachButton, _saveButton, _deleteButton
+            })
+            {
+                button.AccessibleDescription = notice;
+            }
+        }
+
         private string BuildRaidSummary()
         {
             if (_session != null)
@@ -506,7 +556,7 @@ namespace TarkovServerReporter
                 string game = _session.GameDisplayName;
                 string map = string.IsNullOrWhiteSpace(_session.MapName) ? "-" : _session.MapName;
                 string type = _session.Game == TarkovGame.Eft
-                    ? _session.RaidTypeText
+                    ? AppText.LocalizeDomainDisplay(_session.RaidTypeText)
                     : _session.GameMode;
                 string mapAndType = string.IsNullOrWhiteSpace(type) ? map : map + " · " + type;
                 return string.Format("{0} · {1:yyyy-MM-dd HH:mm:ss} · {2}", game, _session.DisplayDetectedAt, mapAndType);
@@ -514,7 +564,9 @@ namespace TarkovServerReporter
             DateTime started = _record.RaidStartedUtc == default(DateTime)
                 ? default(DateTime)
                 : _record.RaidStartedUtc.ToLocalTime();
-            string storedDate = started == default(DateTime) ? "시각 확인 안 됨" : started.ToString("yyyy-MM-dd HH:mm:ss");
+            string storedDate = started == default(DateTime)
+                ? AppText.Get("RaidNote.TimeUnknown")
+                : started.ToString("yyyy-MM-dd HH:mm:ss");
             return string.Format("{0} · {1} · {2}",
                 string.IsNullOrWhiteSpace(_record.Game) ? "-" : _record.Game,
                 storedDate,
@@ -523,44 +575,58 @@ namespace TarkovServerReporter
 
         private void AttachScreenshots()
         {
+            if (_readOnly) return;
             using (var dialog = new OpenFileDialog())
             {
-                dialog.Title = "스크린샷 첨부";
-                dialog.Filter = "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp";
+                dialog.Title = AppText.Get("RaidNote.AttachDialog.Title");
+                dialog.Filter = AppText.Get("RaidNote.AttachDialog.Filter");
                 dialog.Multiselect = true;
                 dialog.CheckFileExists = true;
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                var existing = new HashSet<string>(
-                    _screenshotList.Items.Cast<object>().Select(Convert.ToString),
-                    StringComparer.OrdinalIgnoreCase);
-                bool added = false;
-                bool rejected = false;
-                foreach (string selected in dialog.FileNames)
-                {
-                    string fullPath;
-                    try { fullPath = Path.GetFullPath(selected); }
-                    catch
-                    {
-                        rejected = true;
-                        continue;
-                    }
-                    if (!RaidNoteStore.IsSafeScreenshotAttachmentPath(fullPath))
-                    {
-                        rejected = true;
-                        continue;
-                    }
-                    if (!existing.Add(fullPath)) continue;
-                    _screenshotList.Items.Add(fullPath);
-                    added = true;
-                }
-                if (added) MarkDirty();
-                if (rejected)
-                    ShowStatus("로컬 드라이브의 지원 이미지 파일만 첨부할 수 있습니다.", Danger);
+                AddScreenshotPaths(dialog.FileNames);
             }
+        }
+
+        private void AddScreenshotPaths(IEnumerable<string> candidates)
+        {
+            if (_readOnly) return;
+            var existing = new HashSet<string>(
+                _screenshotList.Items.Cast<object>().Select(Convert.ToString),
+                StringComparer.OrdinalIgnoreCase);
+            int added = 0;
+            int rejected = 0;
+            foreach (string selected in candidates ?? Enumerable.Empty<string>())
+            {
+                string fullPath;
+                try { fullPath = Path.GetFullPath(selected); }
+                catch
+                {
+                    rejected++;
+                    continue;
+                }
+                if (!File.Exists(fullPath)
+                    || !RaidNoteStore.IsSafeScreenshotAttachmentPath(fullPath)
+                    || existing.Count >= RaidNoteStore.MaximumScreenshotPathCount)
+                {
+                    rejected++;
+                    continue;
+                }
+                if (!existing.Add(fullPath)) continue;
+                _screenshotList.Items.Add(fullPath);
+                added++;
+            }
+            if (added > 0)
+            {
+                MarkDirty();
+                ShowStatus(AppText.Format("RaidNote.AttachedCount", added), Accent);
+            }
+            if (rejected > 0)
+                ShowStatus(AppText.Format("RaidNote.AttachmentRejected", rejected), Danger);
         }
 
         private void DetachSelectedScreenshot()
         {
+            if (_readOnly) return;
             int index = _screenshotList.SelectedIndex;
             if (index < 0) return;
             _screenshotList.Items.RemoveAt(index);
@@ -571,14 +637,14 @@ namespace TarkovServerReporter
         {
             string path = GetSelectedScreenshotPath();
             if (path == null) return;
-            if (!RaidNoteStore.IsSafeScreenshotAttachmentPath(path))
+            if (!RaidNoteStore.IsSafeAttachmentPath(path))
             {
-                ShowStatus("지원하는 로컬 이미지 파일만 열 수 있습니다.", Danger);
+                ShowStatus(AppText.Get("RaidNote.AttachmentUnsafe"), Danger);
                 return;
             }
             if (!File.Exists(path))
             {
-                ShowStatus("첨부한 파일을 찾을 수 없습니다. 경로가 이동되었는지 확인해 주세요.", Danger);
+                ShowStatus(AppText.Get("RaidNote.AttachmentMissing"), Danger);
                 return;
             }
             TryOpen(path, null);
@@ -588,9 +654,9 @@ namespace TarkovServerReporter
         {
             string path = GetSelectedScreenshotPath();
             if (path == null) return;
-            if (!RaidNoteStore.IsSafeScreenshotAttachmentPath(path))
+            if (!RaidNoteStore.IsSafeAttachmentPath(path))
             {
-                ShowStatus("지원하는 로컬 이미지 파일의 위치만 열 수 있습니다.", Danger);
+                ShowStatus(AppText.Get("RaidNote.AttachmentFolderUnsafe"), Danger);
                 return;
             }
             if (File.Exists(path))
@@ -602,7 +668,7 @@ namespace TarkovServerReporter
                 catch { }
                 if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
                 {
-                    ShowStatus("첨부 경로의 폴더를 찾을 수 없습니다.", Danger);
+                    ShowStatus(AppText.Get("RaidNote.AttachmentFolderMissing"), Danger);
                     return;
                 }
                 TryOpen("explorer.exe", "\"" + directory.Replace("\"", string.Empty) + "\"");
@@ -618,6 +684,7 @@ namespace TarkovServerReporter
 
         private void SaveNote(bool closeAfterSave)
         {
+            if (_readOnly) return;
             try
             {
                 _record.NoteText = RaidNoteStore.NormalizeLegacyNoteText(
@@ -632,30 +699,31 @@ namespace TarkovServerReporter
                 Changed = true;
                 _dirty = false;
                 UpdateTimestampText();
-                ShowStatus("메모를 저장했습니다.", Accent);
+                ShowStatus(AppText.Get("RaidNote.Saved"), Accent);
                 if (closeAfterSave) Close();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "메모를 저장하지 못했습니다.\r\n" + ex.Message,
-                    "레이드 메모", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, AppText.Format("RaidNote.SaveFailed", AppText.TranslateDiagnostic(ex.Message, null)),
+                    AppText.Get("Memo.Legacy.RaidNoteTitle"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private void DeleteNote()
         {
+            if (_readOnly) return;
             bool exists = _session == null
                 ? _store.Exists(_record.Key)
                 : _store.Exists(_session);
             if (!exists && !_dirty)
             {
-                ShowStatus("삭제할 저장 메모가 없습니다.", TextMuted);
+                ShowStatus(AppText.Get("RaidNote.NoSavedNote"), TextMuted);
                 return;
             }
             DialogResult answer = MessageBox.Show(
                 this,
-                "이 레이드의 메모를 삭제할까요? 첨부한 원본 스크린샷은 삭제하지 않습니다.",
-                "레이드 메모 삭제",
+                AppText.Get("RaidNote.DeletePrompt"),
+                AppText.Get("RaidNote.DeleteTitle"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
             if (answer != DialogResult.Yes) return;
@@ -671,24 +739,25 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "메모를 삭제하지 못했습니다.\r\n" + ex.Message,
-                    "레이드 메모", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, AppText.Format("RaidNote.DeleteFailed", AppText.TranslateDiagnostic(ex.Message, null)),
+                    AppText.Get("Memo.Legacy.RaidNoteTitle"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private void OpenNoteFolder()
         {
             try { _store.OpenNotesFolder(); }
-            catch (Exception ex) { ShowStatus("메모 폴더를 열지 못했습니다: " + ex.Message, Danger); }
+            catch (Exception ex) { ShowStatus(AppText.Format("RaidNote.OpenFolderFailed", AppText.TranslateDiagnostic(ex.Message, null)), Danger); }
         }
 
         private void RaidNoteFormClosing(object sender, FormClosingEventArgs args)
         {
+            if (_readOnly) return;
             if (!_dirty) return;
             DialogResult answer = MessageBox.Show(
                 this,
-                "저장하지 않은 변경 사항이 있습니다. 저장하고 닫을까요?",
-                "레이드 메모",
+                AppText.Get("RaidNote.UnsavedPrompt"),
+                AppText.Get("Memo.Legacy.RaidNoteTitle"),
                 MessageBoxButtons.YesNoCancel,
                 MessageBoxIcon.Question);
             if (answer == DialogResult.Cancel)
@@ -722,14 +791,14 @@ namespace TarkovServerReporter
             string updated = _record.UpdatedUtc == default(DateTime)
                 ? "-"
                 : _record.UpdatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
-            _timestampLabel.Text = "생성 " + created + "   ·   수정 " + updated;
+            _timestampLabel.Text = AppText.Format("RaidNote.Timestamp", created, updated);
         }
 
         private void MarkDirty()
         {
-            if (_loading) return;
+            if (_loading || _readOnly) return;
             _dirty = true;
-            ShowStatus("저장하지 않은 변경 사항이 있습니다.", Accent);
+            ShowStatus(AppText.Get("RaidNote.Unsaved"), Accent);
         }
 
         private void ShowStatus(string message, Color color)
@@ -750,7 +819,7 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                ShowStatus("열지 못했습니다: " + ex.Message, Danger);
+                ShowStatus(AppText.Format("RaidNote.OpenFailed", AppText.TranslateDiagnostic(ex.Message, null)), Danger);
             }
         }
     }

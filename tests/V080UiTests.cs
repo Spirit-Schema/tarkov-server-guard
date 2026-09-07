@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -34,61 +34,7 @@ namespace TarkovServerReporter.Tests
         {
             try
             {
-                if (args == null || args.Length != 2 || !File.Exists(args[0]))
-                    throw new InvalidOperationException(
-                        "테스트할 TarkovServerGuard.exe 경로와 버전이 필요합니다.");
-
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Assembly application = Assembly.LoadFrom(Path.GetFullPath(args[0]));
-                AssertApplicationVersion(application, args[1]);
-                AssertDeferredBuildIdentity(application);
-                Type mainFormType = application.GetType("TarkovServerReporter.MainForm", true);
-                ConstructorInfo constructor = mainFormType.GetConstructor(new[] { typeof(bool) });
-                Assert(constructor != null, "MainForm 미리보기 생성자를 찾을 수 없습니다.");
-                AssertDeferredUninstallAndPatchNotesRouting(application);
-                AssertPatchNotesDarkBorder(application);
-
-                using (var form = (Form)constructor.Invoke(new object[] { true }))
-                {
-                    form.StartPosition = FormStartPosition.Manual;
-                    form.Location = new Point(-10000, -10000);
-                    form.ShowInTaskbar = false;
-                    form.Show();
-                    Application.DoEvents();
-
-                    FieldInfo gridField = mainFormType.GetField(
-                        "_historyGrid",
-                        BindingFlags.Instance | BindingFlags.NonPublic);
-                    Assert(gridField != null, "접속 기록 표 필드를 찾을 수 없습니다.");
-                    var grid = gridField.GetValue(form) as DataGridView;
-                    Assert(grid != null, "접속 기록 표가 생성되지 않았습니다.");
-
-                    AssertTwoLineMeasurementColumn(grid, "actualRtt", "RTT");
-                    AssertTwoLineMeasurementColumn(grid, "packetLoss", "패킷손실");
-                    AssertPathActionButtonTextAlignment(mainFormType, form);
-                    AssertMainHeaderSortToolTips(mainFormType, form, grid);
-                    AssertRaidContextPresentation(application, mainFormType, form, grid);
-                    AssertIncompleteRefreshClassificationMerge(application, mainFormType);
-                    AssertMainActionHeaderSorting(mainFormType, form, grid);
-
-                    using (var bitmap = new Bitmap(
-                        Math.Max(1, grid.ClientSize.Width),
-                        Math.Max(1, Math.Min(grid.ClientSize.Height, 240))))
-                    {
-                        grid.DrawToBitmap(
-                            bitmap,
-                            new Rectangle(Point.Empty, bitmap.Size));
-                    }
-
-                    AssertMissingLogTooltips(application, mainFormType, grid);
-                    AssertPrivacyNoticeText(form);
-                    AssertFirewallPersistenceUi(application, mainFormType, form);
-                    AssertQualityEvidenceRequiresConfiguredLogSource(mainFormType, form);
-                    AssertInitialFirewallStatePresentation(mainFormType, form);
-                    AssertNoPersistentPatchNotesOrUninstallButtons(form);
-                }
-
+                StaUiTestHarness.Run(delegate { RunTests(args); });
                 Console.WriteLine("V080UiTests: PASS");
                 return 0;
             }
@@ -99,19 +45,131 @@ namespace TarkovServerReporter.Tests
                 return 1;
             }
         }
+        private static void RunTests(string[] args)
+        {
+            if (args == null || args.Length != 2 || !File.Exists(args[0]))
+                throw new InvalidOperationException(
+                    "테스트할 TarkovServerGuard.exe 경로와 버전이 필요합니다.");
+
+            Assembly application = Assembly.LoadFrom(Path.GetFullPath(args[0]));
+            AssertApplicationVersion(application, args[1]);
+            AssertDeferredBuildIdentity(application);
+            Type mainFormType = application.GetType("TarkovServerReporter.MainForm", true);
+            Version requestedVersion = Version.Parse(args[1]);
+            string displayVersion = requestedVersion.Revision > 0 ? args[1] : requestedVersion.ToString(3);
+            AssertApplicationVersionPresentation(application, mainFormType, displayVersion);
+            ConstructorInfo constructor = mainFormType.GetConstructor(new[] { typeof(bool) });
+            Assert(constructor != null, "MainForm 미리보기 생성자를 찾을 수 없습니다.");
+            AssertDeferredUninstallAndPatchNotesRouting(application);
+            AssertPatchNotesDarkBorder(application);
+
+            using (var form = (Form)constructor.Invoke(new object[] { true }))
+            {
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new Point(-10000, -10000);
+                form.ShowInTaskbar = false;
+                form.Show();
+                Application.DoEvents();
+                AssertApplicationVersionLabel(form, displayVersion);
+
+                FieldInfo gridField = mainFormType.GetField(
+                    "_historyGrid",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert(gridField != null, "접속 기록 표 필드를 찾을 수 없습니다.");
+                var grid = gridField.GetValue(form) as DataGridView;
+                Assert(grid != null, "접속 기록 표가 생성되지 않았습니다.");
+
+                AssertTwoLineMeasurementColumn(grid, "actualRtt", "RTT");
+                AssertTwoLineMeasurementColumn(grid, "packetLoss", "패킷손실");
+                AssertPathActionButtonTextAlignment(mainFormType, form);
+                AssertMainHeaderSortToolTips(mainFormType, form, grid);
+                AssertRaidContextPresentation(application, mainFormType, form, grid);
+                AssertIncompleteRefreshClassificationMerge(application, mainFormType);
+                AssertMainActionHeaderSorting(mainFormType, form, grid);
+
+                using (var bitmap = new Bitmap(
+                    Math.Max(1, grid.ClientSize.Width),
+                    Math.Max(1, Math.Min(grid.ClientSize.Height, 240))))
+                {
+                    grid.DrawToBitmap(
+                        bitmap,
+                        new Rectangle(Point.Empty, bitmap.Size));
+                }
+
+                AssertMissingLogTooltips(application, mainFormType, grid);
+                AssertPrivacyNoticeText(form);
+                AssertFirewallPersistenceUi(application, mainFormType, form);
+                AssertQualityEvidenceRequiresConfiguredLogSource(mainFormType, form);
+                AssertInitialFirewallStatePresentation(mainFormType, form);
+                AssertNoPersistentPatchNotesOrUninstallButtons(form);
+                AssertRapidHistoryScrollKeepsStickyActionsStable(
+                    mainFormType,
+                    form,
+                    grid);
+            }
+
+            AssertEnglishMainSmoke(application, mainFormType, constructor);
+        }
 
         private static void AssertApplicationVersion(
             Assembly application,
             string expectedVersion)
         {
             Version version = application.GetName().Version;
-            string actualVersion = string.Format(
+            string actualVersion = version.ToString(4);
+            Assert(actualVersion == expectedVersion,
+                "제품 EXE 버전이 빌드 요청 버전과 일치하지 않습니다.");
+        }
+
+        private static void AssertApplicationVersionPresentation(
+            Assembly application,
+            Type mainFormType,
+            string expectedDisplayVersion)
+        {
+            const BindingFlags flags = BindingFlags.Static
+                | BindingFlags.NonPublic;
+            MethodInfo semanticMethod = mainFormType.GetMethod(
+                "GetApplicationSemanticVersion",
+                flags);
+            MethodInfo displayMethod = mainFormType.GetMethod(
+                "GetApplicationDisplayVersion",
+                flags);
+            Assert(semanticMethod != null && displayMethod != null,
+                "업데이트용·표시용 버전 경계를 찾지 못했습니다.");
+            Version version = application.GetName().Version;
+            string expectedSemanticVersion = string.Format(
                 "{0}.{1}.{2}",
                 version.Major,
                 version.Minor,
                 version.Build);
-            Assert(actualVersion == expectedVersion,
-                "제품 EXE 버전이 빌드 요청 버전과 일치하지 않습니다.");
+            Assert(Convert.ToString(semanticMethod.Invoke(null, null))
+                    == expectedSemanticVersion,
+                "공개 업데이트 채널은 3자리 SemVer를 유지해야 합니다.");
+            Assert(Convert.ToString(displayMethod.Invoke(null, null))
+                    == expectedDisplayVersion,
+                "표시 버전은 0인 네 번째 자리를 생략하고 작업 이력 버전은 유지해야 합니다.");
+        }
+
+        private static void AssertApplicationVersionLabel(
+            Form mainForm,
+            string expectedDisplayVersion)
+        {
+            Label versionLabel = null;
+            foreach (Label label in FindControls<Label>(mainForm))
+            {
+                if (!string.Equals(
+                    label.Text,
+                    "v" + expectedDisplayVersion,
+                    StringComparison.Ordinal)) continue;
+                versionLabel = label;
+                break;
+            }
+            Assert(versionLabel != null
+                    && versionLabel.Text == "v" + expectedDisplayVersion
+                    && versionLabel.Parent != null
+                    && versionLabel.Visible
+                    && versionLabel.Parent.ClientRectangle.Contains(versionLabel.Bounds),
+                "메인 헤더의 4자리 작업 이력 버전이 실제 표시 영역 안에 완전히 배치되지 않았습니다.");
         }
 
         private static void AssertDeferredBuildIdentity(Assembly application)
@@ -478,10 +536,10 @@ namespace TarkovServerReporter.Tests
 
             string[] expectedRows =
             {
-                "Streets of Tarkov · PvP시즌1 · PMC · 2인",
+                "Streets of Tarkov · PvP/S1 · PMC · 2인",
                 "Bay 5 · CheckPoint",
                 "Woods · PvE(서버) · 스캐브 · 3인",
-                "Factory · PvE(로컬) · PMC · 솔로"
+                "Factory · PvE(로컬) · PMC · 단독"
             };
             foreach (string expected in expectedRows)
             {
@@ -533,12 +591,12 @@ namespace TarkovServerReporter.Tests
                 BindingFlags.Static | BindingFlags.NonPublic);
             Assert(formatter != null, "레이드 문맥 표시 생성기를 찾지 못했습니다.");
             Assert(Convert.ToString(formatter.Invoke(null, new[] { partial }))
-                    == "Factory · PvP시즌2 · 솔로",
+                    == "Factory · PvP/S2 · 단독",
                 "알 수 없는 캐릭터는 생략하고 확인된 참가 형태만 표시해야 합니다.");
             SetEnumProperty(partial, "ParticipationType", "Unknown");
             SetEnumProperty(partial, "CharacterType", "Pmc");
             Assert(Convert.ToString(formatter.Invoke(null, new[] { partial }))
-                    == "Factory · PvP시즌2 · PMC",
+                    == "Factory · PvP/S2 · PMC",
                 "알 수 없는 참가 형태는 생략하고 확인된 캐릭터만 표시해야 합니다.");
         }
 
@@ -794,6 +852,166 @@ namespace TarkovServerReporter.Tests
                 refreshActionCellsMethod,
                 reapplySortMethod,
                 raiseHeaderClickMethod);
+        }
+
+        private static void AssertRapidHistoryScrollKeepsStickyActionsStable(
+            Type mainFormType,
+            Form mainForm,
+            DataGridView historyGrid)
+        {
+            const BindingFlags instanceFlags = BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic;
+            var stickyGrid = GetInstanceField<DataGridView>(
+                mainFormType,
+                mainForm,
+                "_stickyActionGrid");
+            MethodInfo syncRows = mainFormType.GetMethod(
+                "SyncStickyActionRows",
+                instanceFlags);
+            MethodInfo scrollHandler = mainFormType.GetMethod(
+                "HistoryGridScroll",
+                instanceFlags);
+            MethodInfo wheelHandler = mainFormType.GetMethod(
+                "ScrollHistoryRowsFromStickyActions",
+                instanceFlags);
+            FieldInfo layoutPending = mainFormType.GetField(
+                "_stickyActionLayoutUpdatePending",
+                instanceFlags);
+            Assert(stickyGrid != null && syncRows != null && scrollHandler != null
+                    && wheelHandler != null && layoutPending != null,
+                "고정 작업 그리드의 스크롤 안정성 검증 경계를 찾지 못했습니다.");
+
+            PropertyInfo doubleBuffered = typeof(Control).GetProperty(
+                "DoubleBuffered",
+                instanceFlags);
+            Assert(doubleBuffered != null
+                    && Convert.ToBoolean(doubleBuffered.GetValue(historyGrid, null))
+                    && Convert.ToBoolean(doubleBuffered.GetValue(stickyGrid, null)),
+                "메인 표와 고정 작업 표 모두 이중 버퍼링을 사용해야 합니다.");
+
+            mainForm.Size = new Size(
+                Math.Max(1200, mainForm.Width),
+                Math.Max(1000, mainForm.Height));
+            mainForm.PerformLayout();
+            Application.DoEvents();
+
+            const int rowCount = 120;
+            if (historyGrid.Rows.Count < rowCount)
+                historyGrid.Rows.Add(rowCount - historyGrid.Rows.Count);
+            historyGrid.RowTemplate.Height = 38;
+            stickyGrid.RowTemplate.Height = 38;
+            foreach (DataGridViewRow row in historyGrid.Rows) row.Height = 38;
+
+            DataGridViewColumn resultColumn = historyGrid.Columns["result"];
+            resultColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            resultColumn.Width = Math.Max(640, resultColumn.Width);
+            var overflowColumn = new DataGridViewTextBoxColumn
+            {
+                Name = "scrollStabilityOverflow",
+                HeaderText = "",
+                Width = Math.Max(1600, historyGrid.ClientSize.Width),
+                SortMode = DataGridViewColumnSortMode.NotSortable
+            };
+            historyGrid.Columns.Add(overflowColumn);
+            overflowColumn.DisplayIndex = historyGrid.Columns["stickyActionSpacer"].DisplayIndex;
+            syncRows.Invoke(mainForm, null);
+            mainForm.PerformLayout();
+            Application.DoEvents();
+
+            HScrollBar horizontal = null;
+            foreach (Control child in historyGrid.Controls)
+            {
+                var candidate = child as HScrollBar;
+                if (candidate != null && candidate.Visible)
+                {
+                    horizontal = candidate;
+                    break;
+                }
+            }
+            Assert(horizontal != null,
+                "가로 스크롤바가 표시된 조건에서 고정 작업 표를 검증해야 합니다. "
+                + "ScrollBars=" + historyGrid.ScrollBars
+                + ", Client=" + historyGrid.ClientSize
+                + ", ColumnsWidth=" + historyGrid.Columns.GetColumnsWidth(
+                    DataGridViewElementStates.Visible)
+                + ", ChildCount=" + historyGrid.Controls.Count);
+            Assert(historyGrid.Rows.Count == stickyGrid.Rows.Count
+                    && historyGrid.Rows.Count >= rowCount,
+                "빠른 스크롤 검증에 필요한 다수 행이 두 표에 동기화되지 않았습니다.");
+
+            Rectangle stableBounds = stickyGrid.Bounds;
+            int boundsChanges = 0;
+            EventHandler boundsChanged = delegate { boundsChanges++; };
+            stickyGrid.LocationChanged += boundsChanged;
+            stickyGrid.SizeChanged += boundsChanged;
+            try
+            {
+                for (int rowIndex = 1; rowIndex < 90; rowIndex += 3)
+                    historyGrid.FirstDisplayedScrollingRowIndex = rowIndex;
+                Application.DoEvents();
+                AssertStickyScrollAlignment(historyGrid, stickyGrid, "빠른 세로 스크롤");
+
+                for (int index = 0; index < 40; index++)
+                {
+                    scrollHandler.Invoke(mainForm, new object[]
+                    {
+                        historyGrid,
+                        new ScrollEventArgs(
+                            ScrollEventType.ThumbTrack,
+                            index,
+                            ScrollOrientation.VerticalScroll)
+                    });
+                }
+                Assert(!Convert.ToBoolean(layoutPending.GetValue(mainForm)),
+                    "세로 스크롤은 고정 작업 영역의 레이아웃 갱신을 예약하면 안 됩니다.");
+
+                wheelHandler.Invoke(mainForm, new object[]
+                {
+                    -SystemInformation.MouseWheelScrollDelta * 3
+                });
+                Application.DoEvents();
+                AssertStickyScrollAlignment(historyGrid, stickyGrid, "마우스 휠 스크롤");
+
+                historyGrid.FirstDisplayedScrollingRowIndex = historyGrid.Rows.Count - 1;
+                Application.DoEvents();
+                AssertStickyScrollAlignment(historyGrid, stickyGrid, "목록 끝 이동");
+                Assert(boundsChanges == 0 && stickyGrid.Bounds == stableBounds,
+                    "세로 스크롤 중 고정 작업 영역의 크기나 위치가 다시 계산되었습니다.");
+
+                for (int index = 0; index < 30; index++)
+                {
+                    scrollHandler.Invoke(mainForm, new object[]
+                    {
+                        historyGrid,
+                        new ScrollEventArgs(
+                            ScrollEventType.ThumbTrack,
+                            index,
+                            ScrollOrientation.HorizontalScroll)
+                    });
+                }
+                Assert(Convert.ToBoolean(layoutPending.GetValue(mainForm)),
+                    "가로 관련 변경은 지연된 레이아웃 확인을 예약해야 합니다.");
+                Application.DoEvents();
+                Assert(!Convert.ToBoolean(layoutPending.GetValue(mainForm))
+                        && stickyGrid.Bounds == stableBounds,
+                    "연속 가로 스크롤의 레이아웃 확인은 한 UI 주기로 합쳐져야 합니다.");
+            }
+            finally
+            {
+                stickyGrid.LocationChanged -= boundsChanged;
+                stickyGrid.SizeChanged -= boundsChanged;
+            }
+        }
+
+        private static void AssertStickyScrollAlignment(
+            DataGridView historyGrid,
+            DataGridView stickyGrid,
+            string step)
+        {
+            Assert(historyGrid.FirstDisplayedScrollingRowIndex
+                    == stickyGrid.FirstDisplayedScrollingRowIndex,
+                step + " 후 메인 표와 고정 작업 표의 첫 표시 행이 다릅니다.");
         }
 
         private static void AssertActionSortUsesCurrentRenderedState(
@@ -1244,7 +1462,7 @@ namespace TarkovServerReporter.Tests
                 null,
                 new object[] { "203.0.113.42", true }));
             string expectedSuccessMessage =
-                "203.0.113.42 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n"
+                "203.0.113.42 서버 차단을 적용했습니다.\r\n"
                 + rulesPersistLine;
             Assert(successMessage == expectedSuccessMessage,
                 "일반 차단 성공 상태의 두 줄 문구가 확정안과 정확히 일치해야 합니다.");
@@ -1321,7 +1539,7 @@ namespace TarkovServerReporter.Tests
                 null,
                 new[] { (object)"203.0.113.42", true, evidence }));
             string expectedEvidenceMessage =
-                "203.0.113.42 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n"
+                "203.0.113.42 서버 차단을 적용했습니다.\r\n"
                 + "최근 레이드 100개 중 이 IP가 사용된 7개를 확인했고, 그중 3개에서 "
                 + "높은 지연·패킷 손실·시간초과 징후가 확인되었습니다.\r\n"
                 + rulesPersistLine;
@@ -1835,6 +2053,217 @@ namespace TarkovServerReporter.Tests
             Assert(field != null && field.FieldType == typeof(string),
                 "안내 문구 필드를 찾지 못했습니다: " + fieldName);
             return Convert.ToString(field.GetValue(null));
+        }
+
+        private static void AssertEnglishMainSmoke(
+            Assembly application,
+            Type mainFormType,
+            ConstructorInfo constructor)
+        {
+            const BindingFlags staticFlags = BindingFlags.Static
+                | BindingFlags.Public
+                | BindingFlags.NonPublic;
+            const BindingFlags instanceFlags = BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic;
+            Type appTextType = application.GetType("TarkovServerReporter.AppText", true);
+            MethodInfo setLanguage = appTextType.GetMethod("SetLanguage", staticFlags);
+            PropertyInfo currentLanguage = appTextType.GetProperty("CurrentLanguage", staticFlags);
+            Assert(setLanguage != null && currentLanguage != null,
+                "영어 메인 화면 검증에 필요한 AppText API를 찾지 못했습니다.");
+
+            string originalLanguage = Convert.ToString(currentLanguage.GetValue(null, null));
+            try
+            {
+                Assert(Convert.ToBoolean(setLanguage.Invoke(null, new object[] { "en" })),
+                    "영어 언어를 선택하지 못했습니다.");
+                using (var form = (Form)constructor.Invoke(new object[] { true }))
+                {
+                    form.StartPosition = FormStartPosition.Manual;
+                    form.Location = new Point(-10000, -10000);
+                    form.ShowInTaskbar = false;
+                    form.Show();
+                    Application.DoEvents();
+
+                    var queryButton = GetInstanceField<Button>(mainFormType, form, "_queryButton");
+                    var blockedButton = GetInstanceField<Button>(mainFormType, form, "_blockedServersButton");
+                    var notesButton = GetInstanceField<Button>(mainFormType, form, "_notesArchiveButton");
+                    var settingsButton = GetInstanceField<Button>(mainFormType, form, "_settingsButton");
+                    var statusLabel = GetInstanceField<Label>(mainFormType, form, "_statusLabel");
+                    var eftPath = GetInstanceField<TextBox>(mainFormType, form, "_eftPathTextBox");
+                    var arenaPath = GetInstanceField<TextBox>(mainFormType, form, "_arenaPathTextBox");
+                    var launcherSelection = GetInstanceField<Label>(
+                        mainFormType,
+                        form,
+                        "_launcherSelectionLabel");
+                    var historyGrid = GetInstanceField<DataGridView>(mainFormType, form, "_historyGrid");
+                    var stickyGrid = GetInstanceField<DataGridView>(mainFormType, form, "_stickyActionGrid");
+                    var toolTip = GetInstanceField<ToolTip>(mainFormType, form, "_toolTip");
+
+                    Assert(queryButton.Text == "Scan", "영어 메인의 조회 동작은 Scan이어야 합니다.");
+                    Assert(blockedButton.Text == "Blocked Servers",
+                        "영어 메인의 서버차단현황 버튼 문구가 자연스럽지 않습니다.");
+                    Assert(notesButton.Text == "Saved Notes",
+                        "영어 메인의 메모 보관함 버튼 문구가 복원된 기능과 맞지 않습니다.");
+                    Assert(settingsButton.Text == "Settings",
+                        "영어 화면의 언어 설정 진입점은 Settings로 표시해야 합니다.");
+                    Assert(statusLabel.Text.StartsWith("Preview sample.", StringComparison.Ordinal),
+                        "영어 미리보기 상태 문구가 적용되지 않았습니다.");
+                    Assert(eftPath.Text.EndsWith("(Preview)", StringComparison.Ordinal)
+                            && arenaPath.Text.EndsWith("(Preview)", StringComparison.Ordinal),
+                        "영어 미리보기 경로 표식이 적용되지 않았습니다.");
+                    Assert(launcherSelection.Text.StartsWith(
+                            "Server Selection",
+                            StringComparison.Ordinal),
+                        "게임런처 선택 서버 문구가 영어로 표시되지 않았습니다.");
+                    Label privacyNotice = null;
+                    foreach (Label label in FindControls<Label>(form))
+                    {
+                        if (label.Text != null
+                            && label.Text.StartsWith("Logs, account data", StringComparison.Ordinal))
+                        {
+                            privacyNotice = label;
+                            break;
+                        }
+                    }
+                    Assert(privacyNotice != null
+                            && privacyNotice.Text.Split(new[] { "\r\n" }, StringSplitOptions.None).Length == 6
+                            && privacyNotice.Width > 300
+                            && privacyNotice.Height > 40,
+                        "영어 개인정보 안내는 여섯 줄 전체가 보이는 셀 크기를 사용해야 합니다.");
+
+                    Assert(historyGrid.Columns["mapMode"].HeaderText == "Map · Game Type",
+                        "영어 맵·게임유형 열 제목이 올바르지 않습니다.");
+                    Assert(historyGrid.Columns["result"].HeaderText == "Connection\r\nResult",
+                        "영어 서버 연결 결과 열 제목이 올바르지 않습니다.");
+                    Assert(stickyGrid.Columns["blockAction"].HeaderText == "Block"
+                            && stickyGrid.Columns["unblockAction"].HeaderText == "Unblock",
+                        "영어 고정 접속 제어 열 제목이 올바르지 않습니다.");
+                    Assert(stickyGrid.Columns["unblockAction"].Width >= 50,
+                        "영어 Unblock 열 제목이 생략되지 않을 폭을 확보해야 합니다.");
+                    Assert(historyGrid.Rows.Count > 0
+                            && Convert.ToString(historyGrid.Rows[0].Cells["mapMode"].Value)
+                                .Contains("PvP/S1")
+                            && Convert.ToString(historyGrid.Rows[0].Cells["mapMode"].Value)
+                                .Contains("Party of 2"),
+                        "저장값을 변경하지 않는 영어 레이드 유형 표시가 적용되지 않았습니다.");
+
+                    AssertNoUnexpectedHangul(form.Text, "form title");
+                    foreach (Control control in FindControls<Control>(form))
+                    {
+                        if (!(control is TextBoxBase))
+                            AssertNoUnexpectedHangul(control.Text, "control text: " + control.Name);
+                        // WinForms creates native DataGridView scroll bars whose
+                        // accessibility names come from the Windows display language,
+                        // not from application resources.
+                        if (!(control is ScrollBar))
+                        {
+                            AssertNoUnexpectedHangul(
+                                control.AccessibleName,
+                                "accessible name: " + control.Name);
+                            AssertNoUnexpectedHangul(
+                                control.AccessibleDescription,
+                                "accessible description: " + control.Name);
+                        }
+                        AssertNoUnexpectedHangul(
+                            toolTip.GetToolTip(control),
+                            "tooltip: " + control.Name);
+                    }
+                    AssertGridHasNoUnexpectedHangul(historyGrid, "history grid");
+                    AssertGridHasNoUnexpectedHangul(stickyGrid, "connection-controls grid");
+
+                    MethodInfo showRegionMenu = mainFormType.GetMethod(
+                        "ShowRegionFilterMenu",
+                        instanceFlags);
+                    Assert(showRegionMenu != null, "지역 필터 메뉴 표시 경로를 찾지 못했습니다.");
+                    showRegionMenu.Invoke(form, null);
+                    Application.DoEvents();
+                    var regionMenu = GetInstanceField<ContextMenuStrip>(
+                        mainFormType,
+                        form,
+                        "_regionFilterMenu");
+                    AssertNoUnexpectedHangul(
+                        regionMenu.AccessibleName,
+                        "region menu accessible name");
+                    foreach (ToolStripItem item in regionMenu.Items)
+                        AssertToolStripItemHasNoUnexpectedHangul(item, "region menu");
+                    regionMenu.Close(ToolStripDropDownCloseReason.CloseCalled);
+                }
+            }
+            finally
+            {
+                setLanguage.Invoke(null, new object[] {
+                    string.IsNullOrWhiteSpace(originalLanguage) ? "ko-KR" : originalLanguage
+                });
+            }
+        }
+
+        private static TControl GetInstanceField<TControl>(
+            Type ownerType,
+            object owner,
+            string fieldName)
+            where TControl : class
+        {
+            FieldInfo field = ownerType.GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var value = field == null ? null : field.GetValue(owner) as TControl;
+            Assert(value != null, "메인 화면 필드를 찾지 못했습니다: " + fieldName);
+            return value;
+        }
+
+        private static void AssertGridHasNoUnexpectedHangul(DataGridView grid, string context)
+        {
+            foreach (DataGridViewColumn column in grid.Columns)
+            {
+                AssertNoUnexpectedHangul(column.HeaderText, context + " header " + column.Name);
+                AssertNoUnexpectedHangul(column.ToolTipText, context + " header tooltip " + column.Name);
+            }
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                foreach (DataGridViewCell cell in row.Cells)
+                {
+                    AssertNoUnexpectedHangul(
+                        Convert.ToString(cell.Value),
+                        context + " cell " + cell.ColumnIndex);
+                    AssertNoUnexpectedHangul(
+                        cell.ToolTipText,
+                        context + " cell tooltip " + cell.ColumnIndex);
+                }
+            }
+        }
+
+        private static void AssertToolStripItemHasNoUnexpectedHangul(
+            ToolStripItem item,
+            string context)
+        {
+            if (item == null) return;
+            AssertNoUnexpectedHangul(item.Text, context + " item");
+            var dropDownItem = item as ToolStripDropDownItem;
+            if (dropDownItem == null) return;
+            foreach (ToolStripItem child in dropDownItem.DropDownItems)
+                AssertToolStripItemHasNoUnexpectedHangul(child, context);
+        }
+
+        private static void AssertNoUnexpectedHangul(string value, string context)
+        {
+            if (string.IsNullOrEmpty(value)
+                || string.Equals(value, "한국어", StringComparison.Ordinal)) return;
+            Assert(!ContainsHangul(value), context + "에 번역되지 않은 한글이 남았습니다: " + value);
+        }
+
+        private static bool ContainsHangul(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+            foreach (char character in value)
+            {
+                if ((character >= '\u1100' && character <= '\u11FF')
+                    || (character >= '\u3130' && character <= '\u318F')
+                    || (character >= '\uAC00' && character <= '\uD7A3')
+                    || (character >= '\uFFA0' && character <= '\uFFDC'))
+                    return true;
+            }
+            return false;
         }
 
         private static Control FindControlByName(Control root, string name)

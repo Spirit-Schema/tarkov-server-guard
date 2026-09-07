@@ -36,7 +36,7 @@ namespace TarkovServerReporter
 
         public UsageNoticeForm()
         {
-            Text = "사용방법";
+            Text = AppText.Get("Usage.WindowTitle");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
@@ -49,8 +49,8 @@ namespace TarkovServerReporter
             ForeColor = TextPrimary;
             Font = new Font("Malgun Gothic", 9F, FontStyle.Regular, GraphicsUnit.Point);
             Padding = new Padding(1);
-            AccessibleName = "Tarkov Server Guard 사용방법";
-            AccessibleDescription = NoticeText;
+            AccessibleName = AppText.Get("Usage.AccessibleName");
+            AccessibleDescription = BuildLocalizedNoticeText();
 
             var outer = new Panel
             {
@@ -98,7 +98,7 @@ namespace TarkovServerReporter
             content.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "사용방법",
+                Text = AppText.Get("Usage.WindowTitle"),
                 Font = new Font("Malgun Gothic", 16F, FontStyle.Bold),
                 ForeColor = AccentBright,
                 BackColor = Background,
@@ -147,7 +147,7 @@ namespace TarkovServerReporter
 
             var confirmButton = new Button
             {
-                Text = "확인",
+                Text = AppText.Get("Usage.Confirm"),
                 DialogResult = DialogResult.OK,
                 Size = new Size(104, 38),
                 BackColor = Accent,
@@ -197,17 +197,48 @@ namespace TarkovServerReporter
             notice.RowStyles.Add(new RowStyle(SizeType.Percent, 18F));
             notice.RowStyles.Add(new RowStyle(SizeType.Percent, 2.5F));
             notice.RowStyles.Add(new RowStyle(SizeType.Percent, 17.5F));
-            notice.Controls.Add(CreateBodyLabel("- " + MatchLine + "\r\n  " + ErrorLine), 0, 0);
-            notice.Controls.Add(CreateBodyLabel("- " + NormalLine), 0, 2);
-            notice.Controls.Add(CreateStepBlock(
-                new[] { "1. 접속실패가 표시되면 ", "종료", " 대신" },
-                new[] { "   ", "ESCAPE FROM TARKOV", " 선택" }), 0, 4);
-            notice.Controls.Add(CreateStepBlock(
-                new[] { "2. 다음 화면에서 ", "재진입", " 대신" },
-                new[] { "   ", "나가기 확인", " 선택 (장비는 보존됩니다)" }), 0, 6);
             notice.Controls.Add(CreateBodyLabel(
-                "3. 축하합니다! 차단한 서버로의 접속을 막았습니다.\r\n   다시 매칭해 주세요."), 0, 8);
+                "- " + AppText.Get("Usage.MatchLine") + "\r\n  "
+                    + AppText.Get("Usage.ErrorLine")), 0, 0);
+            notice.Controls.Add(CreateBodyLabel("- " + AppText.Get("Usage.NormalLine")), 0, 2);
+            notice.Controls.Add(CreateStepBlock(
+                new[] {
+                    AppText.Get("Usage.Step1.Prefix"),
+                    AppText.Get("Usage.Step1.Avoid"),
+                    AppText.Get("Usage.Step1.Middle")
+                },
+                new[] {
+                    "   ",
+                    AppText.Get("Usage.Step1.Action"),
+                    AppText.Get("Usage.Step1.Suffix")
+                }), 0, 4);
+            notice.Controls.Add(CreateStepBlock(
+                new[] {
+                    AppText.Get("Usage.Step2.Prefix"),
+                    AppText.Get("Usage.Step2.Avoid"),
+                    AppText.Get("Usage.Step2.Middle")
+                },
+                new[] {
+                    "   ",
+                    AppText.Get("Usage.Step2.Action"),
+                    AppText.Get("Usage.Step2.Suffix")
+                }), 0, 6);
+            notice.Controls.Add(CreateBodyLabel(AppText.Get("Usage.Step3")), 0, 8);
             return notice;
+        }
+
+        private static string BuildLocalizedNoticeText()
+        {
+            return "- " + AppText.Get("Usage.MatchLine") + "\r\n"
+                + "  " + AppText.Get("Usage.ErrorLine") + "\r\n\r\n"
+                + "- " + AppText.Get("Usage.NormalLine") + "\r\n\r\n\r\n"
+                + AppText.Get("Usage.Step1.Prefix") + AppText.Get("Usage.Step1.Avoid")
+                + AppText.Get("Usage.Step1.Middle") + AppText.Get("Usage.Step1.Action")
+                + AppText.Get("Usage.Step1.Suffix") + "\r\n\r\n"
+                + AppText.Get("Usage.Step2.Prefix") + AppText.Get("Usage.Step2.Avoid")
+                + AppText.Get("Usage.Step2.Middle") + AppText.Get("Usage.Step2.Action")
+                + AppText.Get("Usage.Step2.Suffix") + "\r\n\r\n"
+                + AppText.Get("Usage.Step3").Replace("\r\n   ", " ");
         }
 
         private static Label CreateBodyLabel(string text)
@@ -261,10 +292,10 @@ namespace TarkovServerReporter
 
         private static bool IsInlineToken(string text)
         {
-            return string.Equals(text, "종료", StringComparison.Ordinal)
-                || string.Equals(text, "ESCAPE FROM TARKOV", StringComparison.Ordinal)
-                || string.Equals(text, "재진입", StringComparison.Ordinal)
-                || string.Equals(text, "나가기 확인", StringComparison.Ordinal);
+            return string.Equals(text, AppText.Get("Usage.Step1.Avoid"), StringComparison.Ordinal)
+                || string.Equals(text, AppText.Get("Usage.Step1.Action"), StringComparison.Ordinal)
+                || string.Equals(text, AppText.Get("Usage.Step2.Avoid"), StringComparison.Ordinal)
+                || string.Equals(text, AppText.Get("Usage.Step2.Action"), StringComparison.Ordinal);
         }
 
         private static TableLayoutPanel CreateStepBlock(

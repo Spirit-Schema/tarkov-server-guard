@@ -15,6 +15,7 @@ namespace TarkovServerReporter
     public class BrandedForm : Form
     {
         private readonly Icon _applicationIcon;
+        private bool _localizationApplied;
 
         public BrandedForm()
         {
@@ -27,6 +28,19 @@ namespace TarkovServerReporter
         {
             base.OnHandleCreated(e);
             NativeDarkTheme.RefreshForSystemTheme(this, true);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            // Existing forms construct their controls before they are shown. Apply
+            // the compatibility translation once so Shown handlers and assistive
+            // technology observe the selected language from the first frame.
+            if (!_localizationApplied)
+            {
+                _localizationApplied = true;
+                UiLocalization.Apply(this);
+            }
+            base.OnShown(e);
         }
 
         protected override void OnActivated(EventArgs e)

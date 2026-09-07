@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -35,8 +35,7 @@ namespace TarkovServerReporter
             for (int index = 1; index <= count; index++)
             {
                 if (builder.Length > 0) builder.AppendLine();
-                builder.Append(index);
-                builder.Append(". 유저네임:                         신고사유:");
+                builder.Append(AppText.Format("UserReport.TemplateLine", index));
             }
             return builder.ToString();
         }
@@ -57,6 +56,7 @@ namespace TarkovServerReporter
 
         private readonly ServerSession _session;
         private readonly UserReportMemoStore _store;
+        private readonly bool _readOnly;
         private readonly List<EntryEditor> _entryEditors = new List<EntryEditor>();
         private UserReportMemoRecord _record;
         private readonly bool _existedAtOpen;
@@ -65,6 +65,8 @@ namespace TarkovServerReporter
         private TableLayoutPanel _editorLayout;
         private Label _timestampLabel;
         private Label _statusLabel;
+        private Button _saveButton;
+        private Button _deleteButton;
         private bool _loading;
         private bool _dirty;
 
@@ -74,6 +76,7 @@ namespace TarkovServerReporter
             if (store == null) throw new ArgumentNullException("store");
             _session = session;
             _store = store;
+            _readOnly = false;
             _record = _store.Load(session);
             _existedAtOpen = _record != null;
             if (_record == null) _record = _store.CreateFor(session);
@@ -85,19 +88,29 @@ namespace TarkovServerReporter
         }
 
         public UserReportMemoForm(UserReportMemoRecord record, UserReportMemoStore store)
+            : this(record, store, false)
+        {
+        }
+
+        public UserReportMemoForm(
+            UserReportMemoRecord record,
+            UserReportMemoStore store,
+            bool readOnly)
         {
             if (record == null) throw new ArgumentNullException("record");
             if (store == null) throw new ArgumentNullException("store");
             if (string.IsNullOrWhiteSpace(record.Key))
-                throw new ArgumentException("저장된 유저신고 메모 키가 없습니다.", "record");
+                throw new ArgumentException(AppText.Get("UserReport.MissingRecordKey"), "record");
             _session = null;
             _store = store;
+            _readOnly = readOnly;
             _record = record;
             _existedAtOpen = true;
 
             InitializeWindow();
             BuildInterface();
             LoadRecord();
+            ApplyReadOnlyMode();
             FormClosing += UserReportMemoFormClosing;
         }
 
@@ -105,7 +118,7 @@ namespace TarkovServerReporter
 
         private void InitializeWindow()
         {
-            Text = "유저신고 메모";
+            Text = AppText.Get("Memo.Legacy.UserReportTitle");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(820, 560);
             MinimumSize = new Size(680, 450);
@@ -139,7 +152,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(1, 0),
-                Text = "유저신고 메모",
+                Text = AppText.Get("Memo.Legacy.UserReportTitle"),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = TextPrimary
             });
@@ -184,11 +197,10 @@ namespace TarkovServerReporter
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = TextMuted,
-                Font = new Font("Malgun Gothic", 7.5F),
+                Font = new Font("Malgun Gothic", AppText.CurrentLanguage == AppText.EnglishLanguage ? 8.5F : 7.5F),
                 AutoEllipsis = false,
                 Margin = new Padding(0, 3, 0, 3),
-                Text = "유저네임·신고사유·게임·맵·레이드 시각·신고 건수만 로컬 저장합니다.\r\n"
-                    + "게임 로그 원문·계정 ID·SID·경로는 저장·전송하지 않습니다."
+                Text = AppText.Get("UserReport.Privacy")
             };
             root.Controls.Add(_statusLabel, 0, 3);
 
@@ -202,20 +214,22 @@ namespace TarkovServerReporter
                 Margin = new Padding(0),
                 Padding = new Padding(0, 7, 0, 0)
             };
-            Button close = CreateButton("닫기", false, false);
-            Button save = CreateButton("저장", true, false);
-            Button delete = CreateButton("삭제", false, true);
-            Button folder = CreateButton("보관 폴더 열기", false, false);
+            Button close = CreateButton(AppText.Get("Common.Button.Close"), false, false);
+            _saveButton = CreateButton(AppText.Get("Common.Button.Save"), true, false);
+            _saveButton.Name = "UserReportMemoSaveButton";
+            _deleteButton = CreateButton(AppText.Get("Common.Button.Delete"), false, true);
+            _deleteButton.Name = "UserReportMemoDeleteButton";
+            Button folder = CreateButton(AppText.Get("UserReport.OpenFolder"), false, false);
             close.Click += delegate { Close(); };
-            save.Click += delegate
+            _saveButton.Click += delegate
             {
                 if (SaveMemo()) Close();
             };
-            delete.Click += delegate { DeleteMemo(); };
+            _deleteButton.Click += delegate { DeleteMemo(); };
             folder.Click += delegate { OpenMemoFolder(); };
             buttons.Controls.Add(close);
-            buttons.Controls.Add(save);
-            buttons.Controls.Add(delete);
+            buttons.Controls.Add(_saveButton);
+            buttons.Controls.Add(_deleteButton);
             buttons.Controls.Add(folder);
             root.Controls.Add(buttons, 0, 4);
         }
@@ -226,14 +240,12 @@ namespace TarkovServerReporter
             int visibleCount = GetVisibleEntryCount();
             if (reportCount > visibleCount)
             {
-                return string.Format(
-                    "성공 확인된 신고 {0}건 · 화면 과부하를 막기 위해 앞의 {1}건을 표시합니다.",
+                return AppText.Format(
+                    "UserReport.SummaryLimited",
                     reportCount,
                     visibleCount);
             }
-            return string.Format(
-                "성공 확인된 신고 {0}건 · 일반 레이드 메모와 함께 메모보관함에 저장됩니다.",
-                reportCount);
+            return AppText.Format("UserReport.Summary", reportCount);
         }
 
         private Control BuildStructuredEditor()
@@ -253,7 +265,7 @@ namespace TarkovServerReporter
             surface.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "신고 정보",
+                Text = AppText.Get("UserReport.Section"),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(10, 0, 0, 0),
                 ForeColor = TextPrimary,
@@ -309,7 +321,7 @@ namespace TarkovServerReporter
             row.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = (index + 1) + ". 유저네임:",
+                Text = AppText.Format("UserReport.PlayerLabel", index + 1),
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = TextMuted,
                 Margin = new Padding(0),
@@ -321,7 +333,7 @@ namespace TarkovServerReporter
             row.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "신고사유:",
+                Text = AppText.Get("UserReport.ReasonLabel"),
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = TextMuted,
                 Margin = new Padding(0),
@@ -377,7 +389,7 @@ namespace TarkovServerReporter
             layout.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "기존 메모 (v0.6.6) · 원문을 그대로 보존합니다.",
+                Text = AppText.Get("UserReport.Legacy"),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(10, 0, 0, 0),
                 ForeColor = TextMuted
@@ -471,8 +483,28 @@ namespace TarkovServerReporter
             }
         }
 
+        private void ApplyReadOnlyMode()
+        {
+            if (!_readOnly) return;
+            foreach (EntryEditor editor in _entryEditors)
+            {
+                editor.Nickname.ReadOnly = true;
+                editor.Reason.ReadOnly = true;
+            }
+            _legacyMemoTextBox.ReadOnly = true;
+            _saveButton.Enabled = false;
+            _deleteButton.Enabled = false;
+            string notice = AppText.Get("Memo.Legacy.ReadOnlySourceNotice");
+            _statusLabel.Text = notice;
+            _statusLabel.ForeColor = Accent;
+            _statusLabel.AccessibleName = notice;
+            _saveButton.AccessibleDescription = notice;
+            _deleteButton.AccessibleDescription = notice;
+        }
+
         private bool SaveMemo()
         {
+            if (_readOnly) return false;
             try
             {
                 var entries = new List<UserReportMemoEntry>();
@@ -505,18 +537,19 @@ namespace TarkovServerReporter
                 _dirty = false;
                 Changed = true;
                 UpdateTimestampText(true);
-                ShowStatus("유저신고 메모를 저장했습니다.", TextMuted);
+                ShowStatus(AppText.Get("UserReport.Saved"), TextMuted);
                 return true;
             }
             catch (Exception exception)
             {
-                ShowStatus("저장하지 못했습니다: " + exception.Message, Danger);
+                ShowStatus(AppText.Format("UserReport.SaveFailed", AppText.TranslateDiagnostic(exception.Message, null)), Danger);
                 return false;
             }
         }
 
         private void DeleteMemo()
         {
+            if (_readOnly) return;
             bool exists = _session == null
                 ? _store.Exists(_record.Key)
                 : _store.Exists(_session);
@@ -524,18 +557,18 @@ namespace TarkovServerReporter
             {
                 if (_session == null)
                 {
-                    ShowStatus("저장된 유저신고 메모가 없습니다.", TextMuted);
+                    ShowStatus(AppText.Get("UserReport.NoSaved"), TextMuted);
                     return;
                 }
                 ClearEditors();
-                ShowStatus("저장된 유저신고 메모가 없습니다.", TextMuted);
+                ShowStatus(AppText.Get("UserReport.NoSaved"), TextMuted);
                 return;
             }
 
             DialogResult result = MessageBox.Show(
                 this,
-                "이 유저신고 메모를 삭제할까요? 일반 레이드 메모에는 영향을 주지 않습니다.",
-                "유저신고 메모 삭제",
+                AppText.Get("UserReport.DeletePrompt"),
+                AppText.Get("UserReport.DeleteTitle"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2);
@@ -558,11 +591,11 @@ namespace TarkovServerReporter
                 ClearEditors();
                 Changed = true;
                 UpdateTimestampText(false);
-                ShowStatus("유저신고 메모를 삭제했습니다.", TextMuted);
+                ShowStatus(AppText.Get("UserReport.Deleted"), TextMuted);
             }
             catch (Exception exception)
             {
-                ShowStatus("삭제하지 못했습니다: " + exception.Message, Danger);
+                ShowStatus(AppText.Format("UserReport.DeleteFailed", AppText.TranslateDiagnostic(exception.Message, null)), Danger);
             }
         }
 
@@ -595,7 +628,7 @@ namespace TarkovServerReporter
             }
             catch (Exception exception)
             {
-                ShowStatus("보관 폴더를 열지 못했습니다: " + exception.Message, Danger);
+                ShowStatus(AppText.Format("UserReport.OpenFolderFailed", AppText.TranslateDiagnostic(exception.Message, null)), Danger);
             }
         }
 
@@ -603,11 +636,11 @@ namespace TarkovServerReporter
         {
             if (!saved)
             {
-                _timestampLabel.Text = "생성: 저장 전 · 수정: 저장 전";
+                _timestampLabel.Text = AppText.Get("UserReport.TimestampUnsaved");
                 return;
             }
-            _timestampLabel.Text = string.Format(
-                "생성: {0:yyyy-MM-dd HH:mm:ss} · 수정: {1:yyyy-MM-dd HH:mm:ss}",
+            _timestampLabel.Text = AppText.Format(
+                "UserReport.Timestamp",
                 _record.CreatedUtc.ToLocalTime(),
                 _record.UpdatedUtc.ToLocalTime());
         }
@@ -620,11 +653,12 @@ namespace TarkovServerReporter
 
         private void UserReportMemoFormClosing(object sender, FormClosingEventArgs e)
         {
+            if (_readOnly) return;
             if (!_dirty) return;
             DialogResult result = MessageBox.Show(
                 this,
-                "변경한 유저신고 메모를 저장할까요?",
-                "저장 확인",
+                AppText.Get("UserReport.UnsavedPrompt"),
+                AppText.Get("UserReport.SaveConfirmTitle"),
                 MessageBoxButtons.YesNoCancel,
                 MessageBoxIcon.Question,
                 MessageBoxDefaultButton.Button1);

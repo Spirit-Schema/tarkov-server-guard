@@ -44,7 +44,7 @@ namespace TarkovServerReporter.Tests
                 "new sessions use backward-compatible unknown classification defaults");
             Assert(session.CharacterTypeText == string.Empty
                 && session.ParticipationTypeText == string.Empty
-                && session.RaidTypeAndParticipantText == "PvP시즌2",
+                && session.RaidTypeAndParticipantText == "PvP/S2",
                 "unknown character and participation values are omitted from display text");
 
             session.CharacterType = TarkovCharacterType.Scav;
@@ -52,16 +52,16 @@ namespace TarkovServerReporter.Tests
             session.PartySize = 3;
             Assert(session.CharacterTypeText == "스캐브"
                 && session.ParticipationTypeText == "3인"
-                && session.RaidTypeAndParticipantText == "PvP시즌2 · 스캐브 · 3인",
+                && session.RaidTypeAndParticipantText == "PvP/S2 · 스캐브 · 3인",
                 "display order is game type, character, then participation");
 
             session.PartySize = null;
-            Assert(session.RaidTypeAndParticipantText == "PvP시즌2 · 스캐브 · 파티",
+            Assert(session.RaidTypeAndParticipantText == "PvP/S2 · 스캐브 · 파티",
                 "a known party with unknown size safely falls back to party");
 
             session.CharacterType = TarkovCharacterType.Unknown;
             session.ParticipationType = TarkovParticipationType.Solo;
-            Assert(session.RaidTypeAndParticipantText == "PvP시즌2 · 솔로",
+            Assert(session.RaidTypeAndParticipantText == "PvP/S2 · 단독",
                 "only the unknown segment is omitted");
         }
 

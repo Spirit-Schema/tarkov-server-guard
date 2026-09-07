@@ -9,10 +9,64 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace TarkovServerReporter
 {
+    // Each memo's primary and backup form one write unit. Store instances and
+    // processes must serialize that unit, not just use different staging files.
+    internal sealed class MemoStoreWriteLease : IDisposable
+    {
+        private readonly Mutex _mutex;
+        private bool _ownsMutex;
+
+        private MemoStoreWriteLease(string name)
+        {
+            _mutex = new Mutex(false, name);
+        }
+
+        internal static MemoStoreWriteLease Acquire(string primaryPath)
+        {
+            string canonical = Path.GetFullPath(primaryPath).Replace('/', '\\').ToUpperInvariant();
+            string digest;
+            using (SHA256 algorithm = SHA256.Create())
+                digest = BitConverter.ToString(algorithm.ComputeHash(Encoding.UTF8.GetBytes(canonical))).Replace("-", string.Empty);
+            var lease = new MemoStoreWriteLease("Local\\TarkovServerGuard.MemoWrite." + digest);
+            try
+            {
+                try { lease._ownsMutex = lease._mutex.WaitOne(5000); }
+                catch (AbandonedMutexException)
+                {
+                    // The previous process exited mid-write. Atomic replacement
+                    // and fallback validation below determine the durable state.
+                    lease._ownsMutex = true;
+                }
+                if (!lease._ownsMutex)
+                    throw new IOException("다른 창에서 메모를 저장하고 있습니다. 잠시 후 다시 시도해 주세요.");
+                return lease;
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (_ownsMutex) _mutex.ReleaseMutex();
+            }
+            finally
+            {
+                _ownsMutex = false;
+                _mutex.Dispose();
+            }
+        }
+    }
+
     public sealed class RaidNoteRecord
     {
         public RaidNoteRecord()
@@ -49,6 +103,12 @@ namespace TarkovServerReporter
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"
+            };
+        private static readonly HashSet<string> SupportedAttachmentExtensions =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp",
+                ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"
             };
         private static readonly char[] InvalidScreenshotFileNameCharacters =
             Path.GetInvalidFileNameChars();
@@ -139,6 +199,16 @@ namespace TarkovServerReporter
 
         public IList<RaidNoteRecord> LoadAll()
         {
+            return LoadAll(false);
+        }
+
+        internal IList<RaidNoteRecord> LoadAllForBackup()
+        {
+            return LoadAll(true);
+        }
+
+        private IList<RaidNoteRecord> LoadAll(bool requireEveryRecord)
+        {
             lock (_sync)
             {
                 EnsureFolder();
@@ -174,6 +244,8 @@ namespace TarkovServerReporter
                 {
                     RaidNoteRecord record = TryRead(GetPath(key), key)
                         ?? TryRead(GetBackupPath(key), key);
+                    if (record == null && requireEveryRecord)
+                        throw new InvalidDataException("일부 레이드 메모를 읽지 못해 불완전한 백업을 만들지 않았습니다.");
                     if (record != null) result.Add(record);
                 }
                 return result
@@ -248,6 +320,7 @@ namespace TarkovServerReporter
 
             bool saved = false;
             lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
             {
                 EnsureFolder();
                 string target = GetPath(key);
@@ -289,6 +362,7 @@ namespace TarkovServerReporter
         {
             ValidateKey(key);
             lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
             {
                 DeleteForUserRequest(GetPath(key));
                 DeleteForUserRequest(GetBackupPath(key));
@@ -311,17 +385,25 @@ namespace TarkovServerReporter
                 throw new InvalidOperationException("메모 데이터가 허용 크기를 초과했습니다.");
 
             lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
             {
                 EnsureFolder();
                 string target = GetPath(key);
                 string backup = GetBackupPath(key);
-                string temporary = GetTemporaryPath(key);
-                DeleteIfPresent(temporary);
-                WriteDurably(temporary, json);
+                bool primaryExists = File.Exists(target);
+                bool primaryReadable = primaryExists && TryRead(target, key) != null;
+                if (!primaryReadable && (primaryExists || File.Exists(backup))
+                    && TryRead(backup, key) == null)
+                    throw new InvalidDataException("기존 레이드 메모와 복구본을 읽을 수 없어 저장하지 않았습니다. 원본 파일을 확인해 주세요.");
+
+                // Different windows/processes must never share or delete a staging file.
+                string temporary = target + ".save." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
-                    if (File.Exists(target))
-                        File.Replace(temporary, target, backup, true);
+                    WriteDurably(temporary, json);
+                    if (primaryExists)
+                        // A corrupt primary must not replace the good fallback we just loaded.
+                        File.Replace(temporary, target, primaryReadable ? backup : null, true);
                     else
                         File.Move(temporary, target);
                 }
@@ -460,25 +542,26 @@ namespace TarkovServerReporter
                 if (string.IsNullOrWhiteSpace(value)
                     || value.Length > MaximumScreenshotPathLength
                     || !HasValidUnicode(value)
-                    || !IsSafeScreenshotAttachmentPath(value)
+                    || !IsSafeAttachmentPath(value)
                     || !seen.Add(value))
                     throw new InvalidOperationException(
-                        "복원할 스크린샷 연결 정보가 올바르지 않습니다.");
+                        "복원할 미디어 첨부 경로가 올바르지 않습니다.");
                 result.Add(value);
                 if (result.Count > MaximumScreenshotPathCount)
                     throw new InvalidOperationException(
-                        "복원할 스크린샷 연결 수가 허용 한도를 초과했습니다.");
+                        "복원할 미디어 첨부 수가 허용 한도를 초과했습니다.");
             }
             return result;
         }
 
         /// <summary>
-        /// Checks the lexical contract for a local screenshot attachment. It intentionally
+        /// Checks the lexical contract for a local image or video attachment. It intentionally
         /// does not resolve the path or require the linked drive or file to exist on this PC.
-        /// Legacy records are still read as-is; this validator is used for new attachments
-        /// and portable-backup import/export/restore boundaries.
+        /// Existing records may contain videos saved by the v0.8.4.1 test build.
+        /// Keep those links usable and portable; new screenshot attachments use
+        /// IsSafeScreenshotAttachmentPath instead.
         /// </summary>
-        internal static bool IsSafeScreenshotAttachmentPath(string value)
+        internal static bool IsSafeAttachmentPath(string value)
         {
             if (string.IsNullOrWhiteSpace(value)
                 || value.Length > MaximumScreenshotPathLength
@@ -521,8 +604,16 @@ namespace TarkovServerReporter
             string fileName = segments[segments.Length - 1];
             int extensionStart = fileName.LastIndexOf('.');
             if (extensionStart <= 0) return false;
-            return SupportedScreenshotExtensions.Contains(
+            return SupportedAttachmentExtensions.Contains(
                 fileName.Substring(extensionStart));
+        }
+
+        // The restored v0.8.3 entry flow accepts screenshots only. This restriction
+        // must not be used to filter existing records or portable backups.
+        internal static bool IsSafeScreenshotAttachmentPath(string value)
+        {
+            return IsSafeAttachmentPath(value)
+                && SupportedScreenshotExtensions.Contains(Path.GetExtension(value));
         }
 
         private static bool IsReservedWindowsDeviceName(string segment)

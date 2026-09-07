@@ -29,6 +29,7 @@ namespace TarkovServerReporter.Tests
                 AssertHeaderSorting(application);
                 AssertCurrentPingPresentation(application);
                 AssertUsageNotice(application);
+                AssertPartyBundleIntegration(application);
                 Console.WriteLine("BlockedServersUiTests: PASS");
                 return 0;
             }
@@ -388,6 +389,13 @@ namespace TarkovServerReporter.Tests
         private static void AssertUsageNotice(Assembly application)
         {
             const BindingFlags staticFlags = BindingFlags.Static | BindingFlags.NonPublic;
+            Type appTextType = application.GetType("TarkovServerReporter.AppText", true);
+            MethodInfo setLanguage = appTextType.GetMethod(
+                "SetLanguage",
+                BindingFlags.Static | BindingFlags.Public);
+            Assert(setLanguage != null
+                    && Convert.ToBoolean(setLanguage.Invoke(null, new object[] { "ko-KR" })),
+                "사용방법 한국어 문구 검증은 기본 한국어 AppText에서 실행되어야 합니다.");
             Type usageType = application.GetType("TarkovServerReporter.UsageNoticeForm", true);
             string step2 = Convert.ToString(usageType.GetField(
                 "Step2Line",
@@ -436,6 +444,65 @@ namespace TarkovServerReporter.Tests
                     && step2Block.Controls.Count == 2
                     && secondLine.ClientSize.Height >= requiredLineHeight,
                     "사용방법 2번은 최소 창 크기에서도 별도 설명 행 없이 두 줄이 잘리지 않아야 합니다.");
+            }
+        }
+
+        private static void AssertPartyBundleIntegration(Assembly application)
+        {
+            const BindingFlags instanceFlags = BindingFlags.Instance
+                | BindingFlags.NonPublic;
+            Type appTextType = application.GetType("TarkovServerReporter.AppText", true);
+            MethodInfo setLanguage = appTextType.GetMethod(
+                "SetLanguage",
+                BindingFlags.Static | BindingFlags.Public);
+            Assert(setLanguage != null
+                    && Convert.ToBoolean(setLanguage.Invoke(null, new object[] { "ko-KR" })),
+                "파티 UI smoke는 기본 한국어 AppText에서 실행되어야 합니다.");
+
+            Type formType = application.GetType("TarkovServerReporter.BlockedServersForm", true);
+            using (var form = (Form)Activator.CreateInstance(formType))
+            {
+                var addButton = (Button)formType.GetField(
+                    "_partyAddButton",
+                    instanceFlags).GetValue(form);
+                var releaseButton = (Button)formType.GetField(
+                    "_partyReleaseButton",
+                    instanceFlags).GetValue(form);
+                var grid = (DataGridView)formType.GetField(
+                    "_grid",
+                    instanceFlags).GetValue(form);
+
+                const string addDescription =
+                    "P2P 없이 전달받은 공인 IPv4를 출처 묶음으로 미리본 뒤 이 PC에 적용합니다.";
+                const string releaseDescription =
+                    "파티 IP 목록을 선택하고, 차단을 해제하거나 유지할 IP를 확인합니다.";
+                Assert(addButton != null
+                        && addButton.Text == "파티 IP 추가"
+                        && addButton.AccessibleName == "파티 IP 추가"
+                        && addButton.AccessibleDescription == addDescription,
+                    "파티 IP 추가 버튼은 P2P 없는 로컬 묶음 적용 동작을 명확히 안내해야 합니다.");
+                Assert(releaseButton != null
+                        && releaseButton.Text == "파티 차단 해제"
+                        && releaseButton.AccessibleName == "파티 차단 해제"
+                        && releaseButton.AccessibleDescription == releaseDescription,
+                    "파티 차단 해제 버튼은 출처 묶음별 안전 해제 동작을 안내해야 합니다.");
+                Assert(grid != null
+                        && grid.Columns.Contains("kind")
+                        && grid.Columns["kind"].HeaderText == "출처 구분",
+                    "기존 kind 열은 폭을 늘리지 않고 Party-shared 출처 구분 헤더를 제공해야 합니다.");
+            }
+
+            Type inputFormType = application.GetType(
+                "TarkovServerReporter.PartyBlockInputForm",
+                true);
+            using (var inputForm = (Form)Activator.CreateInstance(inputFormType, true))
+            {
+                Control syncNotice = GetDescendants(inputForm).FirstOrDefault(control =>
+                    control.Text == "P2P·자동 동기화 없이 받은 공인 IPv4를 이 PC에만 적용합니다.");
+                Assert(syncNotice != null
+                        && syncNotice.Text.Contains("P2P")
+                        && syncNotice.Text.Contains("자동 동기화 없이"),
+                    "파티 IP 입력 화면은 P2P나 자동 동기화를 사용하지 않는다고 표시해야 합니다.");
             }
         }
 

@@ -23,13 +23,45 @@ namespace TarkovServerReporter
         {
             internal string Version;
             internal string Notes;
+            internal string EnglishNotes;
         }
 
         private static readonly BundledRelease[] BundledReleases =
         {
             new BundledRelease
             {
+                Version = "0.8.5",
+                EnglishNotes =
+                    "What's new since 0.8.3\n\n"
+                    + "- TSG remembers your window size and adjusted column widths for your next session.\n"
+                    + "- Choose Korean or English in Settings.\n"
+                    + "- Search Saved Notes by text, tags, map, player name, or report reason, and filter by note type.\n"
+                    + "- Add server IPs shared by your party as named lists, then remove a list's blocks together. Your personal blocks and blocks still used by other party lists stay in place.\n"
+                    + "- Made the interface easier to use.\n"
+                    + "- Improved log loading speed and reduced memory use when reading large logs.\n"
+                    + "- Made note saving, backups, and restores more reliable.\n\n"
+                    + "Party blocks apply only to this PC. Each party member needs to apply the same IPs on their own PC.",
+                Notes =
+                    "0.8.3 이후 달라진 점\n\n"
+                    + "- 창 크기와 직접 조절한 열 너비를 기억해 다음 실행에서도 이어서 사용합니다.\n"
+                    + "- 설정에서 한국어·영어를 선택할 수 있습니다.\n"
+                    + "- 메모 보관함에 검색과 종류 필터를 추가했습니다. 본문·태그·맵·닉네임·신고 사유로 메모를 찾을 수 있습니다.\n"
+                    + "- 파티원이 공유한 서버 IP를 목록별로 추가하고 한 번에 해제할 수 있습니다. 기존 개인 차단과 다른 파티 목록의 차단은 유지됩니다.\n"
+                    + "- UI 조작 편의성을 개선했습니다.\n"
+                    + "- 로그 조회 속도를 높이고, 큰 로그를 읽을 때의 메모리 사용량을 줄였습니다.\n"
+                    + "- 메모 저장·백업·복원의 안정성을 높였습니다.\n\n"
+                    + "파티 차단은 이 PC에만 적용됩니다. 각 파티원이 같은 IP를 직접 적용해야 합니다."
+            },
+            new BundledRelease
+            {
                 Version = "0.8.3",
+                EnglishNotes =
+                    "- EFT connection history now shows your PMC or Scav role and whether you played solo or in a group of 2–5, when confirmed by the log.\n"
+                    + "- PvP season numbers are shown only when explicitly recorded in the log. Missing details are left out.\n"
+                    + "- The map and game type column is wider to accommodate raid details. Newly saved notes keep the same information.\n"
+                    + "- After blocking a server, TSG checks up to 100 recent raids and shows how often that IP appeared and how many of those raids showed high latency, packet loss, or timeouts.\n"
+                    + "- Blocks apply to this PC only. Each party member must block the same IPs to keep the whole party off those servers.\n"
+                    + "- Step 2 of the usage guide now explains that your gear is kept after you confirm leaving.",
                 Notes =
                     "- EFT 접속 기록의 맵·게임유형 뒤에 로그로 확인된 PMC·스캐브와 솔로·2인~5인 정보를 함께 표시합니다.\n"
                     + "- 로그에 명시된 시즌 번호가 있으면 PvP시즌1·PvP시즌2처럼 표시하고, 확인되지 않은 정보는 추측하지 않고 생략합니다.\n"
@@ -41,6 +73,11 @@ namespace TarkovServerReporter
             new BundledRelease
             {
                 Version = "0.8.2",
+                EnglishNotes =
+                    "- Fixed vertical text alignment in the Browse, Auto-detect, and Apply buttons.\n"
+                    + "- Saved Notes can now back up raid and report notes in a single file and restore missing notes without overwriting existing ones.\n"
+                    + "- Backups include valid local screenshot paths, not the original image files.\n"
+                    + "- Saved Notes now shows the game type alongside the map. The default window is wider to avoid horizontal scrolling when first opened.",
                 Notes =
                     "- TSG 경로의 직접선택·자동 찾기·적용 버튼 문구가 아래쪽으로 치우쳐 보이지 않도록 세로 위치를 중단에 맞췄습니다.\n"
                     + "- 메모보관함에서 일반 레이드 메모와 유저신고 메모를 하나의 파일로 백업하고 없는 메모만 안전하게 복원할 수 있습니다.\n"
@@ -50,6 +87,14 @@ namespace TarkovServerReporter
             new BundledRelease
             {
                 Version = "0.8.1",
+                EnglishNotes =
+                    "- The No Log tooltip now explains that a game bug can also prevent the required log from being written.\n"
+                    + "- Improved the two-line status message after blocking a server so it fits smaller windows and different display scales.\n"
+                    + "- Fixed the first row's checkbox not updating immediately when selecting all saved notes.\n"
+                    + "- In Blocked Servers, use the selection header or Ctrl+A to select all and see the selection count.\n"
+                    + "- Improved accessible descriptions for selection columns and bulk actions. Screen readers can now read the selection count.\n"
+                    + "- Added ascending, descending, and default sorting with orange direction indicators to Saved Notes, Blocked Servers, and the main Block/Unblock columns. Main-window headers explain sorting, and the two auxiliary windows have select-all checkboxes.\n"
+                    + "- Block-list backup filenames now include the save time. The confirmation message shows the filename without its full path.",
                 Notes =
                     "- ‘로그 없음’ 도움말에 게임 버그로 필요한 로그가 기록되지 않는 경우를 함께 안내합니다.\n"
                     + "- 서버 차단 완료 뒤 메인 화면의 두 줄 상태 안내가 작은 창과 화면 배율에서도 잘리지 않도록 개선했습니다.\n"
@@ -77,10 +122,25 @@ namespace TarkovServerReporter
             return null;
         }
 
+        internal static string GetDisplayNotes(ReleaseNotesEntry entry)
+        {
+            if (entry == null) return NormalizeNotesText(null);
+            if (AppText.CurrentLanguage == AppText.EnglishLanguage)
+            {
+                foreach (BundledRelease release in BundledReleases)
+                {
+                    if (NormalizeVersion(entry.VersionText) == release.Version
+                        && NormalizeNotesText(entry.NotesText) == NormalizeNotesText(release.Notes))
+                        return NormalizeNotesText(release.EnglishNotes);
+                }
+            }
+            return NormalizeNotesText(entry.NotesText);
+        }
+
         internal static string NormalizeNotesText(string value)
         {
             if (string.IsNullOrWhiteSpace(value))
-                return "이 버전에는 별도의 변경 사항 내용이 제공되지 않았습니다.";
+                return AppText.Get("PatchNotes.Empty");
 
             string normalized = value.Replace("\r\n", "\n").Replace('\r', '\n');
             var builder = new StringBuilder(Math.Min(normalized.Length, MaximumNotesCharacters));
@@ -93,9 +153,9 @@ namespace TarkovServerReporter
 
             string result = builder.ToString().Trim();
             if (normalized.Length > MaximumNotesCharacters)
-                result += "\n\n[표시할 수 있는 최대 길이를 넘어 나머지 내용은 생략했습니다.]";
+                result += "\n\n" + AppText.Get("PatchNotes.Truncated");
             return string.IsNullOrWhiteSpace(result)
-                ? "이 버전에는 별도의 변경 사항 내용이 제공되지 않았습니다."
+                ? AppText.Get("PatchNotes.Empty")
                 : result.Replace("\n", "\r\n");
         }
 
@@ -155,18 +215,34 @@ namespace TarkovServerReporter
             bool installedApplication,
             out ReleaseNotesEntry entry)
         {
+            return TryClaimCompletedUpdateEntry(
+                GetDefaultStorageRoot(),
+                GetExecutingSemanticVersion(),
+                demoMode,
+                installedApplication,
+                out entry);
+        }
+
+        internal static bool TryClaimCompletedUpdateEntry(
+            string storageRoot,
+            string currentVersionText,
+            bool demoMode,
+            bool installedApplication,
+            out ReleaseNotesEntry entry)
+        {
             entry = null;
             if (!ShouldConsume(demoMode, installedApplication))
                 return false;
 
+            // Do not consume the one-time receipt if this build has no notes
+            // to show. The build tests also require the actual app's version.
+            ReleaseNotesEntry bundled = ReleaseNotesCatalog.FindBundled(currentVersionText);
+            if (bundled == null) return false;
             string claimedVersion;
-            if (!TryClaimCompletedUpdate(
-                GetDefaultStorageRoot(),
-                GetExecutingSemanticVersion(),
-                out claimedVersion))
+            if (!TryClaimCompletedUpdate(storageRoot, currentVersionText, out claimedVersion))
                 return false;
-            entry = ReleaseNotesCatalog.FindBundled(claimedVersion);
-            return entry != null;
+            entry = bundled;
+            return true;
         }
 
         internal static bool ShouldConsume(

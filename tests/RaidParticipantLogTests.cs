@@ -20,6 +20,28 @@ namespace TarkovServerReporter.Tests
             Run("PvP PMC solo", TestPmcSolo);
             Run("explicit PvP season Scav solo", TestPvpSeasonScavSolo);
             Run("server PvE profile roles", TestServerPveProfileRoles);
+            Run("31-minute lobby wait retains Scav profile context",
+                TestLongLobbyWaitRetainsScavProfile);
+            Run("31-minute lobby wait retains PMC profile context",
+                TestLongLobbyWaitRetainsPmcProfile);
+            Run("mode change clears pending profile context",
+                TestModeChangeClearsPendingProfile);
+            Run("matching cancellation clears pending profile context",
+                TestMatchingCancellationClearsPendingProfile);
+            Run("consumed profile context does not leak to the next raid",
+                TestConsumedProfileDoesNotLeak);
+            Run("reconnect retains the first assignment's character evidence",
+                TestReconnectRetainsCharacterEvidence);
+            Run("near-simultaneous report requests are coalesced",
+                TestNearDuplicateUserReportsCoalesce);
+            Run("reports one second apart remain distinct",
+                TestSeparateUserReportsRemainDistinct);
+            Run("near-simultaneous reports in different raids remain distinct",
+                TestNearUserReportsAcrossRaidsRemainDistinct);
+            Run("failed near-duplicate report does not add a count",
+                TestFailedNearDuplicateUserReport);
+            Run("report coalescing uses request time despite delayed responses",
+                TestDelayedUserReportResponsesUseRequestTime);
             Run("2-5 member party snapshots", TestPartySizes);
             Run("numeric aid party member", TestNumericAidPartyMember);
             Run("observed two-member party event order", TestObservedTwoMemberPartyFlow);
@@ -161,6 +183,249 @@ namespace TarkovServerReporter.Tests
                     && scav.CharacterType == TarkovCharacterType.Scav
                     && scav.ParticipationType == TarkovParticipationType.Solo,
                 "server PvE +1 ProfileId must remain Scav solo");
+        }
+
+        private static void TestLongLobbyWaitRetainsScavProfile()
+        {
+            ServerSession session = ScanLongLobbyRaid(
+                "00112233445566778899aaff",
+                "00112233445566778899ab00",
+                "LONG-WAIT-SCAV");
+            Assert(session.CharacterType == TarkovCharacterType.Scav
+                    && session.ParticipationType == TarkovParticipationType.Solo,
+                "a valid same-session Scav profile was discarded after 30 minutes");
+        }
+
+        private static void TestLongLobbyWaitRetainsPmcProfile()
+        {
+            ServerSession session = ScanLongLobbyRaid(
+                "00112233445566778899ab10",
+                "00112233445566778899ab10",
+                "LONG-WAIT-PMC");
+            Assert(session.CharacterType == TarkovCharacterType.Pmc
+                    && session.ParticipationType == TarkovParticipationType.Solo,
+                "a valid same-session PMC profile was discarded after 30 minutes");
+        }
+
+        private static void TestModeChangeClearsPendingProfile()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                string application = App("09:59:59.000", "Session mode: Regular")
+                    + App("10:00:00.000",
+                        "PrepareSelectedProfileLocally ProfileId:00112233445566778899ab20 AccountId:100")
+                    + App("10:15:00.000", "Session mode: Pve")
+                    + App("10:30:58.000", "Matching with group id:")
+                    + ServerAssignment(
+                        "10:31:00.000",
+                        "00112233445566778899ab21",
+                        "MODE-RESET",
+                        "MODE-RESET");
+                Write(directory, "synthetic application_000.log", application);
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:30:59.000", "/client/match/join"));
+
+                ServerSession session = Scan(root).Single();
+                Assert(session.ProgressionMode == TarkovProgressionMode.Pve
+                        && session.CharacterType == TarkovCharacterType.Unknown,
+                    "a profile prepared in another progression mode leaked into the raid");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static void TestMatchingCancellationClearsPendingProfile()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                string application = App("09:59:59.000", "Session mode: Regular")
+                    + App("10:00:00.000",
+                        "PrepareSelectedProfileLocally ProfileId:00112233445566778899ab28 AccountId:100")
+                    + App("10:10:00.000", "Network game matching cancelled.")
+                    + App("10:30:58.000", "Matching with group id:")
+                    + ServerAssignment(
+                        "10:31:00.000",
+                        "00112233445566778899ab29",
+                        "CANCEL-RESET",
+                        "CANCEL-RESET");
+                Write(directory, "synthetic application_000.log", application);
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:30:59.000", "/client/match/join"));
+
+                ServerSession session = Scan(root).Single();
+                Assert(session.CharacterType == TarkovCharacterType.Unknown,
+                    "a profile from a cancelled matching attempt leaked into the next raid");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static void TestConsumedProfileDoesNotLeak()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                string application = App("09:59:59.000", "Session mode: Regular")
+                    + App("10:00:00.000",
+                        "PrepareSelectedProfileLocally ProfileId:00112233445566778899ab30 AccountId:100")
+                    + App("10:00:02.000", "Matching with group id:")
+                    + ServerAssignment(
+                        "10:00:05.000",
+                        "00112233445566778899ab30",
+                        "PROFILE-CONSUMED-ONE",
+                        "PROFILE-CONSUMED-ONE")
+                    + App("10:10:02.000", "Matching with group id:")
+                    + ServerAssignment(
+                        "10:10:05.000",
+                        "00112233445566778899ab31",
+                        "PROFILE-CONSUMED-TWO",
+                        "PROFILE-CONSUMED-TWO");
+                Write(directory, "synthetic application_000.log", application);
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:00:03.000", "/client/match/join")
+                    + Backend("10:10:03.000", "/client/match/join"));
+
+                IList<ServerSession> sessions = Scan(root)
+                    .OrderBy(item => item.DisplayDetectedAt)
+                    .ToList();
+                Assert(sessions.Count == 2
+                        && sessions[0].CharacterType == TarkovCharacterType.Pmc
+                        && sessions[1].CharacterType == TarkovCharacterType.Unknown,
+                    "an already-consumed base profile leaked into the next assignment");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static void TestReconnectRetainsCharacterEvidence()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                string application = App("09:59:59.000", "Session mode: Regular")
+                    + App("10:00:00.000",
+                        "PrepareSelectedProfileLocally ProfileId:00112233445566778899ab3f AccountId:100")
+                    + App("10:00:02.000", "Matching with group id:")
+                    + ServerAssignment(
+                        "10:00:05.000",
+                        "00112233445566778899ab40",
+                        "RECONNECT-CHARACTER",
+                        "RECONNECT-CHARACTER")
+                    + App("10:00:06.000", "GameStarted:1 real:1 diff:0")
+                    + ServerAssignment(
+                        "10:05:00.000",
+                        "00112233445566778899ab40",
+                        "RECONNECT-CHARACTER",
+                        "RECONNECT-CHARACTER");
+                Write(directory, "synthetic application_000.log", application);
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:00:03.000", "/client/match/join"));
+
+                IList<ServerSession> sessions = Scan(root);
+                Assert(sessions.Count == 1
+                        && sessions[0].CharacterType == TarkovCharacterType.Scav,
+                    "a reconnect discarded the original raid's known character evidence");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static void TestNearDuplicateUserReportsCoalesce()
+        {
+            ServerSession session = ScanSingleRaidWithReports(
+                UserReportRequest("10:10:00.000", "near-a")
+                + UserReportRequest("10:10:00.005", "near-b")
+                + UserReportRequest("10:10:00.010", "near-c")
+                + UserReportResponse("10:10:00.300", "near-a", true)
+                + UserReportResponse("10:10:00.305", "near-b", true)
+                + UserReportResponse("10:10:00.310", "near-c", true));
+            Assert(session.UserReportCount == 1,
+                "a real-style burst of distinct request IDs was counted as multiple reports");
+        }
+
+        private static void TestSeparateUserReportsRemainDistinct()
+        {
+            ServerSession session = ScanSingleRaidWithReports(
+                UserReportRequest("10:10:00.000", "separate-a")
+                + UserReportResponse("10:10:00.300", "separate-a", true)
+                + UserReportRequest("10:10:01.000", "separate-b")
+                + UserReportResponse("10:10:01.300", "separate-b", true));
+            Assert(session.UserReportCount == 2,
+                "two successful reports one second apart were incorrectly coalesced");
+        }
+
+        private static void TestNearUserReportsAcrossRaidsRemainDistinct()
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                string application = App("09:59:59.000", "Session mode: Regular")
+                    + ServerAssignment(
+                        "10:00:00.000",
+                        "00112233445566778899ab60",
+                        "REPORT-RAID-ONE",
+                        "REPORT-RAID-ONE")
+                    + ServerAssignment(
+                        "10:10:00.002",
+                        "00112233445566778899ab61",
+                        "REPORT-RAID-TWO",
+                        "REPORT-RAID-TWO");
+                Write(directory, "synthetic application_000.log", application);
+                Write(directory, "synthetic backend_000.log",
+                    UserReportRequest("10:10:00.000", "raid-one-report")
+                    + UserReportRequest("10:10:00.005", "raid-two-report")
+                    + UserReportResponse("10:10:00.300", "raid-one-report", true)
+                    + UserReportResponse("10:10:00.305", "raid-two-report", true));
+
+                IList<ServerSession> sessions = Scan(root)
+                    .OrderBy(item => item.DisplayDetectedAt)
+                    .ToList();
+                Assert(sessions.Count == 2
+                        && sessions[0].UserReportCount == 1
+                        && sessions[1].UserReportCount == 1,
+                    "the 50ms duplicate window crossed a raid boundary");
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static void TestFailedNearDuplicateUserReport()
+        {
+            ServerSession session = ScanSingleRaidWithReports(
+                UserReportRequest("10:10:00.000", "success-near-failure")
+                + UserReportRequest("10:10:00.005", "failed-near-success")
+                + UserReportResponse("10:10:00.300", "success-near-failure", true)
+                + UserReportResponse("10:10:00.305", "failed-near-success", false));
+            Assert(session.UserReportCount == 1,
+                "a failed near-duplicate transaction changed the successful report count");
+        }
+
+        private static void TestDelayedUserReportResponsesUseRequestTime()
+        {
+            ServerSession session = ScanSingleRaidWithReports(
+                UserReportRequest("10:10:00.000", "delayed-a")
+                + UserReportRequest("10:10:00.005", "delayed-b")
+                + UserReportResponse("10:10:01.000", "delayed-b", true)
+                + UserReportResponse("10:10:30.000", "delayed-a", true));
+            Assert(session.UserReportCount == 1,
+                "response latency, rather than request start time, drove report coalescing");
         }
 
         private static void TestNumericAidPartyMember()
@@ -748,6 +1013,59 @@ namespace TarkovServerReporter.Tests
             }
         }
 
+        private static ServerSession ScanLongLobbyRaid(
+            string baseProfile,
+            string raidProfile,
+            string suffix)
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateSessionDirectory(root);
+                string application = App("09:59:59.000", "Session mode: Regular")
+                    + App("10:00:00.000",
+                        "PrepareSelectedProfileLocally ProfileId:" + baseProfile + " AccountId:100")
+                    + App("10:30:58.000", "Matching with group id:")
+                    + ServerAssignment(
+                        "10:31:00.000",
+                        raidProfile,
+                        "SID-" + suffix,
+                        "SHORT-" + suffix);
+                Write(directory, "synthetic application_000.log", application);
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:30:59.000", "/client/match/join"));
+                return Scan(root).Single();
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
+        private static ServerSession ScanSingleRaidWithReports(string reportEvents)
+        {
+            string root = CreateRoot();
+            try
+            {
+                string directory = CreateBasicServerRaid(
+                    root,
+                    "Regular",
+                    "00112233445566778899ab50",
+                    "00112233445566778899ab50",
+                    false,
+                    true,
+                    "USER-REPORT-COALESCE");
+                Write(directory, "synthetic backend_000.log",
+                    Backend("10:00:03.000", "/client/match/join")
+                    + (reportEvents ?? string.Empty));
+                return Scan(root).Single();
+            }
+            finally
+            {
+                DeleteRoot(root);
+            }
+        }
+
         private static string CreateBasicServerRaid(
             string root,
             string mode,
@@ -960,6 +1278,29 @@ namespace TarkovServerReporter.Tests
             return "2026.08.17 " + time
                 + "|1.1.0.1.46777|Info|backend|id [synthetic-request-" + (++_sequence)
                 + "] : ---> Request HTTPS " + route + "\r\n";
+        }
+
+        private static string UserReportRequest(string time, string requestId)
+        {
+            return "2026.08.17 " + time
+                + "|1.1.0.1.46777|Info|backend|---> Request HTTPS, id ["
+                + requestId
+                + "]: URL: https://lobby.test/client/report/send?\r\n";
+        }
+
+        private static string UserReportResponse(
+            string time,
+            string requestId,
+            bool successful)
+        {
+            return "2026.08.17 " + time
+                + "|1.1.0.1.46777|"
+                + (successful ? "Info" : "Error")
+                + "|backend|<--- Response HTTPS, id ["
+                + requestId
+                + "]: "
+                + (successful ? string.Empty : "BackendServerSideException, ")
+                + "URL: https://lobby.test/client/report/send, responseText:\r\n";
         }
 
         private static string ServerAssignment(

@@ -123,6 +123,16 @@ namespace TarkovServerReporter
 
         public IList<UserReportMemoRecord> LoadAll()
         {
+            return LoadAll(false);
+        }
+
+        internal IList<UserReportMemoRecord> LoadAllForBackup()
+        {
+            return LoadAll(true);
+        }
+
+        private IList<UserReportMemoRecord> LoadAll(bool requireEveryRecord)
+        {
             lock (_sync)
             {
                 EnsureFolder();
@@ -152,6 +162,8 @@ namespace TarkovServerReporter
                 {
                     UserReportMemoRecord record = TryRead(GetPath(key), key)
                         ?? TryRead(GetBackupPath(key), key);
+                    if (record == null && requireEveryRecord)
+                        throw new InvalidDataException("일부 유저신고 메모를 읽지 못해 불완전한 백업을 만들지 않았습니다.");
                     if (record != null) records.Add(record);
                 }
                 return records
@@ -211,6 +223,7 @@ namespace TarkovServerReporter
 
             bool saved = false;
             lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
             {
                 EnsureFolder();
                 string target = GetPath(key);
@@ -252,6 +265,7 @@ namespace TarkovServerReporter
         {
             ValidateKey(key);
             lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
             {
                 DeleteForUserRequest(GetPath(key));
                 DeleteForUserRequest(GetBackupPath(key));
@@ -295,17 +309,25 @@ namespace TarkovServerReporter
                 throw new InvalidOperationException("유저신고 메모 데이터가 허용 크기를 초과했습니다.");
 
             lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
             {
                 EnsureFolder();
                 string target = GetPath(key);
                 string backup = GetBackupPath(key);
-                string temporary = GetTemporaryPath(key);
-                DeleteIfPresent(temporary);
-                WriteDurably(temporary, json);
+                bool primaryExists = File.Exists(target);
+                bool primaryReadable = primaryExists && TryRead(target, key) != null;
+                if (!primaryReadable && (primaryExists || File.Exists(backup))
+                    && TryRead(backup, key) == null)
+                    throw new InvalidDataException("기존 유저신고 메모와 복구본을 읽을 수 없어 저장하지 않았습니다. 원본 파일을 확인해 주세요.");
+
+                // Different windows/processes must never share or delete a staging file.
+                string temporary = target + ".save." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
-                    if (File.Exists(target))
-                        File.Replace(temporary, target, backup, true);
+                    WriteDurably(temporary, json);
+                    if (primaryExists)
+                        // Preserve a valid fallback when the existing primary is damaged.
+                        File.Replace(temporary, target, primaryReadable ? backup : null, true);
                     else
                         File.Move(temporary, target);
                 }

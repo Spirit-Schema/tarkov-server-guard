@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -32,8 +32,8 @@ namespace TarkovServerReporter
 
         public LicenseForm()
         {
-            Text = "라이선스 및 저작권";
-            AccessibleName = "라이선스 및 저작권";
+            Text = AppText.Get("License.Title");
+            AccessibleName = AppText.Get("License.Title");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
@@ -58,7 +58,8 @@ namespace TarkovServerReporter
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 150F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute,
+                AppText.CurrentLanguage == AppText.EnglishLanguage ? 190F : 150F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
@@ -67,7 +68,8 @@ namespace TarkovServerReporter
             root.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "라이선스 및 저작권",
+                Text = AppText.Get("License.Title"),
+                UseMnemonic = false,
                 Font = new Font("Malgun Gothic", 16F, FontStyle.Bold),
                 ForeColor = Accent,
                 BackColor = Background,
@@ -94,11 +96,7 @@ namespace TarkovServerReporter
                 Dock = DockStyle.Fill,
                 AutoEllipsis = false,
                 Text =
-                    "개인적·비상업적 사용은 무료입니다.\r\n"
-                    + "소스코드는 안전성과 투명성 확인을 위해 공개합니다.\r\n"
-                    + "제작자의 허가 없는 수정본 배포, 재배포, 판매 및 상업적 이용을 금지합니다.\r\n"
-                    + "공식 배포처는 Spirit-Schema GitHub Releases입니다.\r\n"
-                    + "비공식 배포본은 안전성과 정상 작동을 보증하거나 지원하지 않습니다.",
+                    AppText.Get("License.Summary"),
                 Font = new Font("Malgun Gothic", 9.5F),
                 ForeColor = TextPrimary,
                 BackColor = Surface,
@@ -110,7 +108,7 @@ namespace TarkovServerReporter
             _documentTitleLabel = new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "라이선스 전문",
+                Text = AppText.Get("License.Document"),
                 Font = new Font("Malgun Gothic", 9F, FontStyle.Bold),
                 ForeColor = TextMuted,
                 BackColor = Background,
@@ -132,8 +130,8 @@ namespace TarkovServerReporter
                 Font = new Font("Consolas", 9F),
                 Margin = new Padding(0),
                 TabStop = true,
-                AccessibleName = "라이선스 문서 내용",
-                AccessibleDescription = "선택한 라이선스 또는 서드파티 고지의 전체 내용"
+                AccessibleName = AppText.Get("License.DocumentA11y"),
+                AccessibleDescription = AppText.Get("License.DocumentHelp")
             };
             root.Controls.Add(_documentTextBox, 0, 3);
 
@@ -145,19 +143,19 @@ namespace TarkovServerReporter
             };
             root.Controls.Add(buttonHost, 0, 4);
 
-            _licenseButton = CreateDocumentButton("라이선스 전문", 0);
-            _licenseButton.AccessibleDescription = "프로그램 라이선스 전문을 표시합니다.";
+            _licenseButton = CreateDocumentButton(AppText.Get("License.Document"), 0);
+            _licenseButton.AccessibleDescription = AppText.Get("License.ShowHelp");
             _licenseButton.Click += delegate { ShowLicenseDocument(); };
             buttonHost.Controls.Add(_licenseButton);
 
-            _thirdPartyButton = CreateDocumentButton("서드파티 고지", 1);
-            _thirdPartyButton.AccessibleDescription = "제3자 구성요소의 저작권과 라이선스 고지를 표시합니다.";
+            _thirdPartyButton = CreateDocumentButton(AppText.Get("License.ThirdParty"), 1);
+            _thirdPartyButton.AccessibleDescription = AppText.Get("License.ThirdPartyHelp");
             _thirdPartyButton.Click += delegate { ShowThirdPartyDocument(); };
             buttonHost.Controls.Add(_thirdPartyButton);
 
             var confirmButton = new Button
             {
-                Text = "확인",
+                Text = AppText.Get("License.CloseButton"),
                 DialogResult = DialogResult.OK,
                 Size = new Size(104, 38),
                 FlatStyle = FlatStyle.Flat,
@@ -167,8 +165,8 @@ namespace TarkovServerReporter
                 Cursor = Cursors.Hand,
                 UseVisualStyleBackColor = false,
                 TabIndex = 2,
-                AccessibleName = "확인",
-                AccessibleDescription = "라이선스 및 저작권 창을 닫습니다."
+                AccessibleName = AppText.Get("License.CloseButton"),
+                AccessibleDescription = AppText.Get("License.CloseHelp")
             };
             confirmButton.FlatAppearance.BorderColor = Accent;
             confirmButton.FlatAppearance.MouseOverBackColor = AccentHover;
@@ -201,7 +199,7 @@ namespace TarkovServerReporter
             var button = new Button
             {
                 Text = text,
-                Size = new Size(132, 38),
+                Size = new Size(AppText.CurrentLanguage == AppText.EnglishLanguage ? 148 : 132, 38),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = SurfaceAlt,
                 ForeColor = TextPrimary,
@@ -219,18 +217,20 @@ namespace TarkovServerReporter
 
         private void ShowLicenseDocument()
         {
-            _documentTitleLabel.Text = "라이선스 전문 · 한국어 / English";
+            _documentTitleLabel.Text = AppText.Get("License.BilingualTitle");
             _documentTextBox.Text = ReadEmbeddedDocument(
                 LicenseResourceName,
                 new[] { "LICENSE.txt", "LICENSE" });
-            _documentTextBox.SelectionStart = 0;
+            int englishStart = AppText.CurrentLanguage == AppText.EnglishLanguage
+                ? _documentTextBox.Text.IndexOf("English Version", StringComparison.Ordinal) : -1;
+            _documentTextBox.SelectionStart = Math.Max(0, englishStart);
             _documentTextBox.ScrollToCaret();
             SetSelectedButton(_licenseButton);
         }
 
         private void ShowThirdPartyDocument()
         {
-            _documentTitleLabel.Text = "서드파티 고지";
+            _documentTitleLabel.Text = AppText.Get("License.ThirdParty");
             _documentTextBox.Text = ReadEmbeddedDocument(
                 ThirdPartyResourceName,
                 new[] { "THIRD_PARTY_NOTICES.md" });
@@ -281,7 +281,7 @@ namespace TarkovServerReporter
                 }
             }
 
-            return "문서를 불러오지 못했습니다. 공식 배포본의 파일 구성을 확인해 주세요.";
+            return AppText.Get("License.LoadFailed");
         }
     }
 }

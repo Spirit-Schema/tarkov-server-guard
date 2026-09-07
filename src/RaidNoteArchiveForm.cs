@@ -7,6 +7,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -14,11 +15,6 @@ namespace TarkovServerReporter
 {
     public sealed class RaidNoteArchiveForm : BrandedForm
     {
-        internal const string BackupScreenshotNotice =
-            "연결된 스크린샷 원본 파일은 백업에 포함되지 않으며, 로컬 이미지 연결 경로만 함께 저장됩니다. "
-            + "경로에는 사용자명 등 개인정보가 포함될 수 있으므로 공유 전에 확인해 주세요. "
-            + "다른 PC에서 같은 경로에 파일이 없으면 스크린샷을 열 수 없습니다.";
-
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);
         private static readonly Color SurfaceAlt = Color.FromArgb(31, 38, 46);
@@ -41,6 +37,7 @@ namespace TarkovServerReporter
 
         private readonly RaidNoteStore _store;
         private readonly UserReportMemoStore _userReportStore;
+        private readonly bool _sourceReadOnly;
         private readonly List<ArchiveItem> _records = new List<ArchiveItem>();
         private DataGridView _grid;
         private Label _statusLabel;
@@ -51,32 +48,85 @@ namespace TarkovServerReporter
         private Button _refreshButton;
         private Button _exportButton;
         private Button _importButton;
+        private TextBox _searchTextBox;
+        private ComboBox _typeFilter;
+        private Button _clearFilterButton;
+        private Label _resultCountLabel;
+        private Label _emptyStateLabel;
+        private readonly Timer _searchTimer = new Timer { Interval = 180 };
+        private readonly ToolTip _archiveToolTip = new ToolTip();
+        private bool _filterPending;
+        private bool _suppressFilterEvents;
         private bool _busy;
         private bool _updatingChecks;
         private string _archiveSortColumn;
         private SortOrder _archiveSortOrder = SortOrder.None;
 
         public RaidNoteArchiveForm(RaidNoteStore store)
-            : this(store, new UserReportMemoStore())
+            : this(store, new UserReportMemoStore(), false)
+        {
+        }
+
+        public RaidNoteArchiveForm(RaidNoteStore store, bool sourceReadOnly)
+            : this(store, new UserReportMemoStore(), sourceReadOnly)
         {
         }
 
         public RaidNoteArchiveForm(RaidNoteStore store, UserReportMemoStore userReportStore)
+            : this(store, userReportStore, false)
+        {
+        }
+
+        public RaidNoteArchiveForm(
+            RaidNoteStore store,
+            UserReportMemoStore userReportStore,
+            bool sourceReadOnly)
         {
             if (store == null) throw new ArgumentNullException("store");
             if (userReportStore == null) throw new ArgumentNullException("userReportStore");
             _store = store;
             _userReportStore = userReportStore;
+            _sourceReadOnly = sourceReadOnly;
             InitializeWindow();
             BuildInterface();
+            _searchTimer.Tick += delegate { ApplyFilterNow(); };
+            ApplySourceReadOnlyMode();
             Shown += delegate { RefreshRecords(); };
         }
 
         public bool Changed { get; private set; }
 
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _searchTimer.Stop();
+                _searchTimer.Dispose();
+                _archiveToolTip.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        protected override bool ProcessCmdKey(ref Message message, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.F) && _searchTextBox.Enabled)
+            {
+                _searchTextBox.Focus();
+                _searchTextBox.SelectAll();
+                return true;
+            }
+            if (keyData == Keys.Escape && _searchTextBox.TextLength > 0 && !_busy)
+            {
+                _searchTextBox.Clear();
+                ApplyFilterNow();
+                return true;
+            }
+            return base.ProcessCmdKey(ref message, keyData);
+        }
+
         private void InitializeWindow()
         {
-            Text = "메모 보관함";
+            Text = AppText.Get("NoteArchive.Title");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(1220, 600);
             MinimumSize = new Size(820, 460);
@@ -100,17 +150,160 @@ namespace TarkovServerReporter
                 BackColor = Background,
                 Padding = new Padding(18, 14, 18, 14),
                 ColumnCount = 1,
-                RowCount = 3
+                RowCount = 5
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58F));
             Controls.Add(root);
 
             root.Controls.Add(BuildHeader(), 0, 0);
-            root.Controls.Add(BuildGrid(), 0, 1);
-            root.Controls.Add(BuildFooter(), 0, 2);
+            root.Controls.Add(BuildSearchRow(), 0, 1);
+            root.Controls.Add(BuildResultsSummary(), 0, 2);
+            var gridHost = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
+            gridHost.Controls.Add(BuildGrid());
+            _emptyStateLabel = new Label
+            {
+                Name = "NoteArchiveEmptyState", Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter, BackColor = Surface,
+                ForeColor = TextMuted, Padding = new Padding(30), Visible = false,
+                AccessibleRole = AccessibleRole.StaticText
+            };
+            gridHost.Controls.Add(_emptyStateLabel);
+            _emptyStateLabel.BringToFront();
+            root.Controls.Add(gridHost, 0, 3);
+            root.Controls.Add(BuildFooter(), 0, 4);
+        }
+
+        private Control BuildSearchRow()
+        {
+            var row = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill, ColumnCount = 6, RowCount = 1,
+                Margin = Padding.Empty, Padding = new Padding(0, 3, 0, 4)
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 166F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 8F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82F));
+            row.Controls.Add(new Label { Text = AppText.Get("NoteArchive.Search.Label"), AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            _searchTextBox = new TextBox
+            {
+                Name = "NoteArchiveSearch", Dock = DockStyle.Fill, MaxLength = 256,
+                BackColor = SurfaceAlt, ForeColor = TextPrimary, BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(0, 5, 12, 0), TabIndex = 0,
+                AccessibleName = AppText.Get("NoteArchive.Search.Label"),
+                AccessibleDescription = AppText.Get("NoteArchive.Search.Help")
+            };
+            _searchTextBox.TextChanged += delegate { FilterChanged(false); };
+            _archiveToolTip.SetToolTip(_searchTextBox, AppText.Get("NoteArchive.Search.Help"));
+            row.Controls.Add(_searchTextBox, 1, 0);
+            row.Controls.Add(new Label { Name = "NoteArchiveTypeLabel", Text = AppText.Get("NoteArchive.Filter.Label"), AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft }, 2, 0);
+            _typeFilter = new ComboBox
+            {
+                Name = "NoteArchiveTypeFilter", Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList, BackColor = SurfaceAlt,
+                FlatStyle = FlatStyle.Flat, DrawMode = DrawMode.OwnerDrawFixed,
+                ForeColor = TextPrimary, Margin = new Padding(0, 4, 0, 0), TabIndex = 1,
+                Cursor = Cursors.Hand,
+                AccessibleName = AppText.Get("NoteArchive.Filter.Label")
+            };
+            _typeFilter.Items.AddRange(new object[]
+            {
+                AppText.Get("NoteArchive.Filter.All"), AppText.Get("NoteArchive.Filter.Raid"),
+                AppText.Get("NoteArchive.Filter.Report")
+            });
+            _typeFilter.SelectedIndex = 0;
+            bool hovered = false;
+            Action refreshFilterFeedback = delegate
+            {
+                _typeFilter.BackColor = SystemInformation.HighContrast ? SystemColors.Window
+                    : hovered || _typeFilter.Focused || _typeFilter.DroppedDown
+                        ? Color.FromArgb(49, 61, 75) : SurfaceAlt;
+                _typeFilter.Invalidate();
+            };
+            _typeFilter.MouseEnter += delegate { hovered = true; refreshFilterFeedback(); };
+            _typeFilter.MouseLeave += delegate { hovered = false; refreshFilterFeedback(); };
+            _typeFilter.GotFocus += delegate { refreshFilterFeedback(); };
+            _typeFilter.LostFocus += delegate { refreshFilterFeedback(); };
+            _typeFilter.DropDown += delegate { refreshFilterFeedback(); };
+            _typeFilter.DropDownClosed += delegate { refreshFilterFeedback(); };
+            _typeFilter.DrawItem += delegate(object sender, DrawItemEventArgs args)
+            {
+                if (args.Index < 0) return;
+                bool menuItem = (args.State & DrawItemState.ComboBoxEdit) == 0;
+                bool selected = menuItem && (args.State & DrawItemState.Selected) != 0;
+                Color background = selected
+                    ? (SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(64, 80, 99))
+                    : menuItem ? (SystemInformation.HighContrast ? SystemColors.Window : SurfaceAlt) : _typeFilter.BackColor;
+                Color foreground = SystemInformation.HighContrast
+                    ? (selected ? SystemColors.HighlightText : SystemColors.WindowText) : TextPrimary;
+                using (var brush = new SolidBrush(background))
+                    args.Graphics.FillRectangle(brush, args.Bounds);
+                TextRenderer.DrawText(args.Graphics, Convert.ToString(_typeFilter.Items[args.Index]),
+                    _typeFilter.Font, args.Bounds, foreground,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                args.DrawFocusRectangle();
+            };
+            _typeFilter.SelectedIndexChanged += delegate { FilterChanged(true); };
+            row.Controls.Add(_typeFilter, 3, 0);
+            _clearFilterButton = CreateButton(AppText.Get("NoteArchive.Search.Clear"), 82, SurfaceAlt, TextPrimary);
+            _clearFilterButton.Name = "NoteArchiveClearFilter";
+            _clearFilterButton.TabIndex = 2;
+            _clearFilterButton.Click += delegate
+            {
+                _suppressFilterEvents = true;
+                _searchTextBox.Clear();
+                _typeFilter.SelectedIndex = 0;
+                _suppressFilterEvents = false;
+                FilterChanged(true);
+                _searchTextBox.Focus();
+            };
+            row.Controls.Add(_clearFilterButton, 5, 0);
+            return row;
+        }
+
+        private Control BuildResultsSummary()
+        {
+            var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _resultCountLabel = new Label { Name = "NoteArchiveResultCount", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = TextMuted, AutoEllipsis = true };
+            row.Controls.Add(_resultCountLabel, 0, 0);
+            row.Controls.Add(new Label { Text = AppText.Get("NoteArchive.Backup.AllScope"), AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = TextMuted }, 1, 0);
+            return row;
+        }
+
+        private void FilterChanged(bool immediate)
+        {
+            if (_suppressFilterEvents || _grid == null) return;
+            _filterPending = true;
+            _searchTimer.Stop();
+            _updatingChecks = true;
+            try { foreach (DataGridViewRow row in _grid.Rows) row.Cells["selected"].Value = false; }
+            finally { _updatingChecks = false; }
+            UpdateButtons();
+            if (immediate) ApplyFilterNow();
+            else _searchTimer.Start();
+        }
+
+        private void ApplyFilterNow()
+        {
+            _searchTimer.Stop();
+            _filterPending = false;
+            RenderRecords(null, null);
+        }
+
+        private bool MatchesFilter(ArchiveItem record, string[] terms)
+        {
+            if ((_typeFilter.SelectedIndex == 1 && record.IsUserReport)
+                || (_typeFilter.SelectedIndex == 2 && !record.IsUserReport)) return false;
+            return terms.All(term => record.SearchText.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         private Control BuildHeader()
@@ -137,7 +330,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(1, 0),
-                Text = "메모 보관함",
+                Text = AppText.Get("NoteArchive.Title"),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = TextPrimary
             });
@@ -148,7 +341,9 @@ namespace TarkovServerReporter
                 Dock = DockStyle.Bottom,
                 Height = 26,
                 Padding = new Padding(3, 0, 5, 0),
-                Text = "게임 로그가 삭제된 뒤에도 일반 레이드 메모와 유저신고 메모를 확인할 수 있습니다.",
+                Text = _sourceReadOnly
+                    ? AppText.Get("Memo.Legacy.ReadOnlySourceNotice")
+                    : AppText.Get("NoteArchive.Description"),
                 Font = new Font("Malgun Gothic", 8.5F),
                 ForeColor = TextMuted
             });
@@ -163,19 +358,22 @@ namespace TarkovServerReporter
                 Margin = Padding.Empty,
                 Padding = new Padding(0, 7, 0, 0)
             };
-            _importButton = CreateButton("불러오기", 96, SurfaceAlt, TextPrimary);
+            _importButton = CreateButton(
+                AppText.Get("Common.Button.Import"), 96, SurfaceAlt, TextPrimary);
             _importButton.Name = "MemoBackupImportButton";
-            _importButton.AccessibleName = "메모 백업 불러오기";
+            _importButton.AccessibleName = AppText.Get("NoteArchive.Backup.ImportA11y");
             _importButton.AccessibleDescription =
-                "레이드 메모와 유저신고 메모 백업을 검증하고, 없는 메모만 복원합니다. "
-                + "스크린샷 원본 파일 없이 검증된 로컬 이미지 연결 경로만 복원합니다.";
+                AppText.Get("NoteArchive.Backup.ImportDescription");
             _importButton.Click += async delegate { await ImportBackupAsync(); };
-            _exportButton = CreateButton("내보내기", 96, SurfaceAlt, TextPrimary);
+            _exportButton = CreateButton(
+                AppText.Get("Common.Button.Export"), 96, SurfaceAlt, TextPrimary);
             _exportButton.Name = "MemoBackupExportButton";
-            _exportButton.AccessibleName = "메모 통합 백업 내보내기";
-            _exportButton.AccessibleDescription =
-                "레이드 메모와 유저신고 메모를 하나의 JSON 파일로 저장합니다. "
-                + BackupScreenshotNotice;
+            _exportButton.AccessibleName = AppText.Get("NoteArchive.Backup.ExportA11y");
+            _exportButton.AccessibleDescription = AppText.Format(
+                "NoteArchive.Backup.ExportDescription",
+                AppText.Get("NoteArchive.Backup.ScreenshotNotice")) + " "
+                + AppText.Get("NoteArchive.Backup.AllScope");
+            _archiveToolTip.SetToolTip(_exportButton, AppText.Get("NoteArchive.Backup.AllScope"));
             _exportButton.Click += async delegate { await ExportBackupAsync(); };
             backupButtons.Controls.Add(_importButton);
             backupButtons.Controls.Add(_exportButton);
@@ -188,9 +386,10 @@ namespace TarkovServerReporter
             _grid = new ArchiveDataGridView
             {
                 Dock = DockStyle.Fill,
-                AccessibleName = "메모 선택 목록",
-                AccessibleDescription = "메모 선택 목록입니다. 전체 메모 0개 중 0개가 선택되었습니다. "
-                    + "선택 열 머리글은 전체 선택 또는 전체 해제이며, Ctrl+A는 전체 선택입니다.",
+                AccessibleName = AppText.Get("NoteArchive.Grid.Name"),
+                AccessibleDescription = AppText.Format(
+                    "NoteArchive.Grid.Description",
+                    BuildSelectionAccessibilitySummary(0, 0)),
                 BackgroundColor = Surface,
                 BorderStyle = BorderStyle.FixedSingle,
                 ReadOnly = false,
@@ -221,7 +420,7 @@ namespace TarkovServerReporter
                 Name = "selected",
                 HeaderCell = new ArchiveSelectionHeaderCell
                 {
-                    ToolTipText = "모든 메모를 선택하거나 전체 해제합니다."
+                    ToolTipText = AppText.Get("NoteArchive.Grid.SelectHeaderTooltip")
                 },
                 HeaderText = string.Empty,
                 CellTemplate = new ArchiveSelectionCheckBoxCell(),
@@ -231,24 +430,30 @@ namespace TarkovServerReporter
                 SortMode = DataGridViewColumnSortMode.NotSortable,
                 ReadOnly = false
             });
-            _grid.Columns.Add(CreateColumn("kind", "종류", 104));
-            _grid.Columns.Add(CreateColumn("date", "레이드 시각", 145));
-            _grid.Columns.Add(CreateColumn("game", "게임", 64));
-            _grid.Columns.Add(CreateColumn("map", "맵 · 게임유형", 180));
+            _grid.Columns.Add(CreateColumn(
+                "kind", AppText.Get("NoteArchive.Column.Kind"),
+                AppText.CurrentLanguage == AppText.EnglishLanguage ? 136 : 104));
+            _grid.Columns.Add(CreateColumn(
+                "date", AppText.Get("NoteArchive.Column.RaidTime"), 145));
+            _grid.Columns.Add(CreateColumn(
+                "game", AppText.Get("NoteArchive.Column.Game"), 64));
+            _grid.Columns.Add(CreateColumn(
+                "map", AppText.Get("NoteArchive.Column.MapGameType"), 180));
             _grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "preview",
-                HeaderText = "메모 미리보기",
+                HeaderText = AppText.Get("NoteArchive.Column.Preview"),
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 MinimumWidth = 220,
                 SortMode = DataGridViewColumnSortMode.Programmatic,
                 ReadOnly = true
             });
-            _grid.Columns.Add(CreateColumn("tags", "태그/신고", 130));
+            _grid.Columns.Add(CreateColumn(
+                "tags", AppText.Get("NoteArchive.Column.TagsReports"), 130));
             _grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "updated",
-                HeaderText = "최근 수정",
+                HeaderText = AppText.Get("NoteArchive.Column.Updated"),
                 Width = 150,
                 SortMode = DataGridViewColumnSortMode.Programmatic,
                 ReadOnly = true
@@ -257,7 +462,7 @@ namespace TarkovServerReporter
             {
                 if (column.SortMode == DataGridViewColumnSortMode.Programmatic)
                     column.HeaderCell.ToolTipText =
-                        "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.";
+                        AppText.Get("NoteArchive.Sort.Help");
             }
             _grid.CellPainting += PaintGridHeaderBorder;
             _grid.SelectionChanged += delegate { UpdateButtons(); };
@@ -364,7 +569,7 @@ namespace TarkovServerReporter
                         e.Graphics,
                         e.CellBounds,
                         GetSelectionHeaderState(_grid),
-                        _grid.Enabled);
+                        !_sourceReadOnly && _grid.Enabled);
                 }
 
                 if (activeSort)
@@ -505,7 +710,7 @@ namespace TarkovServerReporter
                 ForeColor = TextMuted,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true,
-                Text = "메모를 불러오는 중…"
+                Text = AppText.Get("NoteArchive.Loading")
             };
             layout.Controls.Add(_statusLabel, 0, 0);
 
@@ -517,19 +722,35 @@ namespace TarkovServerReporter
                 FlowDirection = FlowDirection.RightToLeft,
                 WrapContents = false
             };
-            _openButton = CreateButton("열기", 82, Accent, Color.FromArgb(29, 24, 17));
+            _openButton = CreateButton(
+                AppText.Get("Common.Button.Open"), 82, Accent, Color.FromArgb(29, 24, 17));
             _openButton.Click += delegate { OpenSelected(); };
-            _deleteButton = CreateButton("삭제", 82, Danger, Color.White);
-            _deleteButton.AccessibleName = "현재 메모 삭제";
-            _deleteButton.AccessibleDescription = "현재 행에 포커스된 메모 1개를 삭제합니다.";
+            _deleteButton = CreateButton(
+                AppText.Get(AppText.CurrentLanguage == AppText.EnglishLanguage
+                    ? "NoteArchive.Button.DeleteCurrentA11y" : "Common.Button.Delete"),
+                AppText.CurrentLanguage == AppText.EnglishLanguage ? 152 : 82,
+                Danger, Color.White);
+            _deleteButton.Name = "NoteArchiveDeleteButton";
+            _deleteButton.AccessibleName = AppText.Get(
+                "NoteArchive.Button.DeleteCurrentA11y");
+            _deleteButton.AccessibleDescription = AppText.Get(
+                "NoteArchive.Button.DeleteCurrentDescription");
             _deleteButton.Click += delegate { DeleteSelected(); };
-            _deleteSelectedButton = CreateButton("선택 삭제", 100, Danger, Color.White);
-            _deleteSelectedButton.AccessibleName = "선택 삭제";
-            _deleteSelectedButton.AccessibleDescription = "체크박스로 선택한 메모가 없습니다.";
+            _deleteSelectedButton = CreateButton(
+                AppText.Get("NoteArchive.Button.DeleteSelected"),
+                AppText.CurrentLanguage == AppText.EnglishLanguage ? 140 : 100,
+                Danger, Color.White);
+            _deleteSelectedButton.Name = "NoteArchiveDeleteSelectedButton";
+            _deleteSelectedButton.AccessibleName = AppText.Get(
+                "NoteArchive.Button.DeleteSelected");
+            _deleteSelectedButton.AccessibleDescription = AppText.Get(
+                "NoteArchive.Button.DeleteSelectedNone");
             _deleteSelectedButton.Click += delegate { DeleteCheckedRecords(); };
-            _folderButton = CreateButton("저장 폴더 열기", 126, SurfaceAlt, TextPrimary);
+            _folderButton = CreateButton(
+                AppText.Get("NoteArchive.Button.OpenFolder"), 126, SurfaceAlt, TextPrimary);
             _folderButton.Click += delegate { OpenFolder(); };
-            _refreshButton = CreateButton("새로고침", 90, SurfaceAlt, TextPrimary);
+            _refreshButton = CreateButton(
+                AppText.Get("NoteArchive.Button.Refresh"), 90, SurfaceAlt, TextPrimary);
             _refreshButton.Click += delegate { RefreshRecords(); };
             buttons.Controls.Add(_openButton);
             buttons.Controls.Add(_deleteButton);
@@ -539,6 +760,29 @@ namespace TarkovServerReporter
             layout.Controls.Add(buttons, 1, 0);
             UpdateButtons();
             return layout;
+        }
+
+        private void ApplySourceReadOnlyMode()
+        {
+            if (!_sourceReadOnly) return;
+            string notice = AppText.Get("Memo.Legacy.ReadOnlySourceNotice");
+            _grid.ReadOnly = true;
+            if (_grid.Columns.Contains("selected"))
+            {
+                DataGridViewColumn selection = _grid.Columns["selected"];
+                selection.ReadOnly = true;
+                selection.HeaderCell.ToolTipText = notice;
+            }
+            foreach (Button button in new[]
+            {
+                _importButton, _deleteButton, _deleteSelectedButton
+            })
+            {
+                button.Enabled = false;
+                button.AccessibleDescription = notice;
+            }
+            _grid.AccessibleDescription = notice;
+            UpdateButtons();
         }
 
         private static DataGridViewTextBoxColumn CreateColumn(string name, string header, int width)
@@ -583,6 +827,7 @@ namespace TarkovServerReporter
             DataGridViewColumn column = _grid.Columns[e.ColumnIndex];
             if (column.Name == "selected")
             {
+                if (_sourceReadOnly) return;
                 CommitCurrentCheckBoxEdit();
                 bool checkAll = _grid.Rows.Cast<DataGridViewRow>().Any(row => !IsRowChecked(row));
                 SetAllRowsChecked(checkAll);
@@ -692,6 +937,13 @@ namespace TarkovServerReporter
         private void GridKeyDown(object sender, KeyEventArgs e)
         {
             if (_busy) return;
+            if (_sourceReadOnly
+                && ((e.Control && e.KeyCode == Keys.A) || e.KeyCode == Keys.Space))
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
             if (e.Control && e.KeyCode == Keys.A)
             {
                 e.Handled = true;
@@ -795,7 +1047,7 @@ namespace TarkovServerReporter
             HashSet<string> checkedIdentities = GetCheckedIdentities();
             ArchiveItem selected = GetSelectedRecord();
             string selectedIdentity = selected == null ? null : selected.Identity;
-            SetBusy(true, "메모 목록을 새로고치는 중…");
+            SetBusy(true, AppText.Get("NoteArchive.Refreshing"));
             try { ReloadRecords(checkedIdentities, selectedIdentity); }
             finally { SetBusy(false, null); }
         }
@@ -810,59 +1062,85 @@ namespace TarkovServerReporter
                 _records.AddRange(raidNotes.Select(ArchiveItem.ForRaidNote));
                 _records.AddRange(reportMemos.Select(ArchiveItem.ForUserReport));
                 _records.Sort(ArchiveItem.CompareNewestFirst);
-                _updatingChecks = true;
-                try
-                {
-                    _grid.Rows.Clear();
-                    foreach (ArchiveItem record in _records)
-                    {
-                        int rowIndex = _grid.Rows.Add(
-                            checkedIdentities != null && checkedIdentities.Contains(record.Identity),
-                            record.KindLabel,
-                            FormatDate(record.RaidStartedUtc),
-                            EmptyFallback(record.Game),
-                            BuildMapAndGameType(record.MapName, record.GameType),
-                            BuildNotePreview(record.NoteText, record.IsUserReport),
-                            record.IsUserReport
-                                ? "신고 " + record.ReportCount + "건"
-                                : Summarize(record.Tags, 4),
-                            FormatDate(record.UpdatedUtc));
-                        DataGridViewRow row = _grid.Rows[rowIndex];
-                        row.Tag = record;
-                        row.Cells["preview"].ToolTipText = BuildFullNoteToolTip(
-                            record.NoteText, record.IsUserReport);
-                        row.Cells["map"].ToolTipText = BuildMapAndGameType(
-                            record.MapName,
-                            record.GameType);
-                        row.Cells["tags"].ToolTipText = record.IsUserReport
-                            ? "유저신고 " + record.ReportCount + "건"
-                            : JoinAll(record.Tags);
-                        if (!string.IsNullOrWhiteSpace(selectedIdentity)
-                            && string.Equals(record.Identity, selectedIdentity, StringComparison.OrdinalIgnoreCase))
-                            row.Selected = true;
-                    }
-                }
-                finally
-                {
-                    _updatingChecks = false;
-                }
-                ApplyArchiveSort();
-                if (_grid.SelectedRows.Count == 0 && _grid.Rows.Count > 0)
-                    _grid.Rows[0].Selected = true;
-                if (_records.Count == 0)
-                    SetStatus("저장된 메모가 없습니다.", TextMuted);
-                else
-                    SetStatus(
-                        "저장된 메모 " + _records.Count + "개 · 레이드 "
-                        + raidNotes.Count + "개 · 유저신고 " + reportMemos.Count + "개",
-                        TextMuted);
+                _searchTimer.Stop();
+                _filterPending = false;
+                RenderRecords(checkedIdentities, selectedIdentity);
                 return true;
             }
             catch (Exception ex)
             {
-                SetStatus("메모 목록을 불러오지 못했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format(
+                    "NoteArchive.LoadFailed",
+                    LocalizeArchiveError(ex.Message, "NoteArchive.UnknownError")), Danger);
                 return false;
             }
+        }
+
+        private void RenderRecords(HashSet<string> checkedIdentities, string selectedIdentity)
+        {
+            string[] terms = _searchTextBox.Text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+            List<ArchiveItem> visible = _records.Where(record => MatchesFilter(record, terms)).ToList();
+            _updatingChecks = true;
+            _grid.SuspendLayout();
+            try
+            {
+                _grid.Rows.Clear();
+                foreach (ArchiveItem record in visible)
+                {
+                    int rowIndex = _grid.Rows.Add(
+                        checkedIdentities != null && checkedIdentities.Contains(record.Identity),
+                        record.KindLabel,
+                        FormatDate(record.RaidStartedUtc),
+                        EmptyFallback(record.Game),
+                        BuildMapAndGameType(record.MapName, record.GameType),
+                        BuildNotePreview(record.NoteText, record.IsUserReport),
+                        record.IsUserReport
+                            ? AppText.Format(
+                                "NoteArchive.ReportCount", record.ReportCount)
+                            : Summarize(record.Tags, 4),
+                        FormatDate(record.UpdatedUtc));
+                    DataGridViewRow row = _grid.Rows[rowIndex];
+                    row.Tag = record;
+                    row.Cells["preview"].ToolTipText = BuildFullNoteToolTip(
+                        record.NoteText, record.IsUserReport);
+                    row.Cells["map"].ToolTipText = BuildMapAndGameType(
+                        record.MapName,
+                        record.GameType);
+                    row.Cells["tags"].ToolTipText = record.IsUserReport
+                        ? AppText.Format(
+                            "NoteArchive.ReportCountTooltip", record.ReportCount)
+                        : JoinAll(record.Tags);
+                    if (!string.IsNullOrWhiteSpace(selectedIdentity)
+                        && string.Equals(record.Identity, selectedIdentity, StringComparison.OrdinalIgnoreCase))
+                        row.Selected = true;
+                }
+                ApplyArchiveSort();
+                if (_grid.SelectedRows.Count == 0 && _grid.Rows.Count > 0)
+                    _grid.Rows[0].Selected = true;
+            }
+            finally
+            {
+                _updatingChecks = false;
+                _grid.ResumeLayout();
+            }
+            _resultCountLabel.Text = AppText.Format("NoteArchive.Search.Count", visible.Count, _records.Count);
+            _resultCountLabel.AccessibleName = _resultCountLabel.Text;
+            _emptyStateLabel.Text = AppText.Get(_records.Count == 0
+                ? "NoteArchive.Search.Empty" : "NoteArchive.Search.NoResults");
+            _emptyStateLabel.AccessibleName = _emptyStateLabel.Text;
+            _emptyStateLabel.Visible = visible.Count == 0;
+            _grid.Visible = visible.Count > 0;
+            if (_records.Count == 0)
+                SetStatus(AppText.Get("NoteArchive.Empty"), TextMuted);
+            else
+                SetStatus(
+                    AppText.Format(
+                        "NoteArchive.Count",
+                        _records.Count,
+                        _records.Count(record => !record.IsUserReport),
+                        _records.Count(record => record.IsUserReport)),
+                    TextMuted);
+            UpdateButtons();
         }
 
         private ArchiveItem GetSelectedRecord()
@@ -873,12 +1151,15 @@ namespace TarkovServerReporter
 
         private void OpenSelected()
         {
-            if (_busy) return;
+            if (_busy || _filterPending) return;
             ArchiveItem record = GetSelectedRecord();
             if (record == null) return;
             if (record.IsUserReport)
             {
-                using (var form = new UserReportMemoForm(record.UserReportMemo, _userReportStore))
+                using (var form = new UserReportMemoForm(
+                    record.UserReportMemo,
+                    _userReportStore,
+                    _sourceReadOnly))
                 {
                     form.ShowDialog(this);
                     if (form.Changed) Changed = true;
@@ -886,7 +1167,10 @@ namespace TarkovServerReporter
             }
             else
             {
-                using (var form = new RaidNoteForm(record.RaidNote, _store))
+                using (var form = new RaidNoteForm(
+                    record.RaidNote,
+                    _store,
+                    _sourceReadOnly))
                 {
                     form.ShowDialog(this);
                     if (form.Changed) Changed = true;
@@ -897,15 +1181,15 @@ namespace TarkovServerReporter
 
         private void DeleteSelected()
         {
-            if (_busy) return;
+            if (_busy || _sourceReadOnly || _filterPending) return;
             ArchiveItem record = GetSelectedRecord();
             if (record == null) return;
             DialogResult answer = MessageBox.Show(
                 this,
                 record.IsUserReport
-                    ? "선택한 유저신고 메모를 삭제할까요? 일반 레이드 메모에는 영향을 주지 않습니다."
-                    : "선택한 레이드 메모를 삭제할까요? 첨부한 원본 스크린샷은 삭제하지 않습니다.",
-                "메모 삭제",
+                    ? AppText.Get("NoteArchive.Delete.PlayerPrompt")
+                    : AppText.Get("NoteArchive.Delete.RaidPrompt"),
+                AppText.Get("NoteArchive.Delete.Title"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
             if (answer != DialogResult.Yes) return;
@@ -920,13 +1204,15 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetStatus("메모를 삭제하지 못했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format(
+                    "NoteArchive.Delete.Failed",
+                    LocalizeArchiveError(ex.Message, "NoteArchive.UnknownError")), Danger);
             }
         }
 
         private void DeleteCheckedRecords()
         {
-            if (_busy) return;
+            if (_busy || _sourceReadOnly || _filterPending) return;
             IList<ArchiveDeleteTarget> targets = GetCheckedDeleteTargets();
             if (targets.Count == 0) return;
 
@@ -934,15 +1220,12 @@ namespace TarkovServerReporter
             int reportCount = targets.Count - raidCount;
             DialogResult answer = MessageBox.Show(
                 this,
-                string.Format(
-                    "선택한 메모 {0}개를 삭제할까요?\r\n"
-                    + "레이드 메모 {1}개 · 유저신고 메모 {2}개\r\n\r\n"
-                    + "삭제한 메모는 복구할 수 없습니다. "
-                    + "레이드 메모에 첨부한 원본 스크린샷은 삭제하지 않습니다.",
+                AppText.Format(
+                    "NoteArchive.Delete.BatchPrompt",
                     targets.Count,
                     raidCount,
                     reportCount),
-                "선택 메모 삭제",
+                AppText.Get("NoteArchive.Delete.BatchTitle"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2);
@@ -950,14 +1233,15 @@ namespace TarkovServerReporter
 
             ArchiveItem selected = GetSelectedRecord();
             string selectedIdentity = selected == null ? null : selected.Identity;
-            SetBusy(true, "선택한 메모를 다시 확인하고 삭제하는 중…");
+            SetBusy(true, AppText.Get("NoteArchive.Delete.Revalidating"));
             try
             {
                 ArchiveDeleteResult result = DeleteRevalidatedTargets(targets);
                 if (result.SucceededCount > 0) Changed = true;
                 bool refreshed = ReloadRecords(result.RetainedIdentities, selectedIdentity);
                 string message = BuildBatchDeleteStatus(result);
-                if (!refreshed) message += " · 목록 새로고침 실패";
+                if (!refreshed)
+                    message += AppText.Get("NoteArchive.Delete.RefreshFailedSuffix");
                 Color color = result.SucceededCount == 0
                     ? Danger
                     : (result.FailedCount > 0 || result.MissingCount > 0 || !refreshed
@@ -967,7 +1251,9 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetStatus("선택한 메모를 삭제하지 못했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format(
+                    "NoteArchive.Delete.BatchFailed",
+                    LocalizeArchiveError(ex.Message, "NoteArchive.UnknownError")), Danger);
             }
             finally
             {
@@ -1015,7 +1301,9 @@ namespace TarkovServerReporter
                 HashSet<string> currentKeys = target.IsUserReport ? reportKeys : raidKeys;
                 if (!string.IsNullOrWhiteSpace(loadError) || currentKeys == null)
                 {
-                    result.AddFailure(target, loadError ?? "현재 저장 목록을 확인하지 못했습니다.");
+                    result.AddFailure(target, LocalizeArchiveError(
+                        loadError,
+                        "NoteArchive.Delete.StoreUnavailable"));
                     continue;
                 }
                 if (string.IsNullOrWhiteSpace(target.Key) || !currentKeys.Contains(target.Key))
@@ -1029,7 +1317,8 @@ namespace TarkovServerReporter
                 {
                     DeleteTarget(target);
                     if (TargetExists(target))
-                        throw new InvalidOperationException("삭제 후에도 저장 항목이 남아 있습니다.");
+                        throw new InvalidOperationException(
+                            AppText.Get("NoteArchive.Delete.StillExists"));
                     result.SucceededCount++;
                 }
                 catch (Exception ex)
@@ -1063,15 +1352,25 @@ namespace TarkovServerReporter
 
         private static string BuildBatchDeleteStatus(ArchiveDeleteResult result)
         {
-            if (result == null) return "선택한 메모 삭제 결과를 확인하지 못했습니다.";
+            if (result == null)
+                return AppText.Get("NoteArchive.Delete.ResultUnknown");
             var parts = new List<string>();
-            if (result.SucceededCount > 0) parts.Add(result.SucceededCount + "개 삭제");
-            if (result.MissingCount > 0) parts.Add(result.MissingCount + "개 이미 없음");
-            if (result.FailedCount > 0) parts.Add(result.FailedCount + "개 실패");
-            if (parts.Count == 0) parts.Add("삭제할 현재 항목 없음");
+            if (result.SucceededCount > 0)
+                parts.Add(AppText.Format(
+                    "NoteArchive.Delete.SucceededCount", result.SucceededCount));
+            if (result.MissingCount > 0)
+                parts.Add(AppText.Format(
+                    "NoteArchive.Delete.MissingCount", result.MissingCount));
+            if (result.FailedCount > 0)
+                parts.Add(AppText.Format(
+                    "NoteArchive.Delete.FailedCount", result.FailedCount));
+            if (parts.Count == 0)
+                parts.Add(AppText.Get("NoteArchive.Delete.NothingCurrent"));
             string message = string.Join(" · ", parts);
             if (result.FailedCount > 0 && !string.IsNullOrWhiteSpace(result.FirstError))
-                message += ": " + result.FirstError;
+                message += ": " + LocalizeArchiveError(
+                    result.FirstError,
+                    "NoteArchive.UnknownError");
             return message;
         }
 
@@ -1086,13 +1385,18 @@ namespace TarkovServerReporter
                 else
                     _store.OpenNotesFolder();
             }
-            catch (Exception ex) { SetStatus("저장 폴더를 열지 못했습니다: " + ex.Message, Danger); }
+            catch (Exception ex)
+            {
+                SetStatus(AppText.Format(
+                    "NoteArchive.OpenFolderFailed",
+                    LocalizeArchiveError(ex.Message, "NoteArchive.UnknownError")), Danger);
+            }
         }
 
         private async Task ExportBackupAsync()
         {
             if (_busy) return;
-            SetBusy(true, "레이드 메모와 유저신고 메모를 확인하는 중…");
+            SetBusy(true, AppText.Get("NoteArchive.Backup.Checking"));
             MemoArchiveBackupExportResult export;
             try
             {
@@ -1115,35 +1419,36 @@ namespace TarkovServerReporter
             {
                 SetStatus(
                     export == null || string.IsNullOrWhiteSpace(export.ErrorMessage)
-                        ? "메모 백업 데이터를 안전하게 만들지 못했습니다."
-                        : export.ErrorMessage,
+                        ? AppText.Get("NoteArchive.Backup.CreateFailed")
+                        : LocalizeArchiveError(
+                            export.ErrorMessage,
+                            "NoteArchive.Backup.CreateFailed"),
                     Danger);
                 return;
             }
 
             DialogResult confirmation = MessageBox.Show(
                 this,
-                string.Format(
-                    "일반 레이드 메모 {0}개와 유저신고 메모 {1}개를 "
-                        + "하나의 JSON 파일로 저장합니다.\r\n\r\n{2}",
+                AppText.Format(
+                    "NoteArchive.Backup.ExportPrompt",
                     export.RaidNoteCount,
                     export.UserReportMemoCount,
-                    BackupScreenshotNotice),
-                "메모 통합 백업 내보내기",
+                    AppText.Get("NoteArchive.Backup.ScreenshotNotice")),
+                AppText.Get("NoteArchive.Backup.ExportTitle"),
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Information,
                 MessageBoxDefaultButton.Button1);
             if (confirmation != DialogResult.OK)
             {
-                SetStatus("메모 백업 저장을 취소했습니다.", TextMuted);
+                SetStatus(AppText.Get("NoteArchive.Backup.Cancelled"), TextMuted);
                 return;
             }
 
             string selectedPath;
             using (var dialog = new SaveFileDialog
             {
-                Title = "메모 통합 백업 저장",
-                Filter = "TSG 메모 백업 (*.json)|*.json",
+                Title = AppText.Get("NoteArchive.Backup.SaveTitle"),
+                Filter = AppText.Get("NoteArchive.Backup.SaveFilter"),
                 DefaultExt = "json",
                 AddExtension = true,
                 OverwritePrompt = true,
@@ -1155,15 +1460,15 @@ namespace TarkovServerReporter
                 selectedPath = dialog.FileName;
             }
 
-            SetBusy(true, "메모 백업 파일을 안전하게 저장하는 중…");
+            SetBusy(true, AppText.Get("NoteArchive.Backup.Saving"));
             try
             {
                 byte[] bytes = export.Utf8Bytes;
                 await Task.Run(() => MemoArchiveBackupService.WriteAtomic(selectedPath, bytes));
                 if (IsDisposed) return;
                 SetStatus(
-                    string.Format(
-                        "레이드 메모 {0}개 · 유저신고 메모 {1}개를 {2} 파일로 저장했습니다.",
+                    AppText.Format(
+                        "NoteArchive.Backup.Saved",
                         export.RaidNoteCount,
                         export.UserReportMemoCount,
                         Path.GetFileName(selectedPath)),
@@ -1172,7 +1477,7 @@ namespace TarkovServerReporter
             catch
             {
                 if (!IsDisposed)
-                    SetStatus("메모 백업 파일을 안전하게 저장하지 못했습니다.", Danger);
+                    SetStatus(AppText.Get("NoteArchive.Backup.SaveFailed"), Danger);
             }
             finally
             {
@@ -1182,12 +1487,12 @@ namespace TarkovServerReporter
 
         private async Task ImportBackupAsync()
         {
-            if (_busy) return;
+            if (_busy || _sourceReadOnly) return;
             string selectedPath;
             using (var dialog = new OpenFileDialog
             {
-                Title = "메모 통합 백업 불러오기",
-                Filter = "TSG 메모 백업 (*.json)|*.json|모든 파일 (*.*)|*.*",
+                Title = AppText.Get("NoteArchive.Backup.ImportTitle"),
+                Filter = AppText.Get("NoteArchive.Backup.ImportFilter"),
                 CheckFileExists = true,
                 Multiselect = false,
                 RestoreDirectory = true
@@ -1197,7 +1502,7 @@ namespace TarkovServerReporter
                 selectedPath = dialog.FileName;
             }
 
-            SetBusy(true, "메모 백업 파일을 검증하는 중…");
+            SetBusy(true, AppText.Get("NoteArchive.Backup.Validating"));
             MemoArchiveBackupParseResult parsed;
             IList<MemoArchiveRestoreItem> previewItems = null;
             try
@@ -1225,8 +1530,10 @@ namespace TarkovServerReporter
             {
                 SetStatus(
                     parsed == null || string.IsNullOrWhiteSpace(parsed.ErrorMessage)
-                        ? "메모 백업 파일을 안전하게 검증하지 못했습니다."
-                        : parsed.ErrorMessage,
+                        ? AppText.Get("NoteArchive.Backup.ValidationFailed")
+                        : LocalizeArchiveError(
+                            parsed.ErrorMessage,
+                            "NoteArchive.Backup.ValidationFailed"),
                     Danger);
                 return;
             }
@@ -1248,7 +1555,7 @@ namespace TarkovServerReporter
             if (preview == null) return;
             if (!preview.ApplyAttempted)
             {
-                SetStatus("메모 복원을 취소했습니다.", TextMuted);
+                SetStatus(AppText.Get("NoteArchive.Backup.RestoreCancelled"), TextMuted);
                 return;
             }
 
@@ -1258,7 +1565,11 @@ namespace TarkovServerReporter
             RefreshRecords();
             Changed = true;
             SetStatus(
-                preview.ResultSummary,
+                AppText.Format(
+                    "NoteArchive.Backup.RestoreSummary",
+                    preview.AddedCount,
+                    preview.SkippedCount,
+                    preview.FailedCount),
                 preview.FailedCount > 0
                     ? Warning
                     : preview.HasChanges ? Success : TextMuted);
@@ -1266,19 +1577,27 @@ namespace TarkovServerReporter
 
         private void UpdateButtons()
         {
-            bool selected = !_busy && GetSelectedRecord() != null;
+            if (_updatingChecks) return;
+            bool selected = !_busy && !_filterPending && GetSelectedRecord() != null;
             int totalCount = _grid == null ? 0 : _grid.Rows.Count;
             int checkedCount = _grid == null
                 ? 0
                 : _grid.Rows.Cast<DataGridViewRow>().Count(IsRowChecked);
             if (_openButton != null) _openButton.Enabled = selected;
-            if (_deleteButton != null) _deleteButton.Enabled = selected;
+            if (_deleteButton != null)
+                _deleteButton.Enabled = !_sourceReadOnly && selected;
             if (_deleteSelectedButton != null)
             {
-                _deleteSelectedButton.Enabled = !_busy && checkedCount > 0;
-                string buttonDescription = checkedCount == 0
-                    ? "체크박스로 선택한 메모가 없습니다."
-                    : "체크박스로 선택한 메모 " + checkedCount + "개를 삭제합니다.";
+                _deleteSelectedButton.Enabled = !_sourceReadOnly
+                    && !_busy
+                    && !_filterPending
+                    && checkedCount > 0;
+                string buttonDescription = _sourceReadOnly
+                    ? AppText.Get("Memo.Legacy.ReadOnlySourceNotice")
+                    : checkedCount == 0
+                    ? AppText.Get("NoteArchive.Button.DeleteSelectedNone")
+                    : AppText.Format(
+                        "NoteArchive.Button.DeleteSelectedCount", checkedCount);
                 bool buttonDescriptionChanged = !string.Equals(
                     _deleteSelectedButton.AccessibleDescription,
                     buttonDescription,
@@ -1291,16 +1610,23 @@ namespace TarkovServerReporter
             if (_folderButton != null) _folderButton.Enabled = !_busy;
             if (_refreshButton != null) _refreshButton.Enabled = !_busy;
             if (_exportButton != null) _exportButton.Enabled = !_busy;
-            if (_importButton != null) _importButton.Enabled = !_busy;
+            if (_importButton != null)
+                _importButton.Enabled = !_sourceReadOnly && !_busy;
+            if (_searchTextBox != null) _searchTextBox.Enabled = !_busy;
+            if (_typeFilter != null) _typeFilter.Enabled = !_busy;
+            if (_clearFilterButton != null)
+                _clearFilterButton.Enabled = !_busy && (_searchTextBox.TextLength > 0 || _typeFilter.SelectedIndex != 0);
             UpdateSelectionAccessibility(totalCount, checkedCount);
         }
 
         private void UpdateSelectionAccessibility(int totalCount, int checkedCount)
         {
             if (_grid == null) return;
-            string description = "메모 선택 목록입니다. "
-                + BuildSelectionAccessibilitySummary(totalCount, checkedCount)
-                + " 선택 열 머리글은 전체 선택 또는 전체 해제이며, Ctrl+A는 전체 선택입니다.";
+            string description = _sourceReadOnly
+                ? AppText.Get("Memo.Legacy.ReadOnlySourceNotice")
+                : AppText.Format(
+                    "NoteArchive.Grid.Description",
+                    BuildSelectionAccessibilitySummary(totalCount, checkedCount));
             bool changed = !string.Equals(
                 _grid.AccessibleDescription,
                 description,
@@ -1315,7 +1641,8 @@ namespace TarkovServerReporter
 
         private static string BuildSelectionAccessibilitySummary(int totalCount, int checkedCount)
         {
-            return "전체 메모 " + totalCount + "개 중 " + checkedCount + "개가 선택되었습니다.";
+            return AppText.Format(
+                "NoteArchive.Grid.SelectionSummary", totalCount, checkedCount);
         }
 
         private static string BuildSelectionAccessibilitySummary(DataGridView grid)
@@ -1353,12 +1680,58 @@ namespace TarkovServerReporter
             return string.IsNullOrWhiteSpace(value) ? "-" : value;
         }
 
+        private static string LocalizeArchiveError(string error, string fallbackKey)
+        {
+            return AppText.TranslateDiagnostic(error, fallbackKey);
+        }
+
         private static string BuildMapAndGameType(string mapName, string gameType)
         {
             string map = EmptyFallback(mapName);
+            string normalizedGameType = string.IsNullOrWhiteSpace(gameType)
+                ? string.Empty
+                : AppText.NormalizePvpSeasonDisplay(gameType.Trim());
             return string.IsNullOrWhiteSpace(gameType)
                 ? map
-                : map + " · " + gameType.Trim();
+                : map + " · " + (string.Equals(
+                    AppText.CurrentLanguage,
+                    AppText.EnglishLanguage,
+                    StringComparison.OrdinalIgnoreCase)
+                        ? AppText.LocalizeDomainDisplay(normalizedGameType)
+                        : normalizedGameType);
+        }
+
+        private static string BuildUserReportDisplayText(UserReportMemoRecord record)
+        {
+            if (record == null) return string.Empty;
+            if (AppText.CurrentLanguage != AppText.EnglishLanguage)
+                return UserReportMemoStore.BuildDisplayText(record);
+
+            // Labels belong to the UI. Never translate the stored user fields
+            // or the legacy free-form memo to change the display language.
+            var builder = new StringBuilder();
+            IList<UserReportMemoEntry> entries = record.Entries;
+            if (entries != null)
+            {
+                for (int index = 0; index < entries.Count; index++)
+                {
+                    UserReportMemoEntry entry = entries[index];
+                    string nickname = entry == null ? string.Empty : (entry.Nickname ?? string.Empty).Trim();
+                    string reason = entry == null ? string.Empty : (entry.Reason ?? string.Empty).Trim();
+                    if (nickname.Length == 0 && reason.Length == 0) continue;
+                    if (builder.Length > 0) builder.AppendLine();
+                    builder.Append(AppText.Format("UserReport.PlayerLabel", index + 1));
+                    builder.Append(' ').Append(nickname.Length == 0 ? "-" : nickname);
+                    builder.Append(" · ").Append(AppText.Get("UserReport.ReasonLabel"));
+                    builder.Append(' ').Append(reason.Length == 0 ? "-" : reason);
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(record.MemoText))
+            {
+                if (builder.Length > 0) builder.AppendLine().AppendLine();
+                builder.Append(record.MemoText.Trim());
+            }
+            return builder.ToString();
         }
 
         private static string BuildNotePreview(string value, bool isUserReport)
@@ -1388,7 +1761,10 @@ namespace TarkovServerReporter
             List<string> items = values.Where(value => !string.IsNullOrWhiteSpace(value)).ToList();
             if (items.Count == 0) return "-";
             string summary = string.Join(", ", items.Take(maximum));
-            return items.Count > maximum ? summary + " 외 " + (items.Count - maximum) + "개" : summary;
+            return items.Count > maximum
+                ? summary + AppText.Format(
+                    "NoteArchive.More", items.Count - maximum)
+                : summary;
         }
 
         private static string JoinAll(IEnumerable<string> values)
@@ -1397,7 +1773,7 @@ namespace TarkovServerReporter
             return string.Join(", ", values.Where(value => !string.IsNullOrWhiteSpace(value)));
         }
 
-        private sealed class ArchiveDataGridView : DataGridView
+        private sealed class ArchiveDataGridView : ResizeGuideDataGridView
         {
             public void NotifyAccessibleDescriptionChanged()
             {
@@ -1440,15 +1816,16 @@ namespace TarkovServerReporter
 
                 public override string Name
                 {
-                    get { return "메모 전체 선택 또는 전체 해제"; }
+                    get { return AppText.Get("NoteArchive.A11y.HeaderName"); }
                 }
 
                 public override string Description
                 {
                     get
                     {
-                        return "선택 열 머리글입니다. 클릭하면 모든 메모를 선택하거나 선택 해제합니다. "
-                            + BuildSelectionAccessibilitySummary(_owner.DataGridView);
+                        return AppText.Format(
+                            "NoteArchive.A11y.HeaderDescription",
+                            BuildSelectionAccessibilitySummary(_owner.DataGridView));
                     }
                 }
 
@@ -1458,8 +1835,8 @@ namespace TarkovServerReporter
                     {
                         return GetSelectionHeaderState(_owner.DataGridView)
                             == HeaderSelectionState.All
-                            ? "전체 해제"
-                            : "전체 선택";
+                            ? AppText.Get("BlockedServers.Selection.ClearAll")
+                            : AppText.Get("BlockedServers.Selection.SelectAll");
                     }
                 }
 
@@ -1511,8 +1888,9 @@ namespace TarkovServerReporter
                     get
                     {
                         return _owner.RowIndex < 0
-                            ? "메모 선택 체크박스"
-                            : "메모 선택 체크박스 행 " + (_owner.RowIndex + 1);
+                            ? AppText.Get("NoteArchive.A11y.Checkbox")
+                            : AppText.Format(
+                                "NoteArchive.A11y.CheckboxRow", _owner.RowIndex + 1);
                     }
                 }
 
@@ -1521,9 +1899,12 @@ namespace TarkovServerReporter
                     get
                     {
                         bool isChecked = _owner.Value is bool && (bool)_owner.Value;
-                        return "이 메모를 선택 삭제 대상에 포함합니다. 현재 "
-                            + (isChecked ? "선택되었습니다. " : "선택되지 않았습니다. ")
-                            + BuildSelectionAccessibilitySummary(_owner.DataGridView);
+                        return AppText.Format(
+                            "NoteArchive.A11y.CheckboxDescription",
+                            isChecked
+                                ? AppText.Get("NoteArchive.A11y.Selected")
+                                : AppText.Get("NoteArchive.A11y.NotSelected"),
+                            BuildSelectionAccessibilitySummary(_owner.DataGridView));
                     }
                 }
             }
@@ -1587,7 +1968,9 @@ namespace TarkovServerReporter
                 FailedCount++;
                 if (target != null) RetainedIdentities.Add(target.Identity);
                 if (string.IsNullOrWhiteSpace(FirstError))
-                    FirstError = string.IsNullOrWhiteSpace(error) ? "알 수 없는 오류" : error;
+                    FirstError = string.IsNullOrWhiteSpace(error)
+                        ? AppText.Get("NoteArchive.UnknownError")
+                        : error;
             }
         }
 
@@ -1599,10 +1982,19 @@ namespace TarkovServerReporter
 
             public RaidNoteRecord RaidNote { get; private set; }
             public UserReportMemoRecord UserReportMemo { get; private set; }
+            public string SearchText { get; private set; }
             public bool IsUserReport { get { return UserReportMemo != null; } }
             public string Key { get { return IsUserReport ? UserReportMemo.Key : RaidNote.Key; } }
             public string Identity { get { return (IsUserReport ? "report:" : "raid:") + Key; } }
-            public string KindLabel { get { return IsUserReport ? "유저신고 메모" : "레이드 메모"; } }
+            public string KindLabel
+            {
+                get
+                {
+                    return IsUserReport
+                        ? AppText.Get("NoteArchive.Kind.PlayerReport")
+                        : AppText.Get("NoteArchive.Kind.Raid");
+                }
+            }
             public DateTime RaidStartedUtc
             {
                 get { return IsUserReport ? UserReportMemo.RaidStartedUtc : RaidNote.RaidStartedUtc; }
@@ -1622,7 +2014,7 @@ namespace TarkovServerReporter
                 get
                 {
                     return IsUserReport
-                        ? UserReportMemoStore.BuildDisplayText(UserReportMemo)
+                        ? BuildUserReportDisplayText(UserReportMemo)
                         : RaidNote.NoteText;
                 }
             }
@@ -1634,12 +2026,18 @@ namespace TarkovServerReporter
 
             public static ArchiveItem ForRaidNote(RaidNoteRecord record)
             {
-                return new ArchiveItem { RaidNote = record };
+                var item = new ArchiveItem { RaidNote = record };
+                item.SearchText = string.Join("\n", new[] { item.Game, item.GameType, item.MapName,
+                    record.NoteText, string.Join(" ", record.Tags ?? new List<string>()) });
+                return item;
             }
 
             public static ArchiveItem ForUserReport(UserReportMemoRecord record)
             {
-                return new ArchiveItem { UserReportMemo = record };
+                var item = new ArchiveItem { UserReportMemo = record };
+                item.SearchText = string.Join("\n", new[] { item.Game, item.GameType, item.MapName,
+                    UserReportMemoStore.BuildDisplayText(record) });
+                return item;
             }
 
             public static int CompareNewestFirst(ArchiveItem left, ArchiveItem right)

@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -31,7 +31,7 @@ namespace TarkovServerReporter
             _items = (items ?? Enumerable.Empty<BlockedServerRestoreItem>()).ToList();
             SelectedItems = new List<BlockedServerRestoreItem>();
 
-            Text = "차단 목록 복원 미리보기";
+            Text = AppText.Get("BlockRestore.Title");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(940, 560);
             MinimumSize = new Size(760, 440);
@@ -63,7 +63,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(0, 0),
-                Text = "차단 목록 복원 미리보기",
+                Text = AppText.Get("BlockRestore.Title"),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = TextPrimary
             });
@@ -73,7 +73,7 @@ namespace TarkovServerReporter
                 Location = new Point(2, 38),
                 Text = string.Format(
                     CultureInfo.CurrentCulture,
-                    "새로 차단 {0}개 · 이미 차단됨 {1}개 · 적용 제외 {2}개",
+                    AppText.Get("BlockRestore.Count"),
                     newCount,
                     existingCount,
                     excludedCount),
@@ -88,11 +88,10 @@ namespace TarkovServerReporter
             root.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "선택한 새 IP만 이 PC의 Windows 방화벽에 한 번의 관리자 권한 요청으로 추가합니다.\r\n"
-                    + "이미 저장된 지역·메모·차단시각은 덮어쓰지 않고 비어 있는 정보만 복원합니다.",
+                Text = AppText.Get("BlockRestore.Policy"),
                 ForeColor = TextMuted,
                 TextAlign = ContentAlignment.MiddleLeft,
-                AccessibleName = "개인 차단 목록 복원 안내"
+                AccessibleName = AppText.Get("BlockRestore.PolicyA11y")
             }, 0, 2);
 
             var actions = new FlowLayoutPanel
@@ -103,9 +102,9 @@ namespace TarkovServerReporter
                 Padding = new Padding(0, 8, 0, 0),
                 BackColor = Background
             };
-            var cancelButton = CreateButton("취소", false);
+            var cancelButton = CreateButton(AppText.Get("취소"), false);
             cancelButton.DialogResult = DialogResult.Cancel;
-            _applyButton = CreateButton("선택 항목 복원", true);
+            _applyButton = CreateButton(AppText.Get("BlockRestore.Apply"), true);
             _applyButton.Size = new Size(126, 32);
             _applyButton.Click += ApplyClicked;
             actions.Controls.Add(cancelButton);
@@ -164,28 +163,28 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewCheckBoxColumn
             {
                 Name = "selected",
-                HeaderText = "적용",
-                Width = 52,
+                HeaderText = AppText.Get("BlockRestore.Select"),
+                Width = AppText.CurrentLanguage == AppText.EnglishLanguage ? 68 : 52,
                 FlatStyle = FlatStyle.Flat
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "status",
-                HeaderText = "구분",
+                HeaderText = AppText.Get("구분"),
                 ReadOnly = true,
                 Width = 108
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "ip",
-                HeaderText = "서버 IP",
+                HeaderText = AppText.Get("서버 IP"),
                 ReadOnly = true,
                 Width = 130
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "metadata",
-                HeaderText = "백업 정보",
+                HeaderText = AppText.Get("BlockRestore.Metadata"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 42F
@@ -193,7 +192,7 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "detail",
-                HeaderText = "확인 결과",
+                HeaderText = AppText.Get("확인 결과"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 58F
@@ -212,7 +211,8 @@ namespace TarkovServerReporter
                     GetStatusText(item.Status),
                     item.IpAddress,
                     GetMetadataText(item.Entry),
-                    item.Detail ?? string.Empty);
+                    string.IsNullOrEmpty(item.Detail) ? string.Empty
+                        : AppText.TranslateDiagnostic(item.Detail, "Diagnostic.Unknown"));
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = item;
                 row.Cells["selected"].ReadOnly = !selectable;
@@ -248,19 +248,19 @@ namespace TarkovServerReporter
 
         private static string GetStatusText(BlockedServerRestoreStatus status)
         {
-            if (status == BlockedServerRestoreStatus.NewBlock) return "새로 차단";
-            if (status == BlockedServerRestoreStatus.AlreadyBlocked) return "이미 차단됨";
-            return "적용 제외";
+            if (status == BlockedServerRestoreStatus.NewBlock) return AppText.Get("새로 차단");
+            if (status == BlockedServerRestoreStatus.AlreadyBlocked) return AppText.Get("이미 차단됨");
+            return AppText.Get("적용 제외");
         }
 
         private static string GetMetadataText(BlockedServerBackupEntry entry)
         {
-            if (entry == null || !entry.HasMetadata) return "없음";
+            if (entry == null || !entry.HasMetadata) return AppText.Get("BlockRestore.None");
             var fields = new List<string>();
-            if (!string.IsNullOrWhiteSpace(entry.DataCenter)) fields.Add("데이터센터");
-            if (!string.IsNullOrWhiteSpace(entry.Location)) fields.Add("지역");
-            if (!string.IsNullOrWhiteSpace(entry.Note)) fields.Add("메모");
-            if (entry.BlockedAtUtc.HasValue) fields.Add("차단시각");
+            if (!string.IsNullOrWhiteSpace(entry.DataCenter)) fields.Add(AppText.Get("BlockRestore.DataCenter"));
+            if (!string.IsNullOrWhiteSpace(entry.Location)) fields.Add(AppText.Get("BlockRestore.Region"));
+            if (!string.IsNullOrWhiteSpace(entry.Note)) fields.Add(AppText.Get("BlockedServers.Column.Note"));
+            if (entry.BlockedAtUtc.HasValue) fields.Add(AppText.Get("BlockRestore.BlockTime"));
             return string.Join(", ", fields);
         }
 
@@ -292,7 +292,7 @@ namespace TarkovServerReporter
         {
             IList<KeyValuePair<string, string>> items = (failures
                 ?? Enumerable.Empty<KeyValuePair<string, string>>()).ToList();
-            Text = "차단 목록 복원 결과";
+            Text = AppText.Get("BlockRestore.Results");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(760, 440);
             MinimumSize = new Size(620, 360);
@@ -318,7 +318,7 @@ namespace TarkovServerReporter
                 Dock = DockStyle.Fill,
                 Text = string.Format(
                     CultureInfo.CurrentCulture,
-                    "최종 앱 관리 차단 규칙을 확인하지 못한 항목이 {0}개 있습니다.",
+                    AppText.Get("BlockRestore.Failures"),
                     items.Count),
                 ForeColor = Color.FromArgb(231, 184, 73),
                 Font = new Font("Malgun Gothic", 10F, FontStyle.Bold),
@@ -360,17 +360,17 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "ip",
-                HeaderText = "서버 IP",
+                HeaderText = AppText.Get("서버 IP"),
                 Width = 140
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "error",
-                HeaderText = "실패 사유",
+                HeaderText = AppText.Get("BlockRestore.FailureReason"),
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
             });
             foreach (KeyValuePair<string, string> item in items)
-                grid.Rows.Add(item.Key, item.Value);
+                grid.Rows.Add(item.Key, AppText.TranslateDiagnostic(item.Value, "Diagnostic.Unknown"));
             root.Controls.Add(grid, 0, 1);
 
             var actions = new FlowLayoutPanel
@@ -382,11 +382,12 @@ namespace TarkovServerReporter
             };
             var closeButton = new Button
             {
-                Text = "닫기",
+                Text = AppText.Get("Common.Button.Close"),
                 Size = new Size(82, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 45, 55),
                 ForeColor = Color.FromArgb(232, 235, 238),
+                Margin = new Padding(3, 0, 3, 0),
                 DialogResult = DialogResult.OK
             };
             closeButton.FlatAppearance.BorderColor = Color.FromArgb(57, 68, 80);

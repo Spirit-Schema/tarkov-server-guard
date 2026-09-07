@@ -20,7 +20,7 @@ I started building this free Windows app to stop those situations where your pin
 
 It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
-Current public release: **v0.8.3**. The app interface is in Korean; this page provides English instructions.
+Current public release: **v0.8.5**. Choose Korean or English in Settings.
 
 <br>
 
@@ -45,6 +45,20 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 
 <br>
 
+## What's new
+
+Changes since 0.8.3:
+
+- TSG remembers your window size and adjusted column widths for your next session.
+- Choose Korean or English in Settings.
+- Search Saved Notes by text, tags, map, player name, or report reason, and filter by note type.
+- Add server IPs shared by your party as named lists, then remove a list's blocks together. Your personal blocks and blocks still used by other party lists stay in place.
+- Made the interface easier to use.
+- Improved log loading speed and reduced memory use when reading large logs.
+- Made note saving, backups, and restores more reliable.
+
+<br>
+
 ## Main features
 
 - **Review and manage raid records:** Check maps, game modes, connection results and report activity, and keep notes, tags and screenshot links alongside your records.
@@ -63,11 +77,41 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 
 ## Getting started
 
-1. Install or extract the app, open `TarkovServerGuard.exe`, and check the game-log paths. If automatic detection fails, use `직접선택` (Browse), then `적용` (Apply).
-2. Choose a date range, game and region, then select `조회` (Refresh) to load records and check server quality.
-3. Select `차단` (Block) or `해제` (Unblock) for a server. Windows requests administrator permission only when firewall rules are changed.
+1. Install or extract the app, open `TarkovServerGuard.exe`, and check the game-log paths. If automatic detection fails, use `Browse`, then `Apply`.
+2. Choose a date range, game and region, then select `Scan` to load records and check server quality.
+3. Select `Block` or `Unblock` for a server. Windows requests administrator permission only when firewall rules are changed.
 
-The in-app guide is available through `사용방법` (Usage guide). See [Troubleshooting — Korean](TROUBLESHOOTING.md) for additional help.
+The in-app guide is available through `Usage Guide`. See [Troubleshooting — Korean](TROUBLESHOOTING.md) for additional help.
+
+<br>
+
+<details>
+<summary><strong>How to use party blocks — step by step</strong></summary>
+
+Block the **game server IPs** your party shares, then remove that list's blocks together when you no longer need them.
+
+**① Add your party's IPs**
+
+1. Open `Blocked Servers` → `Add Party IPs`.
+2. Enter a recognizable `List Name`, such as `Tonight's party`.
+3. Under `Shared By`, choose `Party Leader` or `Party Member` to match who sent the IPs.
+4. Paste the server IPs into the input box. Use one IP per line if there are several.
+5. Select `Preview IPs` and review the addresses. Invalid addresses are excluded; correct them if needed.
+6. Select `Block IPs`, then choose `Yes` when Windows asks for administrator permission.
+
+**② Remove the list's blocks later**
+
+1. Open `Blocked Servers` → `Remove Party Blocks`.
+2. Select the list name you entered, such as `Tonight's party`.
+3. Review which IPs will be unblocked or kept, then select `Remove Blocks`. Approve the Windows permission prompt if it appears.
+
+**Your existing personal blocks and blocks still used by another party list stay in place.**
+
+- Blocks apply **only to your PC**. They are not sent to your party automatically; each person needs to add the same IPs.
+- Blocks remain active after TSG closes or Windows restarts. Remove them when you no longer need them.
+- Enter the **game server's IP**, not a party member's home IP.
+
+</details>
 
 <br>
 

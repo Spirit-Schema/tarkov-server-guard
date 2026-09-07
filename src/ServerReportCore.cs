@@ -253,8 +253,8 @@ namespace TarkovServerReporter
                     return PvpSeasonNumber.HasValue
                         && PvpSeasonNumber.Value > 0
                         && PvpSeasonNumber.Value <= 999
-                        ? "PvP시즌" + PvpSeasonNumber.Value.ToString(CultureInfo.InvariantCulture)
-                        : "PvP시즌";
+                        ? "PvP/S" + PvpSeasonNumber.Value.ToString(CultureInfo.InvariantCulture)
+                        : "PvP/S?";
                 }
                 if (ProgressionMode == TarkovProgressionMode.Pve)
                 {
@@ -302,7 +302,7 @@ namespace TarkovServerReporter
         {
             get
             {
-                if (ParticipationType == TarkovParticipationType.Solo) return "솔로";
+                if (ParticipationType == TarkovParticipationType.Solo) return "단독";
                 if (ParticipationType != TarkovParticipationType.Party) return string.Empty;
                 return RaidClassificationModel.IsValidPartySize(PartySize)
                     ? PartySize.Value.ToString(CultureInfo.InvariantCulture) + "인"
@@ -1129,19 +1129,121 @@ namespace TarkovServerReporter
         }
     }
 
+    internal static class LogFileAccess
+    {
+        // A combined byte count and the newest timestamp can hide a changed
+        // older/rotated file. Include each file's identity and metadata.
+        public static string Fingerprint(IEnumerable<FileInfo> files)
+        {
+            var value = new StringBuilder();
+            foreach (FileInfo file in files.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                value.Append(file.Name).Append('\0')
+                    .Append(file.Length).Append(':')
+                    .Append(file.LastWriteTimeUtc.Ticks).Append(':')
+                    .Append(file.CreationTimeUtc.Ticks).Append(';');
+            }
+            return value.ToString();
+        }
+
+        public static IEnumerable<string> ReadLines(string path)
+        {
+            // The enumerator owns the reader. Disposing an interrupted scan
+            // closes it immediately, and a growing live log cannot extend the
+            // read beyond the byte length observed when this pass started.
+            using (StreamReader reader = OpenReader(path))
+            {
+                while (true)
+                {
+                    string line;
+                    try { line = reader.ReadLine(); }
+                    catch (Exception exception)
+                    {
+                        throw new IOException("로그 파일을 읽지 못했습니다.", exception);
+                    }
+                    if (line == null) yield break;
+                    yield return line;
+                }
+            }
+        }
+
+        private static StreamReader OpenReader(string path)
+        {
+            Exception lastException = null;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    return new StreamReader(new SnapshotReadStream(path), Encoding.UTF8, true, 16 * 1024);
+                }
+                catch (Exception exception) { lastException = exception; }
+            }
+            throw new IOException("로그 파일을 읽지 못했습니다.", lastException);
+        }
+
+        private sealed class SnapshotReadStream : Stream
+        {
+            private readonly FileStream _source;
+            private readonly long _length;
+            private long _position;
+
+            public SnapshotReadStream(string path)
+            {
+                _source = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete, 16 * 1024, FileOptions.SequentialScan);
+                try { _length = _source.Length; }
+                catch { _source.Dispose(); throw; }
+            }
+
+            public override bool CanRead { get { return true; } }
+            public override bool CanSeek { get { return false; } }
+            public override bool CanWrite { get { return false; } }
+            public override long Length { get { return _length; } }
+            public override long Position
+            {
+                get { return _position; }
+                set { throw new NotSupportedException(); }
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                if (buffer == null) throw new ArgumentNullException("buffer");
+                if (offset < 0 || count < 0 || offset > buffer.Length - count)
+                    throw new ArgumentOutOfRangeException("count");
+                int boundedCount = (int)Math.Min(count, _length - _position);
+                if (boundedCount == 0) return 0;
+                int read = _source.Read(buffer, offset, boundedCount);
+                if (read == 0)
+                    throw new EndOfStreamException("The log was truncated while being read.");
+                _position += read;
+                return read;
+            }
+
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+            public override void SetLength(long value) { throw new NotSupportedException(); }
+            public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) _source.Dispose();
+                base.Dispose(disposing);
+            }
+        }
+    }
+
     public static class LogScanner
     {
         private sealed class LogCacheEntry
         {
-            public long Length { get; set; }
+            public string Fingerprint { get; set; }
             public DateTime LastWriteTimeUtc { get; set; }
-            public int FileCount { get; set; }
             public ServerSession Session { get; set; }
         }
 
         private static readonly object CacheLock = new object();
         private static readonly Dictionary<string, LogCacheEntry> SessionCache =
             new Dictionary<string, LogCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        private const int MaximumCachedDirectories = 256;
 
         private static readonly Regex IpRegex = new Regex(
             @"\bIp:\s*(?<ip>\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?\b",
@@ -1252,13 +1354,12 @@ namespace TarkovServerReporter
             if (logFiles.Length == 0) return null;
 
             FileInfo latestLogFile = logFiles[logFiles.Length - 1];
-            long combinedLength = 0;
             DateTime latestWriteUtc = DateTime.MinValue;
             foreach (FileInfo file in logFiles)
             {
-                combinedLength += file.Length;
                 if (file.LastWriteTimeUtc > latestWriteUtc) latestWriteUtc = file.LastWriteTimeUtc;
             }
+            string fingerprint = LogFileAccess.Fingerprint(logFiles);
 
             try
             {
@@ -1266,9 +1367,7 @@ namespace TarkovServerReporter
                 {
                     LogCacheEntry cached;
                     if (SessionCache.TryGetValue(directory.FullName, out cached)
-                        && cached.Length == combinedLength
-                        && cached.LastWriteTimeUtc == latestWriteUtc
-                        && cached.FileCount == logFiles.Length)
+                        && cached.Fingerprint == fingerprint)
                     {
                         return CloneSession(cached.Session);
                     }
@@ -1282,6 +1381,7 @@ namespace TarkovServerReporter
             string matchedIp = null;
             string matchedMap = null;
             DateTime? matchedIpDetectedAt = null;
+            bool allFilesRead = true;
 
             foreach (FileInfo logFile in logFiles)
             {
@@ -1319,6 +1419,7 @@ namespace TarkovServerReporter
                 }
                 catch
                 {
+                    allFilesRead = false;
                     // Continue with the remaining rotated logs if one file is temporarily unavailable.
                 }
             }
@@ -1340,13 +1441,28 @@ namespace TarkovServerReporter
 
             try
             {
+                FileInfo[] currentFiles = directory.GetFiles("*application*.log", SearchOption.TopDirectoryOnly);
+                bool cacheable = allFilesRead && LogFileAccess.Fingerprint(currentFiles) == fingerprint;
                 lock (CacheLock)
                 {
+                    // Never retain a partial read as an apparently complete
+                    // warm result after a sharing violation or log rotation.
+                    if (!cacheable)
+                    {
+                        SessionCache.Remove(directory.FullName);
+                        return scannedSession;
+                    }
+                    if (!SessionCache.ContainsKey(directory.FullName)
+                        && SessionCache.Count >= MaximumCachedDirectories)
+                    {
+                        var oldest = SessionCache.OrderBy(item => item.Value.LastWriteTimeUtc).First();
+                        if (latestWriteUtc <= oldest.Value.LastWriteTimeUtc) return scannedSession;
+                        SessionCache.Remove(oldest.Key);
+                    }
                     SessionCache[directory.FullName] = new LogCacheEntry
                     {
-                        Length = combinedLength,
+                        Fingerprint = fingerprint,
                         LastWriteTimeUtc = latestWriteUtc,
-                        FileCount = logFiles.Length,
                         Session = CloneSession(scannedSession)
                     };
                 }
@@ -1419,7 +1535,7 @@ namespace TarkovServerReporter
 
     public static class NetworkServices
     {
-        internal const string ProductUserAgent = "TarkovServerGuard/0.8.3";
+        internal const string ProductUserAgent = "TarkovServerGuard/0.8.4";
         private static readonly DbIpLiteGeoService GeoService = CreateGeoService();
 
         private static DbIpLiteGeoService CreateGeoService()

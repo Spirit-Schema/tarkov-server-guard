@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -25,8 +25,8 @@ namespace TarkovServerReporter
         {
             if (entry == null) throw new ArgumentNullException("entry");
 
-            Text = "Tarkov Server Guard 업데이트 완료";
-            AccessibleName = "업데이트 완료 안내";
+            Text = AppText.Get("PatchNotes.Title");
+            AccessibleName = AppText.Get("PatchNotes.A11y");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -60,25 +60,25 @@ namespace TarkovServerReporter
             root.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "v" + entry.VersionText + " 업데이트가 완료되었습니다.",
+                Text = AppText.Format("PatchNotes.Heading", entry.VersionText),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = Accent,
                 BackColor = Background,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(0),
-                AccessibleName = "업데이트 완료 버전"
+                AccessibleName = AppText.Get("PatchNotes.VersionA11y")
             }, 0, 0);
 
             root.Controls.Add(new Label
             {
                 Dock = DockStyle.Fill,
                 AutoSize = false,
-                Text = "이번 업데이트에 포함된 변경 사항입니다. 이 안내는 해당 버전 업데이트 후 한 번만 표시됩니다.",
+                Text = AppText.Get("PatchNotes.Intro"),
                 ForeColor = TextMuted,
                 BackColor = Background,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(0, 0, 0, 8),
-                AccessibleName = "일회성 업데이트 안내"
+                AccessibleName = AppText.Get("PatchNotes.IntroA11y")
             }, 0, 1);
 
             _notesTextBox = new RichTextBox
@@ -92,10 +92,10 @@ namespace TarkovServerReporter
                 BackColor = Surface,
                 ForeColor = TextPrimary,
                 Font = new Font("Malgun Gothic", 10F),
-                Text = ReleaseNotesCatalog.NormalizeNotesText(entry.NotesText),
+                Text = ReleaseNotesCatalog.GetDisplayNotes(entry),
                 Margin = new Padding(0),
-                AccessibleName = "업데이트 변경 사항",
-                AccessibleDescription = "앱에 포함된 읽기 전용 업데이트 변경 사항"
+                AccessibleName = AppText.Get("PatchNotes.Changes"),
+                AccessibleDescription = AppText.Get("PatchNotes.ChangesA11y")
             };
             var notesBorder = new Panel
             {
@@ -121,7 +121,7 @@ namespace TarkovServerReporter
 
             _closeButton = new Button
             {
-                Text = "확인",
+                Text = AppText.Get("PatchNotes.CloseButton"),
                 Size = new Size(104, 38),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Accent,
@@ -130,7 +130,7 @@ namespace TarkovServerReporter
                 Cursor = Cursors.Hand,
                 UseVisualStyleBackColor = false,
                 DialogResult = DialogResult.OK,
-                AccessibleName = "업데이트 완료 안내 확인",
+                AccessibleName = AppText.Get("PatchNotes.ConfirmA11y"),
                 Margin = new Padding(0)
             };
             _closeButton.FlatAppearance.BorderColor = Border;

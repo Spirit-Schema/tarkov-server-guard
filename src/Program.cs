@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Spirit-Schema")]
 [assembly: AssemblyProduct("Tarkov Server Guard")]
 [assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema. All rights reserved.")]
-[assembly: AssemblyVersion("0.8.3.0")]
-[assembly: AssemblyFileVersion("0.8.3.0")]
+[assembly: AssemblyVersion("0.8.5.0")]
+[assembly: AssemblyFileVersion("0.8.5.0")]
 
 namespace TarkovServerReporter
 {
@@ -36,8 +36,18 @@ namespace TarkovServerReporter
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // UI language is a local presentation preference. Firewall helper mode exits
+            // before this point so elevated batch operations never touch user settings.
             string previewPath = GetArgumentValue(args, "--preview");
             bool demoMode = HasArgument(args, "--demo") || !string.IsNullOrWhiteSpace(previewPath);
+            AppPreferences preferences = demoMode
+                ? AppPreferences.CreateDefault()
+                : new AppPreferencesStore().Load();
+            AppText.SetLanguage(preferences.Language);
+            string languageOverride = GetArgumentValue(args, "--language");
+            if (!string.IsNullOrWhiteSpace(languageOverride))
+                AppText.SetLanguage(languageOverride);
+
             var form = new MainForm(demoMode);
             form.Shown += delegate
             {

@@ -23,8 +23,8 @@ namespace TarkovServerReporter.Tests
             try
             {
                 Directory.CreateDirectory(testRoot);
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
+                StaUiTestHarness.Run(delegate
+                {
                 TestStableSeparateKeyAndTemplate();
                 TestStorageBoundaries(testRoot);
                 TestArchiveAndLegacyPlaceholder(testRoot);
@@ -34,6 +34,7 @@ namespace TarkovServerReporter.Tests
                 TestArchiveBackupUi(testRoot);
                 TestStructuredEditorAndEntryLimit(testRoot);
                 TestSaveButtonBehavior(testRoot);
+                });
                 Console.WriteLine("UserReportMemoTests: PASS");
                 return 0;
             }
@@ -935,7 +936,7 @@ namespace TarkovServerReporter.Tests
             session.CharacterType = TarkovCharacterType.Scav;
             session.ParticipationType = TarkovParticipationType.Party;
             session.PartySize = 4;
-            const string expectedType = "PvP시즌2 · 스캐브 · 4인";
+            const string expectedType = "PvP/S2 · 스캐브 · 4인";
             const string expectedDisplay = "Factory · " + expectedType;
 
             RaidNoteRecord raid = raidStore.CreateFor(session);
@@ -1016,14 +1017,16 @@ namespace TarkovServerReporter.Tests
                 Assert(exportButton.Text == "내보내기"
                     && importButton.Text == "불러오기"
                     && exportButton.AccessibleDescription.Contains(
-                        RaidNoteArchiveForm.BackupScreenshotNotice)
+                        "첨부 원본 파일은 백업에 포함되지 않으며")
+                    && exportButton.AccessibleDescription.Contains(
+                        "로컬 파일 연결 경로만 함께 저장됩니다.")
+                    && exportButton.AccessibleDescription.Contains(
+                        "경로에는 사용자명 등 개인정보가 포함될 수 있으므로 공유 전에 확인해 주세요.")
+                    && exportButton.AccessibleDescription.Contains(
+                        "다른 PC에서 같은 경로에 파일이 없으면 첨부 파일을 열 수 없습니다.")
                     && importButton.AccessibleDescription.Contains(
-                        "스크린샷 원본 파일 없이 검증된 로컬 이미지 연결 경로만 복원합니다.")
-                    && RaidNoteArchiveForm.BackupScreenshotNotice
-                        == "연결된 스크린샷 원본 파일은 백업에 포함되지 않으며, 로컬 이미지 연결 경로만 함께 저장됩니다. "
-                            + "경로에는 사용자명 등 개인정보가 포함될 수 있으므로 공유 전에 확인해 주세요. "
-                            + "다른 PC에서 같은 경로에 파일이 없으면 스크린샷을 열 수 없습니다.",
-                    "메모보관함은 스크린샷 원본 제외, 로컬 이미지 경로 복원과 개인정보 가능성을 정확히 안내해야 합니다.");
+                        "원본 파일 없이 검증된 로컬 첨부 경로만 복원합니다."),
+                    "메모보관함은 첨부 원본 제외, 기존 첨부 경로 복원과 개인정보 가능성을 정확히 안내해야 합니다.");
                 Assert(archive.AutoScaleMode == AutoScaleMode.Dpi,
                     "메모보관함 백업 버튼은 DPI 자동 배율 레이아웃 안에 있어야 합니다.");
                 DataGridView archiveGrid = GetPrivateField<DataGridView>(archive, "_grid");
@@ -1137,10 +1140,10 @@ namespace TarkovServerReporter.Tests
                 Button selectNone = FindNamedControl<Button>(preview, "MemoRestoreSelectNoneButton");
                 Button applyButton = FindNamedControl<Button>(preview, "MemoRestoreApplyButton");
                 Label restoreResultLabel = GetPrivateField<Label>(preview, "_resultLabel");
-                Assert(restoreResultLabel.Text == MemoArchiveRestorePreviewForm.RestorePolicyNotice
-                    && restoreResultLabel.AccessibleDescription
-                        == MemoArchiveRestorePreviewForm.RestorePolicyNotice,
-                    "메모 복원 미리보기는 원본 파일 제외와 검증된 로컬 이미지 경로 복원을 정확히 안내해야 합니다.");
+                Assert(restoreResultLabel.Text.Contains("기존 메모는 덮어쓰지 않으며, 체크한 새 메모만 추가합니다.")
+                    && restoreResultLabel.Text.Contains("원본 파일 없이 검증된 로컬 첨부 경로만 복원됩니다.")
+                    && restoreResultLabel.AccessibleDescription == restoreResultLabel.Text,
+                    "메모 복원 미리보기는 덮어쓰기 금지, 원본 파일 제외와 검증된 로컬 첨부 경로 복원을 정확히 안내해야 합니다.");
                 Assert(FindLabelContaining(preview,
                         "전체 3개 · 레이드 메모 2개 · 유저신고 메모 1개") != null
                     && FindLabelContaining(preview,
@@ -1167,12 +1170,12 @@ namespace TarkovServerReporter.Tests
                     "새 메모만 기본 선택하고 기존 메모는 선택할 수 없어야 합니다.");
                 Assert(grid.Columns["map"].HeaderText == "맵 · 게임유형"
                     && Convert.ToString(FindRowByMap(grid, "NewRaid").Cells["map"].Value)
-                        == "NewRaid · PvP시즌2 · PMC · 2인 파티"
+                        == "NewRaid · PvP/S2 · PMC · 2인 파티"
                     && Convert.ToString(FindRowByMap(grid, "NewReport").Cells["map"].Value)
                         == "NewReport · PvP · 스캐브 · 솔로",
                     "복원 미리보기에도 맵과 백업된 게임유형을 함께 표시해야 합니다.");
                 Assert(FindRowByMap(grid, "NewRaid").Cells["map"].ToolTipText
-                        == "NewRaid · PvP시즌2 · PMC · 2인 파티"
+                        == "NewRaid · PvP/S2 · PMC · 2인 파티"
                     && FindRowByMap(grid, "NewReport").Cells["map"].ToolTipText
                         == "NewReport · PvP · 스캐브 · 솔로",
                     "복원 미리보기의 레이드 문맥 툴팁은 표시 전문과 같아야 합니다.");

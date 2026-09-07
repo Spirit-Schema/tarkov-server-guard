@@ -8,6 +8,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace TarkovServerReporter.Tests
@@ -20,6 +22,8 @@ namespace TarkovServerReporter.Tests
         {
             if (args.Length == 4 && args[0] == "--raid-worker")
                 return RunRaidWorker(args[1], args[2], args[3]);
+            if (args.Length == 6 && args[0] == "--save-worker")
+                return RunSaveWorker(args[1], args[2], args[3], args[4], args[5]);
 
             string root = Path.Combine(
                 Path.GetTempPath(),
@@ -29,11 +33,16 @@ namespace TarkovServerReporter.Tests
                 Directory.CreateDirectory(root);
                 TestFileNameAndDeterministicPrivacyRoundTrip(root);
                 TestUnifiedRestoreAndMissingOnly(root);
+                TestVersionOneFixtureCompatibility(root);
                 TestAtomicWriteAndEmptyProtection(root);
                 TestStrictValidation();
                 TestStoreCreateOnlyAndBackupFallback(root);
                 TestPartialFailureAndRetryState(root);
                 TestCrossProcessCreateOnly(root);
+                TestIncompleteStoreBackupProtection(root);
+                TestMemoSaveDurability(root);
+                TestIndependentMemoWriters(root);
+                TestCrossProcessMemoWriters(root);
             }
             catch (Exception ex)
             {
@@ -164,6 +173,7 @@ namespace TarkovServerReporter.Tests
                 now.AddHours(-2));
             sourceRaid.ScreenshotPaths.Add("Z:\\Transferred\\missing-first.png");
             sourceRaid.ScreenshotPaths.Add("Y:\\ArchivedComputer\\Shots\\missing-second.webp");
+            sourceRaid.ScreenshotPaths.Add("Z:\\OldTestBuild\\existing-recording.mp4");
             MemoArchiveBackupExportResult export = MemoArchiveBackupService.CreateExport(
                 new[] { sourceRaid },
                 new[] { CreateReport(sharedKey, "source report", now.AddHours(-1)) },
@@ -195,6 +205,10 @@ namespace TarkovServerReporter.Tests
             raids.Save(sharedKey, loadedRaid);
             loadedReport.MemoText = "local report must survive";
             reports.Save(sharedKey, loadedReport);
+            string raidPath = Path.Combine(raids.NotesFolder, sharedKey + ".json");
+            string reportPath = Path.Combine(root, "roundtrip-reports", sharedKey + ".json");
+            byte[] raidBeforeRestore = File.ReadAllBytes(raidPath);
+            byte[] reportBeforeRestore = File.ReadAllBytes(reportPath);
             preview = MemoArchiveBackupService.CreateRestorePreview(parsed, raids, reports);
             Assert(preview.All(item => item.Status == MemoArchiveRestoreStatus.Existing
                     && !item.Selected),
@@ -205,6 +219,34 @@ namespace TarkovServerReporter.Tests
                 && raids.Load(sharedKey).NoteText == "local raid must survive"
                 && reports.Load(sharedKey).MemoText == "local report must survive",
                 "existing records are never overwritten");
+            Assert(File.ReadAllBytes(raidPath).SequenceEqual(raidBeforeRestore)
+                && File.ReadAllBytes(reportPath).SequenceEqual(reportBeforeRestore),
+                "skipping existing records preserves their exact primary bytes, including attachment links");
+        }
+
+        private static void TestVersionOneFixtureCompatibility(string root)
+        {
+            // Independently authored v0.8.3-format fixture: unlike a round-trip
+            // through the current exporter, this catches simultaneous writer and
+            // reader drift that would make old user backups unreadable.
+            const string oldArchive = @"{""Format"":""TarkovServerGuard.Memos"",""Version"":1,""CreatedUtc"":""2026-08-20T10:00:00.0000000Z"",""RaidNotes"":[{""Key"":""aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"",""Game"":""EFT"",""GameType"":""PvP시즌1 · PMC · 솔로"",""RaidStartedUtc"":""2026-08-20T09:00:00.0000000Z"",""MapName"":""Customs"",""NoteText"":""0.8.3에서 저장한 메모"",""ScreenshotPaths"":[""Z:\\Screenshots\\missing.png""],""Tags"":[""기존 태그""],""CreatedUtc"":""2026-08-20T09:10:00.0000000Z"",""UpdatedUtc"":""2026-08-20T09:20:00.0000000Z""}],""UserReportMemos"":[{""Key"":""bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"",""ReportCount"":1,""Entries"":[{""Nickname"":""fixture-player"",""Reason"":""기존 신고 사유""}],""MemoText"":""기존 자유 메모"",""Game"":""EFT"",""GameType"":""PvP시즌1 · PMC · 솔로"",""RaidStartedUtc"":""2026-08-20T09:00:00.0000000Z"",""MapName"":""Customs"",""CreatedUtc"":""2026-08-20T09:10:00.0000000Z"",""UpdatedUtc"":""2026-08-20T09:20:00.0000000Z""}]}";
+            MemoArchiveBackupParseResult parsed = MemoArchiveBackupService.Parse(new UTF8Encoding(false).GetBytes(oldArchive));
+            Assert(parsed.Success && parsed.Items.Count == 2,
+                "an independently authored version-one backup remains readable");
+            var raids = new RaidNoteStore(Path.Combine(root, "v083-fixture-raids"));
+            var reports = new UserReportMemoStore(Path.Combine(root, "v083-fixture-reports"));
+            MemoArchiveRestoreResult result = MemoArchiveBackupService.ApplyMissingOnly(
+                MemoArchiveBackupService.CreateRestorePreview(parsed, raids, reports), raids, reports);
+            Assert(result.AddedCount == 2 && result.FailedCount == 0,
+                "a version-one backup restores both memo kinds");
+            RaidNoteRecord raid = raids.Load(Key('a'));
+            UserReportMemoRecord report = reports.Load(Key('b'));
+            Assert(raid != null && raid.NoteText == "0.8.3에서 저장한 메모"
+                && raid.GameType == "PvP시즌1 · PMC · 솔로"
+                && raid.ScreenshotPaths.SequenceEqual(new[] { "Z:\\Screenshots\\missing.png" })
+                && report != null && report.Entries.Count == 1
+                && report.Entries[0].Reason == "기존 신고 사유",
+                "legacy text, historical labels, missing image links, and structured report fields survive rollback");
         }
 
         private static void TestAtomicWriteAndEmptyProtection(string root)
@@ -611,6 +653,12 @@ namespace TarkovServerReporter.Tests
             Assert(RaidNoteStore.IsSafeScreenshotAttachmentPath("C:\\Shots\\one.png")
                 && RaidNoteStore.IsSafeScreenshotAttachmentPath(
                     "z:\\Other PC\\레이드 샷.WEBP")
+                && RaidNoteStore.IsSafeAttachmentPath(
+                    "C:\\Captures\\raid-result.MP4")
+                && RaidNoteStore.IsSafeAttachmentPath(
+                    "D:\\Captures\\raid-result.mkv")
+                && !RaidNoteStore.IsSafeScreenshotAttachmentPath(
+                    "C:\\Captures\\raid-result.MP4")
                 && !RaidNoteStore.IsSafeScreenshotAttachmentPath(
                     "\\\\OtherPC\\Share\\one.png")
                 && !RaidNoteStore.IsSafeScreenshotAttachmentPath("C:one.png")
@@ -622,7 +670,7 @@ namespace TarkovServerReporter.Tests
                     "C:\\Shots\\photo\u202Egnp.exe.png")
                 && !RaidNoteStore.IsSafeScreenshotAttachmentPath(
                     "C:\\Shots\\bad?.png"),
-                "screenshot links allow only safe drive-rooted image paths");
+                "new screenshot input rejects video while old attachment data permits safe image and video paths");
             RaidNoteRecord conflictingRaid = CreateRaid(key, "must not replace", now.AddHours(-1));
             Assert(!raidStore.TryRestoreMissing(key, conflictingRaid)
                 && raidStore.Load(key).NoteText == "first raid",
@@ -820,16 +868,256 @@ namespace TarkovServerReporter.Tests
                 Path.Combine(root, "session-type-reports"));
             RaidNoteRecord sessionRaid = sessionRaidStore.CreateFor(eftSession);
             UserReportMemoRecord sessionReport = sessionReportStore.CreateFor(arenaSession);
-            Assert(sessionRaid.GameType == "PvP시즌2"
+            Assert(sessionRaid.GameType == "PvP/S2"
                 && sessionReport.GameType == "TeamFight",
                 "CreateFor captures EFT raid type and Arena game mode through GameType");
             sessionRaid.GameType = "tampered";
             sessionReport.GameType = "tampered";
             sessionRaidStore.Save(eftSession, sessionRaid);
             sessionReportStore.Save(arenaSession, sessionReport);
-            Assert(sessionRaid.GameType == "PvP시즌2"
+            Assert(sessionRaid.GameType == "PvP/S2"
                 && sessionReport.GameType == "TeamFight",
                 "Save(session) refreshes GameType from the authoritative session");
+        }
+
+        private static void TestMemoSaveDurability(string root)
+        {
+            string key = Key('7');
+            DateTime now = DateTime.UtcNow.AddMinutes(-1);
+            string raidFolder = Path.Combine(root, "raid-durability");
+            var raids = new RaidNoteStore(raidFolder);
+            ExerciseMemoSaveDurability("raid", Path.Combine(raidFolder, key + ".json"),
+                text => raids.Save(key, CreateRaid(key, text, now)),
+                () => { RaidNoteRecord item = raids.Load(key); return item == null ? null : item.NoteText; });
+            string reportFolder = Path.Combine(root, "report-durability");
+            var reports = new UserReportMemoStore(reportFolder);
+            ExerciseMemoSaveDurability("report", Path.Combine(reportFolder, key + ".json"),
+                text => reports.Save(key, CreateReport(key, text, now)),
+                () => { UserReportMemoRecord item = reports.Load(key); return item == null ? null : item.MemoText; });
+        }
+
+        private static void ExerciseMemoSaveDurability(
+            string kind, string primary, Action<string> save, Func<string> load)
+        {
+            save("first complete note");
+            save("second complete note");
+            string backup = primary + ".bak";
+            byte[] goodBackup = File.ReadAllBytes(backup);
+            File.WriteAllText(primary, "{broken-primary", new UTF8Encoding(false));
+            Assert(load() == "first complete note", kind + " recovers from its last complete backup");
+            save("edited recovered note");
+            Assert(load() == "edited recovered note" && File.ReadAllBytes(backup).SequenceEqual(goodBackup),
+                kind + " saving a recovered note never replaces the valid backup with corrupt bytes");
+            File.WriteAllText(primary, "{broken-again", new UTF8Encoding(false));
+            Assert(load() == "first complete note", kind + " retains a usable fallback after recovery and another primary failure");
+            File.WriteAllText(backup, "{broken-backup", new UTF8Encoding(false));
+            byte[] damagedPrimary = File.ReadAllBytes(primary);
+            byte[] damagedBackup = File.ReadAllBytes(backup);
+            AssertThrows(() => save("must not replace damaged originals"), kind + " refuses blind overwrite of two unreadable copies");
+            Assert(File.ReadAllBytes(primary).SequenceEqual(damagedPrimary)
+                && File.ReadAllBytes(backup).SequenceEqual(damagedBackup),
+                kind + " rejected save preserves both damaged recovery artifacts byte for byte");
+
+            File.Delete(primary);
+            File.Delete(backup);
+            save("stable note");
+            // A staging file owned by another instance must not be reused or removed.
+            string foreignTemporary = primary + ".tmp";
+            byte[] marker = Encoding.UTF8.GetBytes("another in-flight save owns this file");
+            using (var held = new FileStream(foreignTemporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                held.Write(marker, 0, marker.Length);
+                held.Flush(true);
+                save("independent save");
+            }
+            Assert(load() == "independent save" && File.ReadAllBytes(foreignTemporary).SequenceEqual(marker),
+                kind + " save succeeds without touching another writer's staging file");
+            byte[] stablePrimary = File.ReadAllBytes(primary);
+            byte[] stableBackup = File.ReadAllBytes(backup);
+            using (var held = new FileStream(primary, FileMode.Open, FileAccess.Read, FileShare.Read))
+                AssertThrows(() => save("cannot commit while target is locked"), kind + " locked destination reports save failure");
+            Assert(File.ReadAllBytes(primary).SequenceEqual(stablePrimary)
+                && File.ReadAllBytes(backup).SequenceEqual(stableBackup),
+                kind + " failed commit preserves the previous primary and recovery copy");
+            Assert(Directory.GetFiles(Path.GetDirectoryName(primary), "*.save.*.tmp").Length == 0,
+                kind + " successful and failed saves clean only their own temporary files");
+        }
+
+        private static void TestIncompleteStoreBackupProtection(string root)
+        {
+            string raidFolder = Path.Combine(root, "strict-backup-raids");
+            string reportFolder = Path.Combine(root, "strict-backup-reports");
+            var raids = new RaidNoteStore(raidFolder);
+            var reports = new UserReportMemoStore(reportFolder);
+            DateTime now = DateTime.UtcNow.AddMinutes(-1);
+            string raidKey = Key('8');
+            string reportKey = Key('9');
+            raids.Save(raidKey, CreateRaid(raidKey, "readable raid", now));
+            reports.Save(reportKey, CreateReport(reportKey, "readable report", now));
+            string damagedRaid = Path.Combine(raidFolder, Key('a') + ".json");
+            File.WriteAllText(damagedRaid, "{damaged-owned-raid", new UTF8Encoding(false));
+            byte[] damagedBytes = File.ReadAllBytes(damagedRaid);
+            Assert(raids.LoadAll().Count == 1, "normal archive can still show usable notes beside a damaged note");
+            MemoArchiveBackupExportResult result = MemoArchiveBackupService.CreateExport(raids, reports, DateTime.UtcNow);
+            Assert(!result.Success && result.SafeErrorCode == "source-read-failed",
+                "backup refuses to silently omit an unreadable raid note");
+            Assert(File.ReadAllBytes(damagedRaid).SequenceEqual(damagedBytes), "failed strict export never repairs or rewrites the source");
+            File.Delete(damagedRaid);
+            string damagedReport = Path.Combine(reportFolder, Key('b') + ".json");
+            File.WriteAllText(damagedReport, "{damaged-owned-report", new UTF8Encoding(false));
+            result = MemoArchiveBackupService.CreateExport(raids, reports, DateTime.UtcNow);
+            Assert(!result.Success && result.SafeErrorCode == "source-read-failed",
+                "backup also refuses to silently omit an unreadable player report");
+            var serializer = new JavaScriptSerializer();
+            File.WriteAllText(damagedReport + ".bak", serializer.Serialize(CreateReport(Key('b'), "recovered report", now)), new UTF8Encoding(false));
+            result = MemoArchiveBackupService.CreateExport(raids, reports, DateTime.UtcNow);
+            Assert(result.Success && result.RaidNoteCount == 1 && result.UserReportMemoCount == 2,
+                "strict export accepts a valid backup fallback and includes every owned record");
+        }
+
+        private static void TestIndependentMemoWriters(string root)
+        {
+            string key = Key('c');
+            DateTime now = DateTime.UtcNow.AddMinutes(-1);
+            string raidFolder = Path.Combine(root, "independent-raid-writers");
+            var firstRaidStore = new RaidNoteStore(raidFolder);
+            var secondRaidStore = new RaidNoteStore(raidFolder);
+            ExerciseIndependentWriters("raid", Path.Combine(raidFolder, key + ".json"),
+                text => firstRaidStore.Save(key, CreateRaid(key, text, now)),
+                text => secondRaidStore.Save(key, CreateRaid(key, text, now)),
+                () => firstRaidStore.Load(key).NoteText);
+            string reportFolder = Path.Combine(root, "independent-report-writers");
+            var firstReportStore = new UserReportMemoStore(reportFolder);
+            var secondReportStore = new UserReportMemoStore(reportFolder);
+            ExerciseIndependentWriters("report", Path.Combine(reportFolder, key + ".json"),
+                text => firstReportStore.Save(key, CreateReport(key, text, now)),
+                text => secondReportStore.Save(key, CreateReport(key, text, now)),
+                () => firstReportStore.Load(key).MemoText);
+        }
+
+        private static void ExerciseIndependentWriters(
+            string kind, string primary, Action<string> firstSave, Action<string> secondSave, Func<string> load)
+        {
+            firstSave("initial");
+            for (int round = 0; round < 8; round++)
+            {
+                string firstText = "first-" + round + ":" + new string('a', 16000);
+                string secondText = "second-" + round + ":" + new string('b', 16000);
+                using (var gate = new ManualResetEventSlim(false))
+                using (var ready = new CountdownEvent(2))
+                {
+                    Task first = Task.Factory.StartNew(() => { ready.Signal(); gate.Wait(); firstSave(firstText); });
+                    Task second = Task.Factory.StartNew(() => { ready.Signal(); gate.Wait(); secondSave(secondText); });
+                    bool bothReady = ready.Wait(5000);
+                    gate.Set();
+                    if (!Task.WaitAll(new[] { first, second }, 10000))
+                        throw new TimeoutException("Independent " + kind + " writers did not finish.");
+                    Assert(bothReady, kind + " writers are both waiting before the concurrent save starts");
+                }
+                string actual = load();
+                Assert(actual == firstText || actual == secondText,
+                    kind + " independent store instances commit one complete record, round " + round);
+            }
+            Assert(Directory.GetFiles(Path.GetDirectoryName(primary), "*.save.*.tmp").Length == 0,
+                kind + " overlapping saves leave no owned staging files behind");
+        }
+
+        private static void TestCrossProcessMemoWriters(string root)
+        {
+            foreach (string kind in new[] { "raid", "report" })
+            {
+                string folder = Path.Combine(root, "process-save-" + kind);
+                string key = Key('d');
+                DateTime now = DateTime.UtcNow.AddMinutes(-1);
+                if (kind == "raid") new RaidNoteStore(folder).Save(key, CreateRaid(key, "initial", now));
+                else new UserReportMemoStore(folder).Save(key, CreateReport(key, "initial", now));
+                string eventName = "Local\\TSG-MemoSaveTest-" + Guid.NewGuid().ToString("N");
+                using (var gate = new EventWaitHandle(false, EventResetMode.ManualReset, eventName))
+                using (Process first = StartSaveWorker(kind, folder, key, "A", eventName))
+                using (Process second = StartSaveWorker(kind, folder, key, "B", eventName))
+                {
+                    try
+                    {
+                        Task<string> firstReady = first.StandardOutput.ReadLineAsync();
+                        Task<string> secondReady = second.StandardOutput.ReadLineAsync();
+                        if (!Task.WaitAll(new Task[] { firstReady, secondReady }, 5000))
+                            throw new TimeoutException("Save workers did not reach the start barrier.");
+                        Assert(firstReady.Result == "READY" && secondReady.Result == "READY",
+                            kind + " separate processes are both ready before concurrent writes");
+                        Task<string> firstOutput = first.StandardOutput.ReadToEndAsync();
+                        Task<string> secondOutput = second.StandardOutput.ReadToEndAsync();
+                        gate.Set();
+                        if (!first.WaitForExit(15000) || !second.WaitForExit(15000)
+                            || !Task.WaitAll(new Task[] { firstOutput, secondOutput }, 5000))
+                            throw new TimeoutException("Save worker processes did not exit.");
+                        Assert(first.ExitCode == 0 && second.ExitCode == 0,
+                            kind + " concurrent process saves complete without replacement/backup collisions: "
+                                + firstOutput.Result + secondOutput.Result);
+                        string expectedA = "A:15:" + new string('a', 16000);
+                        string expectedB = "B:15:" + new string('b', 16000);
+                        string actual = kind == "raid"
+                            ? new RaidNoteStore(folder).Load(key).NoteText
+                            : new UserReportMemoStore(folder).Load(key).MemoText;
+                        Assert(actual == expectedA || actual == expectedB,
+                            kind + " concurrent processes leave a complete final record");
+                        string primary = Path.Combine(folder, key + ".json");
+                        File.WriteAllText(primary, "{synthetic-damage", new UTF8Encoding(false));
+                        string recovered = kind == "raid"
+                            ? new RaidNoteStore(folder).Load(key).NoteText
+                            : new UserReportMemoStore(folder).Load(key).MemoText;
+                        Assert(recovered != null && recovered.Length > 16000
+                            && (recovered.StartsWith("A:", StringComparison.Ordinal)
+                                || recovered.StartsWith("B:", StringComparison.Ordinal)),
+                            kind + " concurrent process saves also leave a readable full backup");
+                        Assert(Directory.GetFiles(folder, "*.save.*.tmp").Length == 0,
+                            kind + " process saves clean their staging files");
+                    }
+                    finally
+                    {
+                        gate.Set();
+                        if (!first.HasExited) { first.Kill(); first.WaitForExit(5000); }
+                        if (!second.HasExited) { second.Kill(); second.WaitForExit(5000); }
+                    }
+                }
+            }
+        }
+
+        private static Process StartSaveWorker(string kind, string folder, string key, string marker, string eventName)
+        {
+            return Process.Start(new ProcessStartInfo
+            {
+                FileName = Process.GetCurrentProcess().MainModule.FileName,
+                Arguments = "--save-worker " + kind + " " + Quote(folder) + " " + key + " " + marker + " " + Quote(eventName),
+                UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true
+            });
+        }
+
+        private static int RunSaveWorker(string kind, string folder, string key, string marker, string eventName)
+        {
+            try
+            {
+                using (EventWaitHandle gate = EventWaitHandle.OpenExisting(eventName))
+                {
+                    Console.WriteLine("READY");
+                    Console.Out.Flush();
+                    if (!gate.WaitOne(5000)) throw new TimeoutException("Start barrier timed out.");
+                    var raids = new RaidNoteStore(folder);
+                    var reports = new UserReportMemoStore(folder);
+                    for (int round = 0; round < 16; round++)
+                    {
+                        string body = marker + ":" + round + ":" + new string(marker == "A" ? 'a' : 'b', 16000);
+                        if (kind == "raid") raids.Save(key, CreateRaid(key, body, DateTime.UtcNow));
+                        else reports.Save(key, CreateReport(key, body, DateTime.UtcNow));
+                    }
+                }
+                Console.WriteLine("SAVED");
+                return 0;
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine("FAILED " + exception);
+                return 1;
+            }
         }
 
         private static void TestCrossProcessCreateOnly(string root)

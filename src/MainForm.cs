@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -15,8 +16,10 @@ namespace TarkovServerReporter
 {
     public sealed class MainForm : BrandedForm
     {
-        private const string HeaderSortToolTip =
-            "클릭할 때마다 오름차순, 내림차순, 기본 순서로 정렬합니다.";
+        private static string HeaderSortToolTip
+        {
+            get { return AppText.Get("Main.Sort.HeaderHelp"); }
+        }
 
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);
@@ -35,6 +38,9 @@ namespace TarkovServerReporter
         private static readonly Color NativeScrollTrack = Color.FromArgb(23, 23, 23);
 
         private readonly bool _demoMode;
+        private readonly WindowSizeStore _windowSizeStore;
+        private Size _lastNormalClientSize;
+        private bool _windowSizeReady;
         private readonly TarkovLogSettingsStore _settingsStore = new TarkovLogSettingsStore();
         private readonly ToolTip _toolTip = new ToolTip();
         private readonly Dictionary<string, PingResult> _pingResults =
@@ -47,7 +53,23 @@ namespace TarkovServerReporter
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _firewallBusyIpAddresses =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly RaidNoteStore _noteStore = new RaidNoteStore();
+        private readonly RaidNoteStore _noteStore;
+        // Narrow service seams keep the real action workflow testable without touching
+        // Windows Firewall or user metadata. Production defaults remain the same services.
+        private Func<string, bool, Task<FirewallChangeResult>> _changeFirewallState =
+            FirewallRuleManager.ChangeWithElevationAsync;
+        private Func<string, FirewallQueryResult> _queryFirewallState = FirewallRuleManager.Query;
+        private Action<string> _saveBlockedMetadata;
+        private Action<string> _removeBlockedMetadata =
+            ipAddress => BlockedServerMetadataStore.Remove(new[] { ipAddress });
+        private Func<string, Task<RaidQualityEvidenceSummary>> _loadRaidQualityEvidence;
+        private Task _pendingQualityEvidence;
+        private Task<RaidLogScanResult> _qualityEvidenceScan;
+        private string _qualityEvidenceEftPath;
+        private string _qualityEvidenceArenaPath;
+        private long _statusRevision;
+
+        internal Task PendingQualityEvidenceUpdate { get { return _pendingQualityEvidence; } }
         private readonly InitialFirewallStateRefreshCoordinator
             _initialFirewallStateRefresh = new InitialFirewallStateRefreshCoordinator(
                 new SystemInitialFirewallStateQueryGateway());
@@ -74,6 +96,7 @@ namespace TarkovServerReporter
         private StickyActionGrid _stickyActionGrid;
         private DataGridViewScrollCorner _historyScrollCorner;
         private bool _syncingStickyActionGrid;
+        private bool _stickyActionLayoutUpdatePending;
         private Button _queryButton;
         private Button _copyIpButton;
         private Button _blockedServersButton;
@@ -83,6 +106,7 @@ namespace TarkovServerReporter
         private Button _arenaFilterButton;
         private Button _regionFilterButton;
         private Button _manualUpdateButton;
+        private Button _settingsButton;
         private Button _recentPeriodButton;
         private Button _todayPeriodButton;
         private Button _sevenDaysPeriodButton;
@@ -123,10 +147,10 @@ namespace TarkovServerReporter
         private bool _launcherSelectionRefreshPending;
         private volatile bool _launcherSelectionMonitoringStopped;
         private string _lastEftLauncherSelection;
+        private int _launcherSelectionReadVersion;
         private string _lastArenaLauncherSelection;
         private DateTime? _lastEftLauncherSelectionAt;
         private DateTime? _lastArenaLauncherSelectionAt;
-
         private enum SessionPeriodPreset
         {
             Recent100,
@@ -169,7 +193,20 @@ namespace TarkovServerReporter
             public override Color SeparatorLight { get { return Border; } }
         }
 
-        private sealed class StickyActionGrid : DataGridView
+        private class BufferedDataGridView : ResizeGuideDataGridView
+        {
+            public BufferedDataGridView()
+            {
+                DoubleBuffered = true;
+                SetStyle(
+                    ControlStyles.AllPaintingInWmPaint
+                    | ControlStyles.OptimizedDoubleBuffer,
+                    true);
+                UpdateStyles();
+            }
+        }
+
+        private sealed class StickyActionGrid : BufferedDataGridView
         {
             private readonly MainForm _owner;
 
@@ -178,8 +215,8 @@ namespace TarkovServerReporter
                 if (owner == null) throw new ArgumentNullException("owner");
                 _owner = owner;
                 TabStop = true;
-                AccessibleName = "서버 차단 및 해제";
-                AccessibleDescription = "가로 스크롤과 관계없이 선택한 서버를 차단하거나 해제합니다.";
+                AccessibleName = AppText.Get("Main.Action.HeaderAccessibleName");
+                AccessibleDescription = AppText.Get("Main.Action.HeaderAccessibleDescription");
             }
 
             protected override void OnMouseWheel(MouseEventArgs e)
@@ -323,10 +360,10 @@ namespace TarkovServerReporter
                             drawFont,
                             Size.Empty,
                             measureFlags).Width > bounds.Width
-                        && fittedSize > 6F)
+                        && fittedSize > (IsEnglishUi ? 8F : 6F))
                     {
                         if (fittedFont != null) fittedFont.Dispose();
-                        fittedSize = Math.Max(6F, fittedSize - 0.25F);
+                        fittedSize = Math.Max(IsEnglishUi ? 8F : 6F, fittedSize - 0.25F);
                         fittedFont = new Font(
                             Font.FontFamily,
                             fittedSize,
@@ -417,10 +454,10 @@ namespace TarkovServerReporter
                         drawFont,
                         Size.Empty,
                         measureFlags).Width > bounds.Width
-                    && fittedSize > 6F)
+                    && fittedSize > (IsEnglishUi ? 8F : 6F))
                 {
                     if (fittedFont != null) fittedFont.Dispose();
-                    fittedSize = Math.Max(6F, fittedSize - 0.25F);
+                    fittedSize = Math.Max(IsEnglishUi ? 8F : 6F, fittedSize - 0.25F);
                     fittedFont = new Font(
                         Font.FontFamily,
                         fittedSize,
@@ -637,10 +674,31 @@ namespace TarkovServerReporter
         }
 
         public MainForm(bool demoMode)
+            : this(demoMode, demoMode ? null : new WindowSizeStore(AppPreferencesStore.GetDefaultStorageRoot()),
+                demoMode ? null : AppPreferencesStore.GetDefaultStorageRoot())
+        {
+        }
+
+        internal MainForm(bool demoMode, WindowSizeStore windowSizeStore)
+            : this(demoMode, windowSizeStore, null)
+        {
+        }
+
+        internal MainForm(bool demoMode, WindowSizeStore windowSizeStore, string columnStorageRoot)
         {
             _demoMode = demoMode;
+            _windowSizeStore = windowSizeStore;
+            _saveBlockedMetadata = SaveBlockedServerMetadata;
+            _loadRaidQualityEvidence = LoadRecentRaidQualityEvidenceAsync;
+            // Preview sessions must never inspect the user's real notes. The store does not
+            // create this disposable path, and preview entry points cannot write to it.
+            _noteStore = demoMode
+                ? new RaidNoteStore(Path.Combine(Path.GetTempPath(),
+                    "TarkovServerGuard", "PreviewNotes-" + Guid.NewGuid().ToString("N")))
+                : new RaidNoteStore();
             InitializeWindow();
             BuildInterface();
+            ColumnWidthPersistence.Attach(this, "main", columnStorageRoot);
 
             Shown += async delegate
             {
@@ -654,6 +712,80 @@ namespace TarkovServerReporter
                     StartAutomaticUpdateCheck();
                 }
             };
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            Size? saved = _windowSizeStore == null ? null : _windowSizeStore.Load();
+            RestoreWindowSizeForWorkingArea(saved, Screen.FromControl(this).WorkingArea);
+            if (StartPosition == FormStartPosition.CenterScreen) CenterToScreen();
+            _windowSizeReady = _windowSizeStore != null;
+            RememberNormalWindowSize();
+        }
+
+        private void RestoreWindowSizeForWorkingArea(Size? saved, Rectangle area)
+        {
+            Size frame = new Size(Width - ClientSize.Width, Height - ClientSize.Height);
+            Size minimum = new Size(Math.Max(1, MinimumSize.Width - frame.Width),
+                Math.Max(1, MinimumSize.Height - frame.Height));
+            Size available = new Size(Math.Max(1, area.Width - frame.Width), Math.Max(1, area.Height - frame.Height));
+            Size desired = saved ?? WindowSizeStore.ToLogicalClientSize(ClientSize, DeviceDpi);
+            if (available.Width < minimum.Width || available.Height < minimum.Height)
+            {
+                // Keep the existing layout usable on a small working area. The window
+                // fits the screen, while scrollbars expose its full minimum-size content.
+                MinimumSize = new Size(Math.Min(MinimumSize.Width, Math.Max(1, area.Width)),
+                    Math.Min(MinimumSize.Height, Math.Max(1, area.Height)));
+                AutoScroll = true;
+                AutoScrollMinSize = minimum;
+                if (Controls.Count > 0)
+                {
+                    Control content = Controls[0];
+                    content.Dock = DockStyle.None;
+                    content.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+                    content.Location = Point.Empty;
+                    content.Margin = Padding.Empty;
+                    content.MinimumSize = minimum;
+                    ClientSizeChanged -= LayoutScrollableWindowContent;
+                    ClientSizeChanged += LayoutScrollableWindowContent;
+                }
+            }
+            ClientSize = WindowSizeStore.RestoreClientSize(desired, DeviceDpi, minimum, available);
+            // WinForms may add scrollbar thickness when assigning ClientSize.
+            Size = new Size(Math.Min(Width, Math.Max(1, area.Width)), Math.Min(Height, Math.Max(1, area.Height)));
+            LayoutScrollableWindowContent(this, EventArgs.Empty);
+            PerformLayout();
+            if (AutoScroll) AutoScrollPosition = Point.Empty;
+        }
+
+        private void LayoutScrollableWindowContent(object sender, EventArgs e)
+        {
+            if (!AutoScroll || Controls.Count == 0) return;
+            Control content = Controls[0];
+            content.Size = new Size(Math.Max(content.MinimumSize.Width, ClientSize.Width),
+                Math.Max(content.MinimumSize.Height, ClientSize.Height));
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            RememberNormalWindowSize();
+        }
+
+        private void RememberNormalWindowSize()
+        {
+            if (!_windowSizeReady || WindowState != FormWindowState.Normal
+                || ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            _lastNormalClientSize = WindowSizeStore.ToLogicalClientSize(ClientSize, DeviceDpi);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            if (e.Cancel || !_windowSizeReady || _windowSizeStore == null) return;
+            RememberNormalWindowSize();
+            _windowSizeStore.Save(_lastNormalClientSize);
         }
 
         protected override void Dispose(bool disposing)
@@ -741,8 +873,8 @@ namespace TarkovServerReporter
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 126F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 260F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, IsEnglishUi ? 110F : 126F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, IsEnglishUi ? 236F : 260F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             Controls.Add(root);
 
@@ -768,7 +900,7 @@ namespace TarkovServerReporter
             var usageNoticeButton = new Button
             {
                 AutoSize = false,
-                Text = "사용방법",
+                Text = AppText.Get("Main.Button.UsageGuide"),
                 Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
                 ForeColor = Accent,
                 BackColor = Background,
@@ -868,7 +1000,7 @@ namespace TarkovServerReporter
             {
                 ShowUsageNoticeDialog();
             };
-            _toolTip.SetToolTip(usageNoticeButton, "서버 차단 후 게임 화면에서 진행하는 방법을 확인합니다.");
+            _toolTip.SetToolTip(usageNoticeButton, AppText.Get("Main.Header.UsageTooltip"));
             panel.Controls.Add(usageNoticeButton);
             positionUsageNoticeButton(null, EventArgs.Empty);
 
@@ -876,7 +1008,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(4, 38),
-                Text = "EFT·Arena 접속 기록을 확인하고, 필요한 서버만 선택적으로 차단하거나 해제합니다.",
+                Text = AppText.Get("Main.Header.SubtitleFull"),
                 Font = new Font("Malgun Gothic", 9F),
                 ForeColor = TextMuted
             };
@@ -888,11 +1020,12 @@ namespace TarkovServerReporter
                 BackColor = Background,
                 ColumnCount = 1,
                 RowCount = 2,
-                Width = 310,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0),
                 Padding = new Padding(0, 1, 4, 1)
             };
-            rightHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            rightHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             rightHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             rightHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
@@ -906,32 +1039,46 @@ namespace TarkovServerReporter
 
             var updateRow = CreateRightAlignedHeaderRow();
             var version = CreateHeaderTextLabel(
-                "v" + GetApplicationSemanticVersion(),
+                "v" + GetApplicationDisplayVersion(),
                 new Font("Segoe UI", 9F, FontStyle.Bold),
                 TextMuted);
-            version.AccessibleName = "프로그램 버전";
-            version.AccessibleDescription = "현재 프로그램 버전 " + version.Text;
+            version.AccessibleName = AppText.Get("Main.A11y.ProgramVersion");
+            version.AccessibleDescription = AppText.Format("Main.A11y.CurrentVersion", version.Text);
             _toolTip.SetToolTip(version, version.AccessibleDescription);
             var versionSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
                 TextMuted);
             _manualUpdateButton = CreateHeaderLinkButton(
-                "업데이트확인",
-                "새 버전이 있는지 지금 확인합니다.");
-            _manualUpdateButton.AccessibleName = "업데이트확인";
-            _manualUpdateButton.AccessibleDescription = "GitHub Releases에서 새 버전을 수동으로 확인합니다.";
+                AppText.Get("Main.Update.Button"),
+                AppText.Get("Main.Update.Tooltip"));
+            _manualUpdateButton.AccessibleName = AppText.Get("Main.Update.Button");
+            _manualUpdateButton.AccessibleDescription = AppText.Get("Main.Update.AccessibleDescription");
             _manualUpdateButton.Click += async delegate { await CheckForUpdatesManuallyAsync(); };
             var licenseSeparator = CreateHeaderTextLabel(
                 "·",
                 new Font("Segoe UI", 9F),
                 TextMuted);
             Button licenseButton = CreateHeaderLinkButton(
-                "라이선스",
-                "라이선스 전문과 서드파티 고지를 확인합니다.");
-            licenseButton.AccessibleName = "라이선스";
-            licenseButton.AccessibleDescription = "라이선스 및 저작권 안내를 엽니다.";
+                AppText.Get("Main.License.Button"),
+                AppText.Get("Main.License.Tooltip"));
+            licenseButton.AccessibleName = AppText.Get("Main.License.Button");
+            licenseButton.AccessibleDescription = AppText.Get("Main.License.AccessibleDescription");
             licenseButton.Click += delegate { ShowLicenseDialog(); };
+            var settingsSeparator = CreateHeaderTextLabel(
+                "·",
+                new Font("Segoe UI", 9F),
+                TextMuted);
+            _settingsButton = CreateHeaderLinkButton(
+                AppText.Get("Settings.Button"),
+                AppText.Get("Settings.Tooltip"));
+            _settingsButton.AccessibleName = AppText.Get("Settings.Button");
+            _settingsButton.AccessibleDescription = AppText.Get("Settings.Tooltip");
+            _settingsButton.Click += delegate { ShowSettingsDialog(); };
+            // The row flows right-to-left. Add controls in reverse so the visible order is:
+            // version · update · license · settings.
+            updateRow.Controls.Add(_settingsButton);
+            updateRow.Controls.Add(settingsSeparator);
             updateRow.Controls.Add(licenseButton);
             updateRow.Controls.Add(licenseSeparator);
             updateRow.Controls.Add(_manualUpdateButton);
@@ -948,6 +1095,8 @@ namespace TarkovServerReporter
             return new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 BackColor = Background,
                 FlowDirection = FlowDirection.RightToLeft,
                 WrapContents = false,
@@ -1014,12 +1163,55 @@ namespace TarkovServerReporter
                 dialog.ShowDialog(this);
         }
 
+        private void ShowSettingsDialog()
+        {
+            if (_demoMode)
+            {
+                ShowActionNotice(AppText.Get("Main.Preview.NoSettings"));
+                return;
+            }
+            var store = new AppPreferencesStore();
+            AppPreferences previous = store.Load();
+            using (var dialog = new ApplicationSettingsForm(
+                previous,
+                delegate(AppPreferences selected)
+                {
+                    return TryApplyApplicationSettings(store, previous, selected);
+                }))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                if (dialog.RestartRequested)
+                {
+                    Application.Restart();
+                    Close();
+                }
+            }
+        }
+
+        private string TryApplyApplicationSettings(
+            AppPreferencesStore store,
+            AppPreferences previous,
+            AppPreferences selected)
+        {
+            if (store == null || previous == null || selected == null)
+                return AppText.Get("Settings.SaveFailedUnknown");
+            try
+            {
+                store.Save(selected);
+                return string.Empty;
+            }
+            catch (Exception ex)
+            {
+                return AppText.Format("Settings.SaveFailed", ex.Message);
+            }
+        }
+
         private async Task CheckForUpdatesManuallyAsync()
         {
             if (_demoMode || IsDisposed || Disposing) return;
             if (_updateCheckCancellation != null)
             {
-                SetStatus("업데이트 확인이 이미 진행 중입니다.", Warning);
+                SetStatus(AppText.Get("Main.Update.AlreadyRunning"), Warning);
                 return;
             }
 
@@ -1027,10 +1219,10 @@ namespace TarkovServerReporter
             _updateCheckCancellation = cancellation;
             if (_manualUpdateButton != null)
             {
-                _manualUpdateButton.Text = "확인 중…";
+                _manualUpdateButton.Text = AppText.Get("Main.Update.ButtonChecking");
                 _manualUpdateButton.Enabled = false;
             }
-            SetStatus("새 버전을 확인하는 중…", Accent);
+            SetStatus(AppText.Get("Main.Update.Checking"), Accent);
             try
             {
                 GitHubUpdateService service = GitHubUpdateService.CreateProduction(
@@ -1042,29 +1234,29 @@ namespace TarkovServerReporter
                 switch (result.Status)
                 {
                     case ManualUpdateCheckStatus.UpdateAvailable:
-                        SetStatus("새 버전 v" + result.Update.VersionText + "을 찾았습니다.", Accent);
+                        SetStatus(AppText.Format("Main.Update.Available", result.Update.VersionText), Accent);
                         await service.ShowUpdatePromptAsync(this, result.Update, cancellation.Token);
                         break;
                     case ManualUpdateCheckStatus.UpToDate:
-                        SetStatus("현재 v" + GetApplicationSemanticVersion() + "이 최신 버전입니다.", Success);
+                        SetStatus(AppText.Format("Main.Update.UpToDate", GetApplicationSemanticVersion()), Success);
                         break;
                     case ManualUpdateCheckStatus.AlreadyRunning:
-                        SetStatus("업데이트 확인이 이미 진행 중입니다.", Warning);
+                        SetStatus(AppText.Get("Main.Update.AlreadyRunning"), Warning);
                         break;
                     default:
-                        SetStatus("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", Warning);
+                        SetStatus(AppText.Get("Main.Update.Failed"), Warning);
                         break;
                 }
             }
             catch (OperationCanceledException)
             {
                 if (!IsDisposed && !Disposing)
-                    SetStatus("업데이트 확인을 취소했습니다.", Warning);
+                    SetStatus(AppText.Get("Main.Update.Cancelled"), Warning);
             }
             catch
             {
                 if (!IsDisposed && !Disposing)
-                    SetStatus("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", Warning);
+                    SetStatus(AppText.Get("Main.Update.Failed"), Warning);
             }
             finally
             {
@@ -1073,7 +1265,7 @@ namespace TarkovServerReporter
                 cancellation.Dispose();
                 if (_manualUpdateButton != null && !_manualUpdateButton.IsDisposed)
                 {
-                    _manualUpdateButton.Text = "업데이트확인";
+                    _manualUpdateButton.Text = AppText.Get("Main.Update.Button");
                     _manualUpdateButton.Enabled = true;
                 }
             }
@@ -1124,33 +1316,33 @@ namespace TarkovServerReporter
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104F));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, IsEnglishUi ? 30F : 38F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, IsEnglishUi ? 30F : 38F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             card.Controls.Add(layout);
 
-            layout.Controls.Add(CreatePathLabel("EFT 로그"), 0, 0);
+            layout.Controls.Add(CreatePathLabel(AppText.Get("Main.Label.EftLogPath")), 0, 0);
             _eftPathTextBox = CreatePathTextBox();
             layout.Controls.Add(_eftPathTextBox, 1, 0);
-            _eftBrowseButton = CreateButton("직접선택", false);
+            _eftBrowseButton = CreateButton(AppText.Get("Main.Path.Browse"), false);
             AlignPathButtonToTextBox(_eftBrowseButton, _eftPathTextBox, 8);
             _eftBrowseButton.Click += delegate { BrowseForGame(TarkovGame.Eft); };
             layout.Controls.Add(_eftBrowseButton, 2, 0);
 
-            layout.Controls.Add(CreatePathLabel("Arena 로그"), 0, 1);
+            layout.Controls.Add(CreatePathLabel(AppText.Get("Main.Label.ArenaLogPath")), 0, 1);
             _arenaPathTextBox = CreatePathTextBox();
             layout.Controls.Add(_arenaPathTextBox, 1, 1);
-            _arenaBrowseButton = CreateButton("직접선택", false);
+            _arenaBrowseButton = CreateButton(AppText.Get("Main.Path.Browse"), false);
             AlignPathButtonToTextBox(_arenaBrowseButton, _arenaPathTextBox, 8);
             _arenaBrowseButton.Click += delegate { BrowseForGame(TarkovGame.Arena); };
             layout.Controls.Add(_arenaBrowseButton, 2, 1);
 
-            _rediscoverPathButton = CreateButton("자동 찾기", false);
+            _rediscoverPathButton = CreateButton(AppText.Get("Main.Path.AutoDetect"), false);
             AlignPathButtonToTextBox(_rediscoverPathButton, _eftPathTextBox, 0);
             _rediscoverPathButton.Click += async delegate { await RediscoverLogPathsAsync(); };
             layout.Controls.Add(_rediscoverPathButton, 3, 0);
 
-            _applyPathButton = CreateButton("적용", false);
+            _applyPathButton = CreateButton(AppText.Get("Common.Button.Apply"), false);
             AlignPathButtonToTextBox(_applyPathButton, _arenaPathTextBox, 0);
             _applyPathButton.Click += async delegate { await ApplyLogPathsAsync(); };
             layout.Controls.Add(_applyPathButton, 3, 1);
@@ -1166,16 +1358,16 @@ namespace TarkovServerReporter
                 AlignPathButtonToTextBox(_applyPathButton, _arenaPathTextBox, 0);
             };
 
-            const string pathHelp = "시작할 때 공홈과 Steam 설치 경로를 자동으로 찾습니다. 찾지 못한 경우에만 직접 선택하세요.";
+            string pathHelp = AppText.Get("Main.Path.Help");
             _toolTip.SetToolTip(_eftPathTextBox, pathHelp);
             _toolTip.SetToolTip(_arenaPathTextBox, pathHelp);
-            _toolTip.SetToolTip(_rediscoverPathButton, "공홈·Steam 설치 경로를 다시 자동 탐지합니다.");
-            _toolTip.SetToolTip(_applyPathButton, "직접 선택한 경로를 적용합니다. 경로 변경이 없으면 현재 로그를 다시 읽습니다.");
+            _toolTip.SetToolTip(_rediscoverPathButton, AppText.Get("Main.Path.AutoDetectTooltip"));
+            _toolTip.SetToolTip(_applyPathButton, AppText.Get("Main.Path.ApplyTooltip"));
 
             _launcherSelectionLabel = new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "게임런처 선택 서버   EFT: 확인 중…   |   Arena: 확인 중…",
+                Text = AppText.Get("Main.LauncherSelection.Loading"),
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = TextMuted,
                 Font = new Font("Malgun Gothic", 8.5F),
@@ -1186,7 +1378,7 @@ namespace TarkovServerReporter
             layout.SetColumnSpan(_launcherSelectionLabel, 3);
             _toolTip.SetToolTip(
                 _launcherSelectionLabel,
-                "EFT는 BSG 런처 적용값, Arena는 인게임 서버 선택값입니다.");
+                AppText.Get("Main.LauncherSelection.Help"));
             return card;
         }
 
@@ -1279,7 +1471,7 @@ namespace TarkovServerReporter
             details.Controls.Add(new Label
             {
                 AutoSize = true,
-                Text = "선택한 접속 서버",
+                Text = AppText.Get("Main.Current.Title"),
                 ForeColor = Accent,
                 Font = new Font("Malgun Gothic", 9F, FontStyle.Bold),
                 Location = new Point(0, 0)
@@ -1288,24 +1480,31 @@ namespace TarkovServerReporter
             _ipLabel = new Label
             {
                 AutoSize = true,
-                Text = "서버를 찾는 중…",
+                Text = AppText.Get("Main.Current.Finding"),
                 ForeColor = TextPrimary,
                 Font = new Font("Segoe UI", 23F, FontStyle.Bold),
-                Location = new Point(-2, 22)
+                Location = new Point(IsEnglishUi ? 0 : -2, 22)
             };
             details.Controls.Add(_ipLabel);
 
-            _mapValueLabel = AddDetailLine(details, "게임 · 맵/유형", "-", 72, 126);
-            _mapValueLabel.AccessibleName = "선택한 접속의 게임·맵·유형";
+            int detailValueLeft = IsEnglishUi ? 150 : 126;
+            int detailRowStep = IsEnglishUi ? 20 : 24;
+            _mapValueLabel = AddDetailLine(details, AppText.Get("Main.Current.GameMapType"), "-", 72, detailValueLeft);
+            _mapValueLabel.AccessibleName = AppText.Get("Main.Current.MapTypeAccessibleName");
             _mapValueLabel.AccessibleDescription = "-";
-            _timeValueLabel = AddDetailLine(details, "접속 시각", "-", 96, 126);
-            _locationValueLabel = AddDetailLine(details, "데이터센터/지역", "조회 전", 120, 126);
-            _pingValueLabel = AddDetailLine(details, "현재 핑", "조회 전", 144, 126);
-            _actualRttValueLabel = AddDetailLine(details, "실게임 RTT", "-", 168, 126);
-            _packetLossValueLabel = AddDetailLine(details, "실게임 패킷손실", "-", 192, 126);
-            _actualRttValueLabel.AccessibleName = "선택한 접속의 실게임 RTT";
+            _timeValueLabel = AddDetailLine(details, AppText.Get("Main.Current.ConnectionTime"), "-", 72 + detailRowStep, detailValueLeft);
+            _locationValueLabel = AddDetailLine(
+                details,
+                AppText.Get("Main.Current.DataCenterRegion"),
+                AppText.Get("Main.Current.BeforeScan"),
+                72 + detailRowStep * 2,
+                detailValueLeft);
+            _pingValueLabel = AddDetailLine(details, AppText.Get("Main.Label.CurrentPing"), AppText.Get("Main.Current.BeforeScan"), 72 + detailRowStep * 3, detailValueLeft);
+            _actualRttValueLabel = AddDetailLine(details, AppText.Get("Main.Label.InRaidRtt"), "-", 72 + detailRowStep * 4, detailValueLeft);
+            _packetLossValueLabel = AddDetailLine(details, AppText.Get("Main.Current.InRaidPacketLoss"), "-", 72 + detailRowStep * 5, detailValueLeft);
+            _actualRttValueLabel.AccessibleName = AppText.Get("Main.Current.RttAccessibleName");
             _actualRttValueLabel.AccessibleDescription = "-";
-            _packetLossValueLabel.AccessibleName = "선택한 접속의 실게임 패킷손실";
+            _packetLossValueLabel.AccessibleName = AppText.Get("Main.Current.PacketLossAccessibleName");
             _packetLossValueLabel.AccessibleDescription = "-";
 
             _advancedDetailsLayout = CreateDetailInfoLayout(out _detailInfoValueLabels);
@@ -1364,7 +1563,7 @@ namespace TarkovServerReporter
             actionButtons.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             actions.Controls.Add(actionButtons, 0, 1);
 
-            _queryButton = CreateButton("조회", true);
+            _queryButton = CreateButton(AppText.Get("Common.Button.Scan"), true);
             _queryButton.Margin = new Padding(0, 3, 4, 5);
             _queryButton.Click += async delegate
             {
@@ -1377,38 +1576,45 @@ namespace TarkovServerReporter
             };
             _toolTip.SetToolTip(
                 _queryButton,
-                "최신 로그를 다시 읽은 뒤 현재 목록의 고유 IP에 대해 방화벽 상태·핑·지역을 조회합니다.");
+                AppText.Get("Main.Scan.Tooltip"));
             actionButtons.Controls.Add(_queryButton, 0, 0);
 
-            _copyIpButton = CreateButton("IP 복사", false);
+            _copyIpButton = CreateButton(AppText.Get("Common.Button.CopyIp"), false);
             _copyIpButton.Margin = new Padding(4, 3, 0, 5);
             _copyIpButton.Click += delegate { CopySelectedIp(); };
             actionButtons.Controls.Add(_copyIpButton, 1, 0);
 
-            const string privacyNoticeText =
-                "사용자의 게임 로그·계정정보·SID·로컬경로는 전송하지 않습니다.\r\n"
-                + "차단·해제 시에만 Windows 관리자권한을 요청합니다.\r\n"
-                + "게임서버 IP 지역은 외부 API 대신 PC의 DB-IP Lite 데이터로 조회합니다.\r\n"
-                + "조회 시 새 월간 지역 DB가 있으면 자동으로 업데이트합니다. (약 60~70MB 교체)\r\n"
-                + "새 버전 확인을 위해 GitHub Releases에 접속합니다.\r\n"
-                + "DB-IP.com . CC BY 4.0";
+            string privacyNoticeText = AppText.Get(IsEnglishUi
+                ? "Main.Privacy.CompactNotice" : "Main.Privacy.FullNotice");
             string[] privacyNoticeLines = privacyNoticeText.Split(
                 new[] { "\r\n" },
                 StringSplitOptions.None);
             var privacyNotice = new Label
             {
-                Dock = DockStyle.Fill,
+                Name = "PrivacyNotice",
+                Dock = IsEnglishUi ? DockStyle.None : DockStyle.Fill,
                 Text = privacyNoticeText,
                 ForeColor = TextMuted,
-                Font = new Font("Malgun Gothic", 7.5F),
+                Font = new Font(IsEnglishUi ? "Segoe UI" : "Malgun Gothic", IsEnglishUi ? 8.5F : 7.5F),
                 TextAlign = ContentAlignment.BottomLeft,
                 Padding = new Padding(1, 4, 0, 3),
-                AutoEllipsis = false
+                AutoEllipsis = false,
+                AccessibleDescription = AppText.Get("Main.Privacy.FullNotice")
             };
+            if (IsEnglishUi)
+            {
+                // A TableLayoutPanel can retain a Label's design-time 100px width
+                // after an English font swap when Dock=Fill. Four-way anchoring
+                // lets the full six-line notice use its cell without altering the
+                // established Korean layout.
+                privacyNotice.Anchor = AnchorStyles.Top | AnchorStyles.Bottom
+                    | AnchorStyles.Left | AnchorStyles.Right;
+            }
             actions.Controls.Add(privacyNotice, 0, 2);
             _toolTip.SetToolTip(
                 privacyNotice,
-                GitHubUpdateService.RepositoryUrl + "\r\n"
+                AppText.Get("Main.Privacy.FullNotice") + "\r\n\r\n"
+                + GitHubUpdateService.RepositoryUrl + "\r\n"
                 + DbIpLiteGeoService.AttributionUrl + "\r\n"
                 + DbIpLiteGeoService.LicenseUrl);
 
@@ -1430,6 +1636,19 @@ namespace TarkovServerReporter
                     int maximumNoticeHeight = Math.Max(
                         72,
                         actions.ClientSize.Height - 50 - preserveSpacer);
+                    if (IsEnglishUi)
+                    {
+                        // Keep a readable font. Wrap the compact notice and let its
+                        // row consume the unused spacer above the action buttons.
+                        int measuredHeight = TextRenderer.MeasureText(privacyNotice.Text,
+                            privacyNotice.Font, new Size(availableWidth, int.MaxValue),
+                            TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height
+                            + privacyNotice.Padding.Vertical + ScaleLogical(8, actions.DeviceDpi);
+                        float height = Math.Max(72, Math.Min(maximumNoticeHeight, measuredHeight));
+                        if (Math.Abs(actions.RowStyles[2].Height - height) > 0.5F)
+                            actions.RowStyles[2].Height = height;
+                        return;
+                    }
                     float selectedSize = 7.5F;
                     int requiredHeight = maximumNoticeHeight;
                     for (float candidate = 7.5F; candidate >= 5.5F; candidate -= 0.25F)
@@ -1542,25 +1761,27 @@ namespace TarkovServerReporter
                 Margin = new Padding(0),
                 Padding = new Padding(0, 1, 0, 1)
             };
-            _recentPeriodButton = CreatePeriodButton("최근100개", 96);
+            _recentPeriodButton = CreatePeriodButton(AppText.Get("Main.Period.Latest100"), 96);
             // The toolbar host and the grid share the same three-pixel card
             // inset. Only the first button's default four-pixel FlowLayout
             // margin shifted the whole left group past the first grid column.
             _recentPeriodButton.Margin = new Padding(0);
-            _todayPeriodButton = CreatePeriodButton("오늘", 52);
-            _sevenDaysPeriodButton = CreatePeriodButton("7일", 52);
-            _thirtyDaysPeriodButton = CreatePeriodButton("30일", 52);
-            _customPeriodButton = CreatePeriodButton("직접선택", 76);
+            _todayPeriodButton = CreatePeriodButton(
+                AppText.Get("Main.Filter.Today"),
+                IsEnglishUi ? 60 : 52);
+            _sevenDaysPeriodButton = CreatePeriodButton(AppText.Get("Main.Period.SevenDays"), 52);
+            _thirtyDaysPeriodButton = CreatePeriodButton(AppText.Get("Main.Period.ThirtyDays"), 52);
+            _customPeriodButton = CreatePeriodButton(AppText.Get("Main.Period.Custom"), 76);
             _recentPeriodButton.Click += async delegate { await SelectSessionPeriodAsync(SessionPeriodPreset.Recent100); };
             _todayPeriodButton.Click += async delegate { await SelectSessionPeriodAsync(SessionPeriodPreset.Today); };
             _sevenDaysPeriodButton.Click += async delegate { await SelectSessionPeriodAsync(SessionPeriodPreset.Last7Days); };
             _thirtyDaysPeriodButton.Click += async delegate { await SelectSessionPeriodAsync(SessionPeriodPreset.Last30Days); };
             _customPeriodButton.Click += async delegate { await SelectCustomSessionPeriodAsync(); };
-            _toolTip.SetToolTip(_recentPeriodButton, "EFT·Arena 전체에서 가장 최근 접속 기록 100개를 표시합니다.");
-            _toolTip.SetToolTip(_todayPeriodButton, "오늘 00:00부터 현재까지의 접속 기록을 다시 읽습니다.");
-            _toolTip.SetToolTip(_sevenDaysPeriodButton, "오늘을 포함한 최근 7일의 접속 기록을 다시 읽습니다.");
-            _toolTip.SetToolTip(_thirtyDaysPeriodButton, "오늘을 포함한 최근 30일의 접속 기록을 다시 읽습니다.");
-            _toolTip.SetToolTip(_customPeriodButton, "시작일과 종료일을 직접 선택합니다. 종료일 전체가 포함됩니다.");
+            _toolTip.SetToolTip(_recentPeriodButton, AppText.Get("Main.Period.Latest100Tooltip"));
+            _toolTip.SetToolTip(_todayPeriodButton, AppText.Get("Main.Period.TodayTooltip"));
+            _toolTip.SetToolTip(_sevenDaysPeriodButton, AppText.Get("Main.Period.SevenDaysTooltip"));
+            _toolTip.SetToolTip(_thirtyDaysPeriodButton, AppText.Get("Main.Period.ThirtyDaysTooltip"));
+            _toolTip.SetToolTip(_customPeriodButton, AppText.Get("Main.Period.CustomTooltip"));
             periodAndTools.Controls.Add(_recentPeriodButton);
             periodAndTools.Controls.Add(_todayPeriodButton);
             periodAndTools.Controls.Add(_sevenDaysPeriodButton);
@@ -1575,24 +1796,38 @@ namespace TarkovServerReporter
             });
 
             _notesArchiveButton = CreateToolButton(
-                "메모 보관함",
+                AppText.Get("Notes.Navigation.Label"),
                 ToolIconKind.Note,
                 Color.FromArgb(190, 119, 42),
-                104);
+                112);
             _notesArchiveButton.Click += delegate
             {
-                if (RaidNoteUi.ShowArchive(this)) RefreshNoteCells();
+                if (_demoMode)
+                {
+                    ShowActionNotice(AppText.Get("Main.Preview.NoNotes"));
+                    return;
+                }
+                try
+                {
+                    if (RaidNoteUi.ShowArchive(this)) RefreshNoteCells();
+                }
+                catch (Exception ex)
+                {
+                    SetStatus(AppText.Format("Notes.OpenFailed", ex.Message), Danger);
+                }
             };
-            _toolTip.SetToolTip(_notesArchiveButton, "게임 로그가 삭제된 뒤에도 저장한 레이드 메모를 확인합니다.");
+            _toolTip.SetToolTip(
+                _notesArchiveButton,
+                AppText.Get("Notes.Navigation.Tooltip"));
             periodAndTools.Controls.Add(_notesArchiveButton);
 
             _blockedServersButton = CreateToolButton(
-                "서버차단현황",
+                AppText.Get("Main.BlockedServers.Button"),
                 ToolIconKind.Shield,
                 Color.FromArgb(190, 88, 94),
                 116);
             _blockedServersButton.Click += async delegate { await ShowBlockedServersAsync(); };
-            _toolTip.SetToolTip(_blockedServersButton, "로그와 관계없이 앱이 관리하는 차단 서버를 확인하고 해제합니다.");
+            _toolTip.SetToolTip(_blockedServersButton, AppText.Get("Main.BlockedServers.Tooltip"));
             periodAndTools.Controls.Add(_blockedServersButton);
             titleLayout.Controls.Add(periodAndTools, 0, 0);
             var filters = new FlowLayoutPanel
@@ -1607,14 +1842,14 @@ namespace TarkovServerReporter
                 Margin = new Padding(0),
                 Padding = new Padding(0, 1, 0, 1)
             };
-            _allFilterButton = CreateFilterButton("전체");
+            _allFilterButton = CreateFilterButton(AppText.Get("Main.Filter.All"));
             _eftFilterButton = CreateFilterButton("EFT");
             _arenaFilterButton = CreateFilterButton("Arena");
-            _regionFilterButton = CreateFilterButton("지역: 전체 ▾");
-            _regionFilterButton.Size = new Size(116, 28);
+            _regionFilterButton = CreateFilterButton(AppText.Get("Main.Filter.RegionAll"));
+            _regionFilterButton.Size = new Size(IsEnglishUi ? 136 : 116, 28);
             _regionFilterButton.TabStop = true;
-            _regionFilterButton.AccessibleName = "데이터센터 지역 필터";
-            _regionFilterButton.AccessibleDescription = "최근 목록에서 표시할 데이터센터 지역을 여러 개 선택합니다.";
+            _regionFilterButton.AccessibleName = AppText.Get("Main.Filter.RegionAccessibleName");
+            _regionFilterButton.AccessibleDescription = AppText.Get("Main.Filter.RegionAccessibleDescription");
             _allFilterButton.Click += delegate { SetGameFilter(null); };
             _eftFilterButton.Click += delegate { SetGameFilter(TarkovGame.Eft); };
             _arenaFilterButton.Click += delegate { SetGameFilter(TarkovGame.Arena); };
@@ -1681,7 +1916,7 @@ namespace TarkovServerReporter
             layout.Resize += updateToolbarLayout;
             outer.Resize += updateToolbarLayout;
 
-            _historyGrid = new DataGridView
+            _historyGrid = new BufferedDataGridView
             {
                 Dock = DockStyle.Fill,
                 BackgroundColor = Surface,
@@ -1710,20 +1945,20 @@ namespace TarkovServerReporter
             _historyGrid.ColumnHeadersDefaultCellStyle.BackColor = SurfaceAlt;
             _historyGrid.ColumnHeadersDefaultCellStyle.ForeColor = TextMuted;
             _historyGrid.ColumnHeadersDefaultCellStyle.Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold);
-            _historyGrid.Columns.Add(CreateTextColumn("game", "게임", 68));
-            _historyGrid.Columns.Add(CreateTextColumn("time", "접속 시각", 154));
-            var reportColumn = CreateTextColumn("userReport", "신고기록", 86);
+            _historyGrid.Columns.Add(CreateTextColumn("game", AppText.Get("Common.Label.Game"), 68));
+            _historyGrid.Columns.Add(CreateTextColumn("time", AppText.Get("Main.Column.ConnectionTime"), 154));
+            var reportColumn = CreateTextColumn("userReport", AppText.Get("Main.Column.PlayerReports"), 86);
             reportColumn.DefaultCellStyle = new DataGridViewCellStyle
             {
                 Alignment = DataGridViewContentAlignment.BottomCenter,
-                Font = new Font("Malgun Gothic", 7.5F, FontStyle.Bold),
+                Font = new Font("Malgun Gothic", IsEnglishUi ? 8.5F : 7.5F, FontStyle.Bold),
                 Padding = new Padding(1, 0, 1, 3)
             };
             _historyGrid.Columns.Add(reportColumn);
             _historyGrid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "note",
-                HeaderText = "메모",
+                HeaderText = AppText.Get("Main.Column.Note"),
                 Width = 58,
                 SortMode = DataGridViewColumnSortMode.NotSortable,
                 DefaultCellStyle = new DataGridViewCellStyle
@@ -1741,28 +1976,28 @@ namespace TarkovServerReporter
             _historyGrid.Columns["note"].HeaderCell.Style.Padding = new Padding(0);
             DataGridViewTextBoxColumn mapModeColumn = CreateTextColumn(
                 "mapMode",
-                "맵 · 게임유형",
+                AppText.Get("Main.Column.MapGameType"),
                 220);
             mapModeColumn.CellTemplate = new RaidContextTextBoxCell();
             mapModeColumn.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
             _historyGrid.Columns.Add(mapModeColumn);
-            _historyGrid.Columns.Add(CreateTextColumn("ip", "서버 IP", 124));
-            _historyGrid.Columns.Add(CreateTextColumn("location", "데이터센터 / 지역", 172));
-            _historyGrid.Columns.Add(CreateTextColumn("ping", "현재 핑", 92));
+            _historyGrid.Columns.Add(CreateTextColumn("ip", AppText.Get("Main.Column.ServerIp"), 124));
+            _historyGrid.Columns.Add(CreateTextColumn("location", AppText.Get("Main.Column.DataCenterRegion"), 172));
+            _historyGrid.Columns.Add(CreateTextColumn("ping", AppText.Get("Main.Label.CurrentPing"), 92));
             DataGridViewTextBoxColumn actualRttColumn = CreateTwoLineTextColumn(
                 "actualRtt",
-                "실게임\r\nRTT",
+                AppText.Get("Main.Column.InRaidRtt"),
                 96);
             actualRttColumn.CellTemplate = new MetricTextBoxCell();
             _historyGrid.Columns.Add(actualRttColumn);
             DataGridViewTextBoxColumn packetLossColumn = CreateTwoLineTextColumn(
                 "packetLoss",
-                "실게임\r\n패킷손실",
-                96);
+                AppText.Get("Main.Column.InRaidPacketLoss"),
+                IsEnglishUi ? 108 : 96);
             packetLossColumn.CellTemplate = new MetricTextBoxCell();
             _historyGrid.Columns.Add(packetLossColumn);
-            DataGridViewButtonColumn blockActionColumn = CreateConnectionActionColumn("blockAction", "차단");
-            DataGridViewButtonColumn unblockActionColumn = CreateConnectionActionColumn("unblockAction", "해제");
+            DataGridViewButtonColumn blockActionColumn = CreateConnectionActionColumn("blockAction", AppText.Get("Common.Button.Block"));
+            DataGridViewButtonColumn unblockActionColumn = CreateConnectionActionColumn("unblockAction", AppText.Get("Main.Column.Unblock"));
             // The action state remains on the main row. A small native DataGridView
             // mirrors these two ButtonCells at the fixed right edge because WinForms
             // only supports freezing columns on the left.
@@ -1773,14 +2008,16 @@ namespace TarkovServerReporter
             _historyGrid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "result",
-                HeaderText = "서버연결 결과",
-                ToolTipText = "마지막 서버 연결 구간의 결과와 재접속 횟수입니다. 셀에 마우스를 올리면 상태별 의미를 확인할 수 있습니다.",
+                HeaderText = IsEnglishUi
+                    ? AppText.Get("Main.Column.ConnectionResult").Replace(" ", "\r\n")
+                    : AppText.Get("Main.Column.ConnectionResult"),
+                ToolTipText = AppText.Get("Main.Column.ConnectionResultHelp"),
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
-                MinimumWidth = 150,
+                MinimumWidth = IsEnglishUi ? 186 : 150,
                 SortMode = DataGridViewColumnSortMode.NotSortable,
                 DefaultCellStyle = new DataGridViewCellStyle
                 {
-                    Font = new Font("Malgun Gothic", 7.5F),
+                    Font = new Font("Malgun Gothic", IsEnglishUi ? 8.5F : 7.5F),
                     Padding = new Padding(2, 0, 2, 0)
                 }
             });
@@ -1788,7 +2025,7 @@ namespace TarkovServerReporter
             {
                 Name = "stickyActionSpacer",
                 HeaderText = string.Empty,
-                Width = 116,
+                Width = GetStickyActionLogicalWidth(),
                 MinimumWidth = 2,
                 SortMode = DataGridViewColumnSortMode.NotSortable,
                 Resizable = DataGridViewTriState.False,
@@ -1825,27 +2062,30 @@ namespace TarkovServerReporter
             };
             _historyGrid.CellMouseMove += delegate(object sender, DataGridViewCellMouseEventArgs args)
             {
+                // Header dividers and captured drags own the native resize cursor.
+                // Overwriting it on each move makes the cursor/resize feedback flicker.
+                if (args.RowIndex < 0 || args.ColumnIndex < 0 || _historyGrid.Capture) return;
                 bool clickable = IsInteractiveCellPoint(args);
-                _historyGrid.Cursor = clickable
-                    ? Cursors.Hand
-                    : Cursors.Default;
+                Cursor cursor = clickable ? Cursors.Hand : Cursors.Default;
+                if (_historyGrid.Cursor != cursor) _historyGrid.Cursor = cursor;
             };
-            _historyGrid.Scroll += delegate
+            _historyGrid.CellMouseLeave += delegate
             {
-                UpdateStickyActionGridBounds();
-                SyncStickyActionVerticalScroll();
+                if (!_historyGrid.Capture && _historyGrid.Cursor == Cursors.Hand)
+                    _historyGrid.Cursor = Cursors.Default;
             };
+            _historyGrid.Scroll += HistoryGridScroll;
             _historyGrid.SelectionChanged += delegate { SyncStickySelectionFromHistory(); };
             _historyGrid.RowsAdded += delegate
             {
-                UpdateStickyActionGridBounds();
+                QueueStickyActionGridBoundsUpdate();
             };
             _historyGrid.RowsRemoved += delegate
             {
-                UpdateStickyActionGridBounds();
+                QueueStickyActionGridBoundsUpdate();
             };
-            _historyGrid.Resize += delegate { UpdateStickyActionGridBounds(); };
-            _historyGrid.Layout += delegate { UpdateStickyActionGridBounds(); };
+            _historyGrid.Resize += delegate { QueueStickyActionGridBoundsUpdate(); };
+            _historyGrid.Layout += delegate { QueueStickyActionGridBoundsUpdate(); };
 
             _stickyActionGrid = CreateStickyActionGrid();
             _stickyActionGrid.ColumnHeaderMouseClick += StickyActionGridColumnHeaderMouseClick;
@@ -1873,13 +2113,13 @@ namespace TarkovServerReporter
             _statusLabel = new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "준비 중…",
+                Text = AppText.Get("Main.Status.Preparing"),
                 ForeColor = TextMuted,
                 Font = new Font("Malgun Gothic", 8.5F),
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = false,
-                AccessibleName = "작업 상태 안내",
-                AccessibleDescription = "준비 중…",
+                AccessibleName = AppText.Get("Main.Status.AccessibleName"),
+                AccessibleDescription = AppText.Get("Main.Status.Preparing"),
                 Margin = new Padding(0)
             };
             _toolTip.SetToolTip(_statusLabel, _statusLabel.Text);
@@ -2053,9 +2293,11 @@ namespace TarkovServerReporter
             grid.DefaultCellStyle.Font = _historyGrid.DefaultCellStyle.Font;
             grid.ColumnHeadersDefaultCellStyle.BackColor = SurfaceAlt;
             grid.ColumnHeadersDefaultCellStyle.ForeColor = TextMuted;
-            grid.ColumnHeadersDefaultCellStyle.Font = _historyGrid.ColumnHeadersDefaultCellStyle.Font;
-            grid.Columns.Add(CreateConnectionActionColumn("blockAction", "차단"));
-            grid.Columns.Add(CreateConnectionActionColumn("unblockAction", "해제"));
+            grid.ColumnHeadersDefaultCellStyle.Font = IsEnglishUi
+                ? new Font("Segoe UI", 8.5F, FontStyle.Bold)
+                : _historyGrid.ColumnHeadersDefaultCellStyle.Font;
+            grid.Columns.Add(CreateConnectionActionColumn("blockAction", AppText.Get("Common.Button.Block")));
+            grid.Columns.Add(CreateConnectionActionColumn("unblockAction", AppText.Get("Main.Column.Unblock")));
             foreach (DataGridViewColumn column in grid.Columns)
             {
                 column.SortMode = DataGridViewColumnSortMode.Programmatic;
@@ -2128,7 +2370,8 @@ namespace TarkovServerReporter
                         && _historySortOrder != SortOrder.None;
                     PaintDarkGridHeader(
                         e,
-                        active ? _historySortOrder : SortOrder.None);
+                        active ? _historySortOrder : SortOrder.None,
+                        IsEnglishUi);
                     return;
                 }
 
@@ -2177,7 +2420,7 @@ namespace TarkovServerReporter
                             buttonBounds.Height - 1);
                     TextRenderer.DrawText(
                         e.Graphics,
-                        isBlock ? "차단" : "해제",
+                        isBlock ? AppText.Get("Common.Button.Block") : AppText.Get("Main.Column.Unblock"),
                         e.CellStyle.Font,
                         buttonBounds,
                         foreground,
@@ -2219,7 +2462,8 @@ namespace TarkovServerReporter
                     && _historySortOrder != SortOrder.None;
                 PaintDarkGridHeader(
                     e,
-                    active ? _historySortOrder : SortOrder.None);
+                    active ? _historySortOrder : SortOrder.None,
+                    false);
                 return;
             }
 
@@ -2235,7 +2479,8 @@ namespace TarkovServerReporter
 
         private static void PaintDarkGridHeader(
             DataGridViewCellPaintingEventArgs e,
-            SortOrder sortOrder)
+            SortOrder sortOrder,
+            bool compactHorizontalPadding)
         {
             Rectangle clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
             if (clip.Width <= 0 || clip.Height <= 0) { e.Handled = true; return; }
@@ -2277,10 +2522,14 @@ namespace TarkovServerReporter
 
                 bool active = sortOrder != SortOrder.None;
                 float scale = Math.Max(1F, e.Graphics.DpiX / 96F);
-                int edgePadding = Math.Max(4, (int)Math.Round(4F * scale));
+                int edgePadding = compactHorizontalPadding
+                    ? Math.Max(2, (int)Math.Round(2F * scale))
+                    : Math.Max(4, (int)Math.Round(4F * scale));
                 int arrowWidth = Math.Max(7, (int)Math.Round(7F * scale));
                 int arrowHeight = Math.Max(5, (int)Math.Round(5F * scale));
-                int arrowGap = Math.Max(4, (int)Math.Round(4F * scale));
+                int arrowGap = compactHorizontalPadding
+                    ? Math.Max(2, (int)Math.Round(2F * scale))
+                    : Math.Max(4, (int)Math.Round(4F * scale));
                 int horizontalInset = Math.Min(
                     edgePadding,
                     Math.Max(0, (e.CellBounds.Width - 1) / 2));
@@ -2440,7 +2689,7 @@ namespace TarkovServerReporter
                         e.Graphics.DrawRectangle(pen, buttonBounds.X, buttonBounds.Y, buttonBounds.Width - 1, buttonBounds.Height - 1);
                     TextRenderer.DrawText(
                         e.Graphics,
-                        isBlock ? "차단" : "해제",
+                        isBlock ? AppText.Get("Common.Button.Block") : AppText.Get("Main.Column.Unblock"),
                         e.CellStyle.Font,
                         buttonBounds,
                         foreground,
@@ -2562,7 +2811,10 @@ namespace TarkovServerReporter
                 // Malgun Gothic bold glyphs can overhang their layout box slightly.
                 // Keep every detail key on the same safe inset from the card edge.
                 Location = new Point(4, top),
-                Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold)
+                Font = new Font(
+                    "Malgun Gothic",
+                    8.5F,
+                    FontStyle.Bold)
             };
             parent.Controls.Add(keyLabel);
 
@@ -2585,11 +2837,11 @@ namespace TarkovServerReporter
         {
             string[] keys =
             {
-                "작전시간",
-                "서버배정\u202F/\u202F입장시간",
-                "서버연결 결과",
-                "게임버전",
-                "포트\u202F/\u202F데이터센터",
+                AppText.Get("Main.Advanced.OperationTime"),
+                AppText.Get("Main.Advanced.AssignmentEntryTime"),
+                AppText.Get("Main.Column.ConnectionResult"),
+                AppText.Get("Main.Advanced.GameVersion"),
+                AppText.Get("Main.Advanced.PortDataCenter"),
                 "shortId",
                 "SID"
             };
@@ -2642,15 +2894,13 @@ namespace TarkovServerReporter
                 layout.Controls.Add(valueLabel, 1, index);
                 if (index == 0)
                 {
-                    const string operationTimeHelp =
-                        "게임 시작부터 종료까지 로그를 기준으로 계산한 시간입니다.";
+                    string operationTimeHelp = AppText.Get("Main.Advanced.OperationTimeHelp");
                     _toolTip.SetToolTip(keyLabel, operationTimeHelp);
                     _toolTip.SetToolTip(valueLabel, operationTimeHelp);
                 }
                 else if (index == 1)
                 {
-                    const string entryTimeHelp =
-                        "서버 배정과 서버 배정 후 레이드 입장까지 걸린 시간을 로그를 기준으로 표시합니다.";
+                    string entryTimeHelp = AppText.Get("Main.Advanced.AssignmentEntryHelp");
                     _toolTip.SetToolTip(keyLabel, entryTimeHelp);
                     _toolTip.SetToolTip(valueLabel, entryTimeHelp);
                 }
@@ -2667,11 +2917,42 @@ namespace TarkovServerReporter
             int availableWindowWidth = Width;
             bool compact = availableWindowWidth > 0 && availableWindowWidth < responsiveThreshold;
             _advancedDetailsLayout.Visible = !compact;
+            if (IsEnglishUi)
+            {
+                int right = compact ? details.ClientSize.Width - ScaleLogical(8, dpi)
+                    : _advancedDetailsLayout.Left - ScaleLogical(14, dpi);
+                foreach (Label value in new[] { _mapValueLabel, _timeValueLabel,
+                    _locationValueLabel, _pingValueLabel, _actualRttValueLabel, _packetLossValueLabel })
+                {
+                    if (value == null) continue;
+                    value.AutoSize = false;
+                    value.AutoEllipsis = true;
+                    value.UseMnemonic = false;
+                    value.Width = Math.Max(1, right - value.Left);
+                    value.Height = Math.Max(value.Font.Height + ScaleLogical(3, dpi), ScaleLogical(20, dpi));
+                }
+            }
         }
 
         private static int ScaleLogical(int value, int dpi)
         {
             return Math.Max(1, (int)Math.Round(value * Math.Max(96, dpi) / 96F));
+        }
+
+        private static bool IsEnglishUi
+        {
+            get
+            {
+                return string.Equals(
+                    AppText.CurrentLanguage,
+                    AppText.EnglishLanguage,
+                    StringComparison.Ordinal);
+            }
+        }
+
+        private static int GetStickyActionLogicalWidth()
+        {
+            return IsEnglishUi ? 156 : 116;
         }
 
         private static Button CreateButton(string text, bool primary)
@@ -2761,7 +3042,7 @@ namespace TarkovServerReporter
         {
             _isRefreshing = true;
             UpdateActionButtons();
-            SetStatus("공홈·Steam의 EFT·Arena 로그 폴더를 찾는 중…", TextMuted);
+            SetStatus(AppText.Get("Main.Paths.FindingInitial"), TextMuted);
             TarkovLogPaths found;
             try
             {
@@ -2774,7 +3055,7 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetStatus("초기 로그 경로를 확인하지 못했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format("Main.Paths.InitialCheckFailed", ex.Message), Danger);
                 return;
             }
             finally
@@ -2785,7 +3066,7 @@ namespace TarkovServerReporter
 
             if (string.IsNullOrWhiteSpace(found.EftPath) && string.IsNullOrWhiteSpace(found.ArenaPath))
             {
-                ShowNoServer("로그 폴더를 자동으로 찾지 못했습니다. EFT 또는 Arena의 ‘직접 선택’을 이용해 주세요.");
+                ShowNoServer(AppText.Get("Main.Paths.AutoDetectFailed"));
                 return;
             }
             await LoadSessionsAsync();
@@ -2801,7 +3082,7 @@ namespace TarkovServerReporter
             bool foundArenaAutomatically = false;
             _isRefreshing = true;
             UpdateActionButtons();
-            SetStatus("공홈·Steam 설치 경로를 다시 찾는 중…", TextMuted);
+            SetStatus(AppText.Get("Main.Paths.Rediscovering"), TextMuted);
             try
             {
                 found = await Task.Run(() => TarkovLogPathFinder.Find(null));
@@ -2820,7 +3101,7 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetStatus("로그 경로를 다시 찾지 못했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format("Main.Paths.RediscoverFailed", ex.Message), Danger);
                 return;
             }
             finally
@@ -2832,14 +3113,14 @@ namespace TarkovServerReporter
             if (found == null
                 || (string.IsNullOrWhiteSpace(found.EftPath) && string.IsNullOrWhiteSpace(found.ArenaPath)))
             {
-                ShowNoServer("공홈·Steam 설치 경로를 찾지 못했습니다. 설치 폴더를 직접 선택해 주세요.");
+                ShowNoServer(AppText.Get("Main.Paths.InstallNotFound"));
                 return;
             }
 
             string detected = foundEftAutomatically && foundArenaAutomatically
                 ? "EFT·Arena"
-                : (foundEftAutomatically ? "EFT" : (foundArenaAutomatically ? "Arena" : "저장된 경로"));
-            SetStatus(detected + " 로그 경로를 확인했습니다.", Success);
+                : (foundEftAutomatically ? "EFT" : (foundArenaAutomatically ? "Arena" : AppText.Get("Main.Paths.SavedSource")));
+            SetStatus(AppText.Format("Main.Paths.Detected", detected), Success);
             await LoadSessionsAsync();
         }
 
@@ -2861,8 +3142,8 @@ namespace TarkovServerReporter
             {
                 MessageBox.Show(
                     this,
-                    "EFT 또는 Arena의 Logs 폴더를 하나 이상 선택해 주세요.",
-                    "로그 폴더 확인",
+                    AppText.Get("Main.Paths.SelectAtLeastOne"),
+                    AppText.Get("Main.Paths.DialogTitle"),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 return;
@@ -2889,8 +3170,9 @@ namespace TarkovServerReporter
             TextBox target = game == TarkovGame.Arena ? _arenaPathTextBox : _eftPathTextBox;
             using (var dialog = new FolderBrowserDialog())
             {
-                dialog.Description = (game == TarkovGame.Arena ? "Escape From Tarkov Arena" : "Escape From Tarkov")
-                    + "의 Logs 폴더 또는 게임 설치 폴더를 선택하세요.";
+                dialog.Description = AppText.Format(
+                    "Main.Paths.SelectPrompt",
+                    game == TarkovGame.Arena ? "Escape From Tarkov Arena" : "Escape From Tarkov");
                 dialog.ShowNewFolderButton = false;
                 if (!string.IsNullOrWhiteSpace(target.Text) && Directory.Exists(target.Text))
                     dialog.SelectedPath = target.Text;
@@ -2901,8 +3183,8 @@ namespace TarkovServerReporter
                 {
                     MessageBox.Show(
                         this,
-                        "선택한 폴더에서 Logs 폴더를 찾지 못했습니다.",
-                        "로그 폴더 확인",
+                        AppText.Get("Main.Paths.NoLogsInSelection"),
+                        AppText.Get("Main.Paths.DialogTitle"),
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                     return;
@@ -2910,9 +3192,9 @@ namespace TarkovServerReporter
                 target.Text = normalized;
                 UpdateActionButtons();
                 if (HasPendingPathChanges())
-                    SetStatus("폴더를 선택했습니다. ‘적용’을 누르면 로그를 다시 읽습니다.", Accent);
+                    SetStatus(AppText.Get("Main.Paths.SelectionPending"), Accent);
                 else
-                    SetStatus("현재 적용된 경로와 같습니다.", TextMuted);
+                    SetStatus(AppText.Get("Main.Paths.SelectionUnchanged"), TextMuted);
             }
         }
 
@@ -2968,7 +3250,7 @@ namespace TarkovServerReporter
 
             _isRefreshing = true;
             UpdateActionButtons();
-            SetStatus(GetSessionPeriodLabel() + " EFT·Arena 로그를 읽는 중…", Accent);
+            SetStatus(AppText.Format("Main.Logs.Reading", GetSessionPeriodLabel()), Accent);
             try
             {
                 RaidLogScanResult scan = await Task.Run(() => ScanSessionsForPeriod(
@@ -2992,15 +3274,15 @@ namespace TarkovServerReporter
                 {
                     ShowNoServer(AddLogScanWarning(
                         requestedPeriod == SessionPeriodPreset.Recent100
-                            ? "선택한 로그에서 접속 서버 IP 기록을 찾지 못했습니다."
-                            : GetSessionPeriodLabel() + " 범위에서 표시할 접속 기록을 찾지 못했습니다."));
+                            ? AppText.Get("Main.Logs.NoServerIp")
+                            : AppText.Format("Main.Logs.NoConnectionsForPeriod", GetSessionPeriodLabel())));
                     return;
                 }
 
                 if (_visibleSessions.Count == 0)
                 {
                     ShowNoServer(AddLogScanWarning(
-                        GetSessionPeriodLabel() + " 범위에서 표시할 접속 기록을 찾지 못했습니다."));
+                        AppText.Format("Main.Logs.NoConnectionsForPeriod", GetSessionPeriodLabel())));
                     return;
                 }
 
@@ -3008,7 +3290,7 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetStatus("로그를 읽는 중 오류가 발생했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format("Main.Logs.ReadFailed", ex.Message), Danger);
             }
             finally
             {
@@ -3173,20 +3455,27 @@ namespace TarkovServerReporter
         private async Task RefreshLauncherSelectionAsync()
         {
             if (_demoMode) return;
-            LauncherSelectionInfo selection = await Task.Run(() => LauncherSelectionReader.ReadCurrent());
-            if (_launcherSelectionLabel == null || IsDisposed || Disposing) return;
+            await RefreshLauncherSelectionFromAsync(Task.Run(() => LauncherSelectionReader.ReadCurrent()));
+        }
+
+        private async Task RefreshLauncherSelectionFromAsync(Task<LauncherSelectionInfo> read)
+        {
+            int version = ++_launcherSelectionReadVersion;
+            LauncherSelectionInfo selection = await read;
+            if (version != _launcherSelectionReadVersion || selection == null
+                || _launcherSelectionLabel == null || IsDisposed || Disposing) return;
 
             // FileSystemWatcher can fire while a file is being atomically replaced. Keep
             // the last successfully parsed value for that source until a complete retry
             // is available instead of briefly flashing "선택 기록 없음".
-            if (!string.IsNullOrWhiteSpace(selection.EftSelection)
-                && ShouldAcceptLauncherSelection(selection.EftUpdatedAt, _lastEftLauncherSelectionAt))
+            // A failed launcher Apply can restore a valid selection with an older
+            // timestamp. Order reads, not recorded selections, to reject stale work.
+            if (selection.EftSelectionInvalidated || !string.IsNullOrWhiteSpace(selection.EftSelection))
             {
                 _lastEftLauncherSelection = selection.EftSelection;
                 _lastEftLauncherSelectionAt = selection.EftUpdatedAt;
             }
-            if (!string.IsNullOrWhiteSpace(selection.ArenaSelection)
-                && ShouldAcceptLauncherSelection(selection.ArenaUpdatedAt, _lastArenaLauncherSelectionAt))
+            if (!string.IsNullOrWhiteSpace(selection.ArenaSelection))
             {
                 _lastArenaLauncherSelection = selection.ArenaSelection;
                 _lastArenaLauncherSelectionAt = selection.ArenaUpdatedAt;
@@ -3198,17 +3487,11 @@ namespace TarkovServerReporter
             string arenaDisplay = string.IsNullOrWhiteSpace(_lastArenaLauncherSelection)
                 ? selection.GetDisplay(TarkovGame.Arena)
                 : _lastArenaLauncherSelection;
-            _launcherSelectionLabel.Text = string.Format(
-                "게임런처 선택 서버   EFT: {0}   |   Arena: {1}",
+            _launcherSelectionLabel.Text = AppText.Format(
+                "Main.LauncherSelection.Format",
                 FormatLauncherSelection(eftDisplay, _lastEftLauncherSelectionAt),
                 FormatLauncherSelection(arenaDisplay, _lastArenaLauncherSelectionAt));
             _launcherSelectionLabel.ForeColor = TextMuted;
-        }
-
-        private static bool ShouldAcceptLauncherSelection(DateTime? candidate, DateTime? current)
-        {
-            if (!current.HasValue) return true;
-            return candidate.HasValue && candidate.Value >= current.Value;
         }
 
         private void StartLauncherSelectionMonitoring()
@@ -3454,6 +3737,7 @@ namespace TarkovServerReporter
 
         private static string FormatLauncherSelection(string value, DateTime? updatedAt)
         {
+            value = AppText.TranslateLiteral(value);
             return updatedAt.HasValue
                 ? value + " (" + updatedAt.Value.ToString("MM-dd HH:mm") + ")"
                 : value;
@@ -3489,7 +3773,7 @@ namespace TarkovServerReporter
             _customPeriodEnd = end.Date;
             _toolTip.SetToolTip(
                 _customPeriodButton,
-                string.Format("{0:yyyy-MM-dd}부터 {1:yyyy-MM-dd}까지의 접속 기록입니다. 종료일 전체가 포함됩니다.", start, end));
+                AppText.Format("Main.Period.RangeLabel", start, end));
             await SelectSessionPeriodAsync(SessionPeriodPreset.Custom);
         }
 
@@ -3500,7 +3784,7 @@ namespace TarkovServerReporter
 
             using (var dialog = new BrandedForm())
             {
-                dialog.Text = "기간 직접 선택";
+                dialog.Text = AppText.Get("Main.Period.DialogTitle");
                 dialog.StartPosition = FormStartPosition.CenterParent;
                 dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dialog.MaximizeBox = false;
@@ -3534,7 +3818,7 @@ namespace TarkovServerReporter
                 var heading = new Label
                 {
                     Dock = DockStyle.Fill,
-                    Text = "조회할 기간을 선택하세요",
+                    Text = AppText.Get("Main.Period.DialogPrompt"),
                     ForeColor = TextPrimary,
                     Font = new Font("Malgun Gothic", 11F, FontStyle.Bold),
                     TextAlign = ContentAlignment.MiddleLeft,
@@ -3545,15 +3829,15 @@ namespace TarkovServerReporter
 
                 var startPicker = CreatePeriodDatePicker(selectedStart);
                 var endPicker = CreatePeriodDatePicker(selectedEnd);
-                layout.Controls.Add(CreatePeriodDialogLabel("시작일"), 0, 1);
+                layout.Controls.Add(CreatePeriodDialogLabel(AppText.Get("Main.Period.StartDate")), 0, 1);
                 layout.Controls.Add(startPicker, 1, 1);
-                layout.Controls.Add(CreatePeriodDialogLabel("종료일"), 0, 2);
+                layout.Controls.Add(CreatePeriodDialogLabel(AppText.Get("Main.Period.EndDate")), 0, 2);
                 layout.Controls.Add(endPicker, 1, 2);
 
                 var hint = new Label
                 {
                     Dock = DockStyle.Fill,
-                    Text = "종료일의 23:59:59까지 포함하며,\r\n결과가 많으면 최근 100개만 표시합니다.",
+                    Text = AppText.Get("Main.Period.DialogHelp"),
                     ForeColor = TextMuted,
                     Font = new Font("Malgun Gothic", 8F),
                     TextAlign = ContentAlignment.MiddleLeft,
@@ -3576,10 +3860,10 @@ namespace TarkovServerReporter
                 buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94F));
                 buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94F));
                 buttons.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-                Button apply = CreateButton("적용", true);
+                Button apply = CreateButton(AppText.Get("Common.Button.Apply"), true);
                 apply.Dock = DockStyle.Fill;
                 apply.Margin = new Padding(8, 5, 0, 5);
-                Button cancel = CreateButton("취소", false);
+                Button cancel = CreateButton(AppText.Get("Common.Button.Cancel"), false);
                 cancel.Dock = DockStyle.Fill;
                 cancel.Margin = new Padding(8, 5, 0, 5);
                 cancel.DialogResult = DialogResult.Cancel;
@@ -3589,8 +3873,8 @@ namespace TarkovServerReporter
                     {
                         MessageBox.Show(
                             dialog,
-                            "시작일은 종료일보다 늦을 수 없습니다.",
-                            "기간 확인",
+                            AppText.Get("Main.Period.InvalidRange"),
+                            AppText.Get("Main.Period.ValidationTitle"),
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Warning);
                         startPicker.Focus();
@@ -3628,7 +3912,9 @@ namespace TarkovServerReporter
             {
                 Dock = DockStyle.Fill,
                 Format = DateTimePickerFormat.Custom,
-                CustomFormat = "yyyy-MM-dd  dddd",
+                CustomFormat = string.Equals(AppText.CurrentLanguage, AppText.EnglishLanguage, StringComparison.Ordinal)
+                    ? "yyyy-MM-dd"
+                    : "yyyy-MM-dd  dddd",
                 Value = value,
                 MinDate = new DateTime(2000, 1, 1),
                 MaxDate = DateTime.Today,
@@ -3667,17 +3953,17 @@ namespace TarkovServerReporter
             switch (_sessionPeriod)
             {
                 case SessionPeriodPreset.Today:
-                    return "오늘";
+                    return AppText.Get("Main.Period.TodayLabel");
                 case SessionPeriodPreset.Last7Days:
-                    return "최근 7일";
+                    return AppText.Get("Main.Period.Last7DaysLabel");
                 case SessionPeriodPreset.Last30Days:
-                    return "최근 30일";
+                    return AppText.Get("Main.Period.Last30DaysLabel");
                 case SessionPeriodPreset.Custom:
                     return _customPeriodStart.HasValue && _customPeriodEnd.HasValue
                         ? string.Format("{0:yyyy-MM-dd} ~ {1:yyyy-MM-dd}", _customPeriodStart.Value, _customPeriodEnd.Value)
-                        : "직접 선택";
+                        : AppText.Get("Main.Period.CustomLabel");
                 default:
-                    return "최근 100개";
+                    return AppText.Get("Main.Period.Latest100Label");
             }
         }
 
@@ -3728,42 +4014,42 @@ namespace TarkovServerReporter
         {
             string game = _gameFilter.HasValue
                 ? (_gameFilter.Value == TarkovGame.Eft ? "EFT" : "Arena")
-                : "전체";
+                : AppText.Get("Main.Filter.All");
             string count;
             if (_selectedRegionCodes.Count > 0)
             {
-                count = string.Format(
-                    "지역 필터 {0}개 표시 / 대상 {1}개",
+                count = AppText.Format(
+                    "Main.Summary.RegionFiltered",
                     _visibleSessions.Count,
                     _regionSourceCount);
                 if (_periodResultsTruncated)
-                    count += string.Format(" · 조건에 맞는 {0}개 중 최근 100개 기준", _periodMatchCount);
+                    count += AppText.Format("Main.Summary.MatchingRecentCap", _periodMatchCount);
             }
             else if (_dateRangeScanIncomplete)
             {
                 count = _periodResultsTruncated
-                    ? string.Format("최근 100개 표시 · 확인된 기록 {0}개 이상", _periodMatchCount)
-                    : string.Format("확인된 기록 {0}개 표시", _visibleSessions.Count);
+                    ? AppText.Format("Main.Summary.RecentConfirmedAtLeast", _periodMatchCount)
+                    : AppText.Format("Main.Summary.ConfirmedCount", _visibleSessions.Count);
             }
             else
             {
                 count = _periodResultsTruncated
-                    ? string.Format("{0}개 표시 · 조건에 맞는 {1}개 중 최근 100개", _visibleSessions.Count, _periodMatchCount)
-                    : string.Format("{0}개 표시", _visibleSessions.Count);
+                    ? AppText.Format("Main.Summary.VisibleOfMatches", _visibleSessions.Count, _periodMatchCount)
+                    : AppText.Format("Main.Summary.VisibleCount", _visibleSessions.Count);
             }
             bool hasScanWarning = _dateRangeScanIncomplete || _logScanIncomplete;
             string scanWarning = _dateRangeScanIncomplete
-                ? " · 일부 로그를 읽지 못해 결과가 누락될 수 있음"
+                ? AppText.Get("Main.Summary.PartialMayOmit")
                 : (_logScanIncomplete
-                    ? " · 일부 로그를 읽지 못해 최신 기록이 누락될 수 있음"
+                    ? AppText.Get("Main.Summary.PartialMayOmitLatest")
                     : string.Empty);
             SetStatus(
-                string.Format(
-                    "{0} · {1} 접속 기록 · {2}{3}{4}",
+                AppText.Format(
+                    "Main.Summary.Status",
                     GetSessionPeriodLabel(),
                     game,
                     count,
-                    includeQueryState ? " · 조회 대기" : string.Empty,
+                    includeQueryState ? AppText.Get("Main.Summary.ScanPending") : string.Empty,
                     scanWarning),
                 hasScanWarning ? Warning : color);
         }
@@ -3771,9 +4057,9 @@ namespace TarkovServerReporter
         private string AddLogScanWarning(string message)
         {
             if (_dateRangeScanIncomplete)
-                return message + " · 일부 로그를 읽지 못해 결과가 누락될 수 있음";
+                return message + AppText.Get("Main.Summary.PartialMayOmit");
             if (_logScanIncomplete)
-                return message + " · 일부 로그를 읽지 못해 최신 기록이 누락될 수 있음";
+                return message + AppText.Get("Main.Summary.PartialMayOmitLatest");
             return message;
         }
 
@@ -3786,11 +4072,62 @@ namespace TarkovServerReporter
         {
             if (!refreshPerformed) return message;
             if (newLogCount <= 0)
-                return refreshReadSucceeded ? message + " · 새 로그 없음" : message;
-            string result = message + string.Format(" · 새 로그 {0}개 반영", newLogCount);
+                return refreshReadSucceeded ? message + AppText.Get("Main.Summary.NoNewLogs") : message;
+            string result = message + AppText.Format("Main.Summary.NewLogs", newLogCount);
             if (capExcludedCount > 0)
-                result += string.Format(" · 가장 오래된 {0}개 제외", capExcludedCount);
+                result += AppText.Format("Main.Summary.OldestExcluded", capExcludedCount);
             return result;
+        }
+
+        private void HistoryGridScroll(object sender, ScrollEventArgs args)
+        {
+            if (args == null || args.ScrollOrientation == ScrollOrientation.VerticalScroll)
+            {
+                // Vertical scrolling only changes the first visible row. Re-running
+                // overlay layout here causes z-order changes and full-grid repaints
+                // on every wheel/scrollbar tick.
+                SyncStickyActionVerticalScroll();
+                return;
+            }
+
+            // Horizontal activity can coincide with native scrollbar layout changes.
+            // Coalesce those checks so rapid thumb movement performs at most one
+            // geometry pass per UI message cycle.
+            QueueStickyActionGridBoundsUpdate();
+        }
+
+        private void QueueStickyActionGridBoundsUpdate()
+        {
+            if (_stickyActionLayoutUpdatePending || IsDisposed || Disposing
+                || _historyGrid == null || _stickyActionGrid == null)
+                return;
+
+            if (!IsHandleCreated)
+            {
+                UpdateStickyActionGridBounds();
+                return;
+            }
+
+            _stickyActionLayoutUpdatePending = true;
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate
+                {
+                    try
+                    {
+                        if (!IsDisposed && !Disposing)
+                            UpdateStickyActionGridBounds();
+                    }
+                    finally
+                    {
+                        _stickyActionLayoutUpdatePending = false;
+                    }
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                _stickyActionLayoutUpdatePending = false;
+            }
         }
 
         private void UpdateStickyActionGridBounds()
@@ -3799,13 +4136,17 @@ namespace TarkovServerReporter
                 || _historyGrid.ClientSize.Width <= 0 || _historyGrid.ClientSize.Height <= 0)
                 return;
 
+            bool geometryChanged = false;
             int dpi = _historyGrid.DeviceDpi <= 0 ? 96 : _historyGrid.DeviceDpi;
-            int overlayWidth = ScaleLogical(116, dpi);
+            int overlayWidth = ScaleLogical(GetStickyActionLogicalWidth(), dpi);
             if (_historyGrid.Columns.Contains("stickyActionSpacer"))
             {
                 DataGridViewColumn spacer = _historyGrid.Columns["stickyActionSpacer"];
                 if (spacer.Width != overlayWidth)
+                {
                     spacer.Width = overlayWidth;
+                    geometryChanged = true;
+                }
             }
 
             int verticalScrollbarWidth = 0;
@@ -3825,11 +4166,17 @@ namespace TarkovServerReporter
             int width = Math.Min(overlayWidth, right);
             Rectangle desired = new Rectangle(Math.Max(0, right - width), 0, width, height);
             if (_stickyActionGrid.Bounds != desired)
+            {
                 _stickyActionGrid.Bounds = desired;
-            _stickyActionGrid.BringToFront();
-            _stickyActionGrid.Invalidate();
-            if (_historyScrollCorner != null)
-                _historyScrollCorner.RefreshBounds();
+                geometryChanged = true;
+            }
+            if (geometryChanged)
+            {
+                _stickyActionGrid.BringToFront();
+                _stickyActionGrid.Invalidate();
+                if (_historyScrollCorner != null)
+                    _historyScrollCorner.RefreshBounds();
+            }
         }
 
         private void SyncStickyActionRows()
@@ -4117,8 +4464,8 @@ namespace TarkovServerReporter
         private string AppendRegionFilterSummary(string message)
         {
             if (_selectedRegionCodes.Count == 0) return message;
-            return message + string.Format(
-                " · 지역 필터 {0}/{1}개",
+            return message + AppText.Format(
+                "Main.Summary.RegionFilterRatio",
                 _visibleSessions.Count,
                 _regionSourceCount);
         }
@@ -4151,7 +4498,7 @@ namespace TarkovServerReporter
                 .Concat(_selectedRegionCodes)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(DataCenterRegionClassifier.GetSortOrder)
-                .ThenBy(DataCenterRegionClassifier.GetDisplayLabel, StringComparer.CurrentCulture)
+                .ThenBy(AppText.GetRegionDisplayLabel, StringComparer.CurrentCulture)
                 .ToList();
 
             _regionFilterMenu = new ContextMenuStrip
@@ -4163,14 +4510,14 @@ namespace TarkovServerReporter
                 ShowImageMargin = false,
                 Renderer = new ToolStripProfessionalRenderer(new RegionMenuColorTable())
             };
-            _regionFilterMenu.AccessibleName = "데이터센터 지역 선택";
+            _regionFilterMenu.AccessibleName = AppText.Get("Main.Region.MenuAccessibleName");
             _regionFilterMenu.Closing += delegate(object sender, ToolStripDropDownClosingEventArgs args)
             {
                 if (args.CloseReason == ToolStripDropDownCloseReason.ItemClicked)
                     args.Cancel = true;
             };
 
-            var allItem = new ToolStripMenuItem("전체 지역")
+            var allItem = new ToolStripMenuItem(AppText.Get("Main.Region.All"))
             {
                 CheckOnClick = false,
                 Checked = _selectedRegionCodes.Count == 0,
@@ -4189,7 +4536,7 @@ namespace TarkovServerReporter
 
             if (regionCodes.Count == 0)
             {
-                _regionFilterMenu.Items.Add(new ToolStripMenuItem("표시할 지역 기록 없음")
+                _regionFilterMenu.Items.Add(new ToolStripMenuItem(AppText.Get("Main.Region.None"))
                 {
                     Enabled = false,
                     BackColor = SurfaceAlt,
@@ -4202,9 +4549,9 @@ namespace TarkovServerReporter
                 {
                     int count;
                     counts.TryGetValue(regionCode, out count);
-                    var item = new ToolStripMenuItem(string.Format(
-                        "{0}   {1}개",
-                        DataCenterRegionClassifier.GetDisplayLabel(regionCode),
+                    var item = new ToolStripMenuItem(AppText.Format(
+                        "Main.Region.ItemCount",
+                        AppText.GetRegionDisplayLabel(regionCode),
                         count))
                     {
                         CheckOnClick = true,
@@ -4271,7 +4618,7 @@ namespace TarkovServerReporter
             string text;
             if (_selectedRegionCodes.Count == 0)
             {
-                text = "지역: 전체 ▾";
+                text = AppText.Get("Main.Filter.RegionAll");
             }
             else if (_selectedRegionCodes.Count == 1)
             {
@@ -4281,9 +4628,9 @@ namespace TarkovServerReporter
                     DataCenterRegionClassifier.UnknownCode,
                     StringComparison.OrdinalIgnoreCase);
                 string displayName = isLocalPveOrUnknown
-                    ? "PVE로컬/기타"
-                    : DataCenterRegionClassifier.GetDisplayName(regionCode);
-                string candidate = "지역: " + displayName + " ▾";
+                    ? AppText.Get("Region.Name.LocalOrOther")
+                    : AppText.GetRegionDisplayName(regionCode);
+                string candidate = AppText.Format("Main.Region.ButtonOne", displayName);
                 int availableTextWidth = Math.Max(
                     1,
                     _regionFilterButton.ClientSize.Width - ScaleLogical(
@@ -4294,29 +4641,29 @@ namespace TarkovServerReporter
                     _regionFilterButton.Font,
                     Size.Empty,
                     TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-                string compactName = isLocalPveOrUnknown ? "PVE/기타" : regionCode;
+                string compactName = isLocalPveOrUnknown ? AppText.Get("Main.Region.LocalOrOtherCompact") : regionCode;
                 text = measured.Width <= availableTextWidth
                     ? candidate
-                    : "지역: " + compactName + " ▾";
+                    : AppText.Format("Main.Region.ButtonOne", compactName);
             }
             else
             {
-                text = "지역: " + _selectedRegionCodes.Count + "개 ▾";
+                text = AppText.Format("Main.Region.ButtonCount", _selectedRegionCodes.Count);
             }
             _regionFilterButton.Text = text;
             StyleFilterButton(_regionFilterButton, _selectedRegionCodes.Count > 0);
             _toolTip.SetToolTip(
                 _regionFilterButton,
                 _selectedRegionCodes.Count == 0
-                    ? "최근 목록의 모든 데이터센터 지역을 표시합니다."
-                    : "선택 지역: " + string.Join(", ", _selectedRegionCodes
+                    ? AppText.Get("Main.Region.AllTooltip")
+                    : AppText.Format("Main.Region.SelectedTooltip", string.Join(", ", _selectedRegionCodes
                         .OrderBy(DataCenterRegionClassifier.GetSortOrder)
                         .Select(code => string.Equals(
                             code,
                             DataCenterRegionClassifier.UnknownCode,
                             StringComparison.OrdinalIgnoreCase)
-                                ? "PVE로컬/기타"
-                                : DataCenterRegionClassifier.GetDisplayLabel(code))));
+                                ? AppText.Get("Region.Name.LocalOrOther")
+                                : AppText.GetRegionDisplayLabel(code)))));
         }
 
         private void UpdateFilterButtons()
@@ -4390,7 +4737,7 @@ namespace TarkovServerReporter
                         StringComparison.OrdinalIgnoreCase));
             if (desired == null) desired = _visibleSessions.FirstOrDefault();
             if (desired == null)
-                ShowNoServer(AddLogScanWarning("현재 필터에 표시할 접속 기록이 없습니다."));
+                ShowNoServer(AddLogScanWarning(AppText.Get("Main.Logs.NoFilteredConnections")));
             else
             {
                 SelectGridRow(
@@ -4744,26 +5091,26 @@ namespace TarkovServerReporter
                 int rowIndex = _historyGrid.Rows.Add(
                     session.GameDisplayName,
                     session.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm:ss"),
-                    session.UserReportCount > 0 ? "유저신고x" + session.UserReportCount : string.Empty,
+                    session.UserReportCount > 0 ? AppText.Format("Main.Row.PlayerReportCount", session.UserReportCount) : string.Empty,
                     string.Empty,
                     mapAndTypeText,
                     session.HasServerIp ? session.IpAddress : "-",
                     GetLocationCellText(session, geo),
                     GetPingCellText(session, ping, firewall),
-                    RaidMetricPresentation.FormatActualRtt(session),
-                    RaidMetricPresentation.FormatPacketLoss(session),
-                    "차단",
-                    "해제",
+                    FormatActualRttDisplay(session),
+                    FormatPacketLossDisplay(session),
+                    AppText.Get("Common.Button.Block"),
+                    AppText.Get("Main.Column.Unblock"),
                     FormatConnectionResultCell(session));
                 DataGridViewRow row = _historyGrid.Rows[rowIndex];
                 row.Tag = session;
                 row.Cells["mapMode"].ToolTipText = mapAndTypeText;
                 row.Cells["userReport"].ToolTipText = session.UserReportCount > 0
-                    ? "클릭하여 신고한 유저의 닉네임과 신고 사유를 메모합니다."
+                    ? AppText.Get("Main.Row.PlayerReportTooltip")
                     : string.Empty;
                 row.Cells["result"].ToolTipText = GetConnectionResultHelp(session);
-                row.Cells["actualRtt"].ToolTipText = RaidMetricPresentation.GetActualRttHelp(session);
-                row.Cells["packetLoss"].ToolTipText = RaidMetricPresentation.GetPacketLossHelp(session);
+                row.Cells["actualRtt"].ToolTipText = GetActualRttHelp(session);
+                row.Cells["packetLoss"].ToolTipText = GetPacketLossHelp(session);
                 ApplyResultRowStyle(row, session, ping, geo, firewall);
                 ApplyMissingMetricCellFonts(row);
                 UpdateNoteCell(row, hasNote);
@@ -4777,7 +5124,7 @@ namespace TarkovServerReporter
             if (session == null) return "-";
             string map = string.IsNullOrWhiteSpace(session.MapName) ? "-" : session.MapName;
             if (session.Game == TarkovGame.Eft)
-                return map + " · " + session.RaidTypeAndParticipantText;
+                return map + " · " + AppText.LocalizeDomainDisplay(session.RaidTypeAndParticipantText);
             return string.IsNullOrWhiteSpace(session.GameMode)
                 ? map
                 : map + " · " + session.GameMode;
@@ -4785,10 +5132,145 @@ namespace TarkovServerReporter
 
         private static string FormatConnectionResultCell(ServerSession session)
         {
-            if (session == null || string.IsNullOrWhiteSpace(session.ConnectionResultText)) return "-";
-            return session.ConnectionResultText
-                .Replace(" · ", "·")
-                .Replace("재접속 ", "재접속");
+            if (session == null) return "-";
+            string result = FormatConnectionResult(session);
+            return string.Equals(AppText.CurrentLanguage, AppText.KoreanLanguage, StringComparison.Ordinal)
+                ? result.Replace(" · ", "·")
+                : result;
+        }
+
+        private enum ConnectionPresentationState
+        {
+            Normal,
+            Abnormal,
+            Failed,
+            NoRecord,
+            LogUnavailable,
+            NotApplicable
+        }
+
+        private static ConnectionPresentationState GetConnectionPresentationState(
+            ServerSession session)
+        {
+            if (session == null) return ConnectionPresentationState.LogUnavailable;
+            if (session.HostingMode == TarkovHostingMode.Local)
+                return ConnectionPresentationState.NotApplicable;
+
+            bool currentAttemptConnected = session.CurrentAttemptConnected
+                || (session.ConnectionAttemptKeys == null && session.ConnectedOnce);
+            bool hasSuccessfulConnection = session.ConnectedOnce
+                || session.CurrentAttemptConnected;
+            if (session.TimedOut)
+                return hasSuccessfulConnection
+                    ? ConnectionPresentationState.Abnormal
+                    : ConnectionPresentationState.Failed;
+            if (!currentAttemptConnected && session.HasDisconnectRecord)
+                return ConnectionPresentationState.Failed;
+            if (session.ConnectionAttempts <= 0)
+                return ConnectionPresentationState.NoRecord;
+            if (!currentAttemptConnected)
+                return ConnectionPresentationState.LogUnavailable;
+            if (session.HasDisconnectRecord && session.DisconnectReason.HasValue)
+                return session.DisconnectReason.Value == 0
+                    ? ConnectionPresentationState.Normal
+                    : ConnectionPresentationState.Abnormal;
+            return ConnectionPresentationState.LogUnavailable;
+        }
+
+        private static string FormatConnectionResult(ServerSession session)
+        {
+            ConnectionPresentationState state = GetConnectionPresentationState(session);
+            string stateText;
+            if (session != null && session.TimedOut)
+            {
+                stateText = AppText.Get(state == ConnectionPresentationState.Abnormal
+                    ? "Main.Connection.State.AbnormalTimeout"
+                    : "Main.Connection.State.FailedTimeout");
+            }
+            else
+            {
+                switch (state)
+                {
+                    case ConnectionPresentationState.Normal:
+                        stateText = AppText.Get("Main.Connection.State.Normal");
+                        break;
+                    case ConnectionPresentationState.Abnormal:
+                        stateText = AppText.Get("Main.Connection.State.Abnormal");
+                        break;
+                    case ConnectionPresentationState.Failed:
+                        stateText = AppText.Get("Main.Connection.State.Failed");
+                        break;
+                    case ConnectionPresentationState.NoRecord:
+                        stateText = AppText.Get("Main.Connection.State.NoRecord");
+                        break;
+                    case ConnectionPresentationState.NotApplicable:
+                        stateText = AppText.Get("Main.Connection.State.NotApplicable");
+                        break;
+                    default:
+                        stateText = AppText.Get("Main.Connection.State.LogUnavailable");
+                        break;
+                }
+            }
+
+            if (session == null || session.ReconnectCount <= 0) return stateText;
+            return AppText.Format(
+                session.ReconnectCount == 1
+                    ? "Main.Connection.ResultReconnect.One"
+                    : "Main.Connection.ResultReconnect.Other",
+                stateText,
+                session.ReconnectCount);
+        }
+
+        private static string FormatActualRttDisplay(ServerSession session)
+        {
+            double value;
+            if (RaidMetricPresentation.TryGetActualRtt(session, out value))
+                return Math.Round(value) + " ms";
+            return GetMetricUnavailableText(session);
+        }
+
+        private static string FormatPacketLossDisplay(ServerSession session)
+        {
+            double value;
+            if (RaidMetricPresentation.TryGetPacketLoss(session, out value))
+            {
+                if (value == 0) return "0%";
+                double percent = value * 100.0;
+                return percent < 0.01
+                    ? "0.01%"
+                    : string.Format("{0:0.##}%", percent);
+            }
+            return GetMetricUnavailableText(session);
+        }
+
+        private static string GetMetricUnavailableText(ServerSession session)
+        {
+            if (session == null) return "-";
+            return AppText.Get(session.HostingMode == TarkovHostingMode.Local
+                ? "Main.Connection.State.NotApplicable"
+                : "Main.Connection.State.LogUnavailable");
+        }
+
+        private static string GetActualRttHelp(ServerSession session)
+        {
+            if (session == null) return string.Empty;
+            if (session.HostingMode == TarkovHostingMode.Local)
+                return AppText.Get("Main.Metric.LocalRaidHelp");
+            double ignored;
+            return RaidMetricPresentation.TryGetActualRtt(session, out ignored)
+                ? string.Empty
+                : AppText.Get("Main.Metric.MissingLogHelp");
+        }
+
+        private static string GetPacketLossHelp(ServerSession session)
+        {
+            if (session == null) return string.Empty;
+            if (session.HostingMode == TarkovHostingMode.Local)
+                return AppText.Get("Main.Metric.LocalRaidHelp");
+            double ignored;
+            return RaidMetricPresentation.TryGetPacketLoss(session, out ignored)
+                ? string.Empty
+                : AppText.Get("Main.Metric.MissingLogHelp");
         }
 
         private void CaptureHistoryViewport(
@@ -4874,19 +5356,21 @@ namespace TarkovServerReporter
             _selectedSession = session;
             _ipLabel.Text = session.HasServerIp
                 ? session.IpAddress
-                : (session.HostingMode == TarkovHostingMode.Local ? "로컬 실행" : "매칭 IP 없음");
+                : (session.HostingMode == TarkovHostingMode.Local
+                    ? AppText.Get("Main.Current.LocalRun")
+                    : AppText.Get("Main.Current.NoMatchIp"));
             _ipLabel.ForeColor = session.HasServerIp ? TextPrimary : TextMuted;
             string mapAndTypeText = session.GameDisplayName + " · " + GetMapAndTypeText(session);
             _mapValueLabel.Text = mapAndTypeText;
             _mapValueLabel.AccessibleDescription = mapAndTypeText;
             _toolTip.SetToolTip(_mapValueLabel, mapAndTypeText);
             _timeValueLabel.Text = session.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm:ss");
-            _actualRttValueLabel.Text = RaidMetricPresentation.FormatActualRtt(session);
+            _actualRttValueLabel.Text = FormatActualRttDisplay(session);
             _actualRttValueLabel.ForeColor = GetLatencyColor(session);
-            _packetLossValueLabel.Text = RaidMetricPresentation.FormatPacketLoss(session);
+            _packetLossValueLabel.Text = FormatPacketLossDisplay(session);
             _packetLossValueLabel.ForeColor = GetPacketLossColor(session);
-            string actualRttHelp = RaidMetricPresentation.GetActualRttHelp(session);
-            string packetLossHelp = RaidMetricPresentation.GetPacketLossHelp(session);
+            string actualRttHelp = GetActualRttHelp(session);
+            string packetLossHelp = GetPacketLossHelp(session);
             _toolTip.SetToolTip(
                 _actualRttValueLabel,
                 actualRttHelp);
@@ -4915,10 +5399,10 @@ namespace TarkovServerReporter
             if (_measuringIpAddresses.Contains(session.IpAddress))
             {
                 GeoInfo existingGeo;
-                _pingValueLabel.Text = "측정 중…";
+                _pingValueLabel.Text = AppText.Get("Main.Current.Measuring");
                 _locationValueLabel.Text = _geoResults.TryGetValue(session.IpAddress, out existingGeo) && existingGeo.Success
                     ? GetLocationCellText(session, existingGeo)
-                    : "조회 중…";
+                    : AppText.Get("Main.Current.Scanning");
                 _pingValueLabel.ForeColor = Accent;
                 _locationValueLabel.ForeColor = Accent;
                 UpdateActionButtons();
@@ -4955,13 +5439,15 @@ namespace TarkovServerReporter
 
             string matching = session.MatchmakingSeconds.HasValue
                 ? FormatDuration(session.MatchmakingSeconds.Value)
-                : "확인 안 됨";
+                : AppText.Get("Common.Status.NotVerified");
             TimeSpan? raidEntryDuration = session.RaidEntryDuration;
             string entry = raidEntryDuration.HasValue
                 ? FormatDuration(raidEntryDuration.Value.TotalSeconds)
-                : "확인 안 됨";
+                : AppText.Get("Common.Status.NotVerified");
             string port = session.Port > 0 ? session.Port.ToString() : "-";
-            string version = string.IsNullOrWhiteSpace(session.ClientVersion) ? "확인 안 됨" : session.ClientVersion;
+            string version = string.IsNullOrWhiteSpace(session.ClientVersion)
+                ? AppText.Get("Common.Status.NotVerified")
+                : session.ClientVersion;
             string sid = string.IsNullOrWhiteSpace(session.ServerId) ? "-" : session.ServerId;
             string shortId = string.IsNullOrWhiteSpace(session.ShortId) ? "-" : session.ShortId;
             string[] values =
@@ -4970,7 +5456,7 @@ namespace TarkovServerReporter
                 matching + " / " + entry,
                 string.IsNullOrWhiteSpace(session.ConnectionResultText)
                     ? "-"
-                    : session.ConnectionResultText,
+                    : FormatConnectionResult(session),
                 version,
                 port + " / " + (string.IsNullOrWhiteSpace(session.DataCenterCode) ? "-" : session.DataCenterCode),
                 shortId,
@@ -4983,7 +5469,7 @@ namespace TarkovServerReporter
                 if (detailValueLabel != null)
                     detailValueLabel.SetTextSegments(
                         values[index],
-                        index == 1 ? " 걸림" : string.Empty);
+                        index == 1 ? AppText.Get("Main.Advanced.ElapsedSuffix") : string.Empty);
                 else
                     _detailInfoValueLabels[index].Text = values[index];
                 _detailInfoValueLabels[index].ForeColor = TextPrimary;
@@ -4993,18 +5479,19 @@ namespace TarkovServerReporter
 
         private static string FormatOperationDuration(ServerSession session)
         {
-            if (session == null) return "확인 안 됨";
-            if (session.OperationState == RaidOperationState.InProgress) return "진행 중";
+            if (session == null) return AppText.Get("Common.Status.NotVerified");
+            if (session.OperationState == RaidOperationState.InProgress)
+                return AppText.Get("Main.Detail.InProgress");
             TimeSpan? duration = session.OperationDuration;
             if (session.OperationState != RaidOperationState.Completed || !duration.HasValue)
-                return "확인 안 됨";
+                return AppText.Get("Common.Status.NotVerified");
 
             long totalSeconds = Math.Max(0L, (long)Math.Floor(duration.Value.TotalSeconds));
             long totalMinutes = totalSeconds / 60L;
             long remainingSeconds = totalSeconds % 60L;
             return totalMinutes > 0
-                ? string.Format("{0}분 {1}초", totalMinutes, remainingSeconds)
-                : string.Format("{0}초", remainingSeconds);
+                ? AppText.Format("Main.Duration.MinutesSeconds", totalMinutes, remainingSeconds)
+                : AppText.Format("Main.Duration.Seconds", remainingSeconds);
         }
 
         private static string FormatDuration(double seconds)
@@ -5013,14 +5500,14 @@ namespace TarkovServerReporter
                 || double.IsInfinity(seconds)
                 || seconds < 0
                 || seconds > int.MaxValue)
-                return "확인 안 됨";
+                return AppText.Get("Common.Status.NotVerified");
 
             long totalSeconds = (long)Math.Round(seconds, MidpointRounding.AwayFromZero);
             long totalMinutes = totalSeconds / 60L;
             long remainingSeconds = totalSeconds % 60L;
             return totalMinutes > 0
-                ? string.Format("{0}분 {1}초", totalMinutes, remainingSeconds)
-                : string.Format("{0}초", remainingSeconds);
+                ? AppText.Format("Main.Duration.MinutesSeconds", totalMinutes, remainingSeconds)
+                : AppText.Format("Main.Duration.Seconds", remainingSeconds);
         }
 
         private async Task QueryVisibleServersAsync()
@@ -5067,7 +5554,7 @@ namespace TarkovServerReporter
                         SessionPeriodPreset requestedPeriod = _sessionPeriod;
                         DateTime? requestedStart = _customPeriodStart;
                         DateTime? requestedEnd = _customPeriodEnd;
-                        SetStatus("최신 레이드 로그를 확인하는 중…", Accent);
+                        SetStatus(AppText.Get("Main.Query.RefreshingLogs"), Accent);
                         SessionRefreshScanResult refreshScan = await Task.Run(
                             () => ScanSessionsForRefresh(
                                 paths,
@@ -5142,7 +5629,7 @@ namespace TarkovServerReporter
                     SetStatus(
                         AddLogScanWarning(AppendLogRefreshSummary(
                             AppendRegionFilterSummary(
-                                "최신 로그에서 조회할 서버 IP를 찾지 못했습니다."),
+                                AppText.Get("Main.Query.NoServerIp")),
                             logRefreshPerformed,
                             logRefreshReadSucceeded,
                             refreshedNewLogCount,
@@ -5157,7 +5644,7 @@ namespace TarkovServerReporter
 
                 if (!geoDatabaseReady)
                 {
-                    SetStatus("지역 DB 최초 준비 중… 약 60~70MB, 네트워크에 따라 잠시 걸릴 수 있습니다.", Accent);
+                    SetStatus(AppText.Get("Main.Query.PreparingGeoDb"), Accent);
                     try
                     {
                         await NetworkServices.UpdateGeoDatabaseIfDueAsync(true, cancellationToken);
@@ -5177,7 +5664,7 @@ namespace TarkovServerReporter
                     StartGeoDatabaseUpdateIfDue(cancellationToken);
                 }
 
-                SetStatus("Windows 방화벽 상태를 확인하는 중…", Accent);
+                SetStatus(AppText.Get("Main.Query.CheckingFirewall"), Accent);
                 Dictionary<string, FirewallQueryResult> queriedStates = await Task.Run(
                     () => FirewallRuleManager.QueryMany(ipAddresses), cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -5225,7 +5712,7 @@ namespace TarkovServerReporter
                             if (ping != null && ping.IsAvailable) answered++;
                             if (geo != null && geo.Success) located++;
                             completed++;
-                            SetStatus(string.Format("조회 중… {0}/{1}", completed, ipAddresses.Count), Accent);
+                            SetStatus(AppText.Format("Main.Query.Progress", completed, ipAddresses.Count), Accent);
                         }
                         finally
                         {
@@ -5238,13 +5725,13 @@ namespace TarkovServerReporter
                 CacheBlockedServerMetadata(ipAddresses);
 
                 await RefreshLauncherSelectionAsync();
-                string summary = string.Format(
-                    "고유 IP {0}개 조회 완료 · 핑 응답 {1}개 · 차단 중 {2}개 · 지역 확인 {3}개",
+                string summary = AppText.Format(
+                    "Main.Query.Complete",
                     ipAddresses.Count,
                     answered,
                     blocked,
                     located);
-                if (!geoDatabaseReady) summary += " · 지역 DB 준비 실패";
+                if (!geoDatabaseReady) summary += AppText.Get("Main.Query.GeoDbFailedSuffix");
                 summary = AppendRegionFilterSummary(summary);
                 summary = AppendLogRefreshSummary(
                     summary,
@@ -5264,12 +5751,12 @@ namespace TarkovServerReporter
             }
             catch (OperationCanceledException)
             {
-                SetStatus("서버 조회를 취소했습니다.", Warning);
+                SetStatus(AppText.Get("Main.Query.Cancelled"), Warning);
                 RestoreRowsAfterCancelledQuery(ipAddresses);
             }
             catch (Exception ex)
             {
-                SetStatus("조회 중 오류가 발생했습니다: " + ex.Message, Danger);
+                SetStatus(AppText.Format("Main.Query.Failed", ex.Message), Danger);
                 RestoreRowsAfterCancelledQuery(ipAddresses);
             }
             finally
@@ -5293,10 +5780,10 @@ namespace TarkovServerReporter
         {
             CancellationTokenSource cancellation = _queryCancellation;
             if (cancellation == null || cancellation.IsCancellationRequested) return;
-            SetStatus("서버 조회를 취소하는 중…", Warning);
+            SetStatus(AppText.Get("Main.Query.Cancelling"), Warning);
             if (_queryButton != null)
             {
-                _queryButton.Text = "취소 중…";
+                _queryButton.Text = AppText.Get("Main.Query.ButtonCancelling");
                 _queryButton.Enabled = false;
             }
             cancellation.Cancel();
@@ -5343,8 +5830,8 @@ namespace TarkovServerReporter
                 GeoInfo cachedGeo;
                 row.Cells["location"].Value = _geoResults.TryGetValue(session.IpAddress, out cachedGeo) && cachedGeo.Success
                     ? GetLocationCellText(session, cachedGeo)
-                    : "조회 중…";
-                row.Cells["ping"].Value = "측정 중…";
+                    : AppText.Get("Main.Current.Scanning");
+                row.Cells["ping"].Value = AppText.Get("Main.Current.Measuring");
                 row.Cells["location"].Style.ForeColor = Accent;
                 row.Cells["ping"].Style.ForeColor = Accent;
                 UpdateActionCells(row);
@@ -5352,8 +5839,8 @@ namespace TarkovServerReporter
 
             if (_selectedSession != null && _selectedSession.HasServerIp && measuring.Contains(_selectedSession.IpAddress))
             {
-                _pingValueLabel.Text = "측정 중…";
-                _locationValueLabel.Text = "조회 중…";
+                _pingValueLabel.Text = AppText.Get("Main.Current.Measuring");
+                _locationValueLabel.Text = AppText.Get("Main.Current.Scanning");
                 _pingValueLabel.ForeColor = Accent;
                 _locationValueLabel.ForeColor = Accent;
             }
@@ -5382,16 +5869,35 @@ namespace TarkovServerReporter
             string dataCenter = session == null || string.IsNullOrWhiteSpace(session.DataCenterCode)
                 ? null
                 : session.DataCenterCode;
-            string location = geo == null ? "조회 전" : geo.ToDisplayText();
+            string location = geo == null
+                ? AppText.Get("Main.Current.BeforeScan")
+                : LocalizeGeoDisplay(geo);
             return string.IsNullOrWhiteSpace(dataCenter) ? location : dataCenter + " / " + location;
+        }
+
+        private static string LocalizeGeoDisplay(GeoInfo geo)
+        {
+            if (geo == null) return AppText.Get("Main.Current.BeforeScan");
+            string display = geo.ToDisplayText();
+            if (geo.Success
+                || string.Equals(AppText.CurrentLanguage, AppText.KoreanLanguage, StringComparison.Ordinal))
+                return display;
+
+            string translated = AppText.TranslateLiteral(display);
+            return !string.Equals(translated, display, StringComparison.Ordinal)
+                ? translated
+                : AppText.Get("Common.Status.NotVerified");
         }
 
         private static string GetPingCellText(ServerSession session, PingResult ping, FirewallQueryResult firewall)
         {
             if (session == null || !session.HasServerIp) return "-";
-            if (firewall != null && firewall.Success && firewall.IsBlocked) return "차단 중";
-            if (ping == null) return "조회 전";
-            return ping.IsAvailable ? ping.AverageMs + " ms" : "응답 없음";
+            if (firewall != null && firewall.Success && firewall.IsBlocked)
+                return AppText.Get("Main.Current.Blocked");
+            if (ping == null) return AppText.Get("Main.Current.BeforeScan");
+            return ping.IsAvailable
+                ? ping.AverageMs + " ms"
+                : AppText.Get("Main.Current.NoResponse");
         }
 
         private static void ApplyResultRowStyle(
@@ -5424,7 +5930,10 @@ namespace TarkovServerReporter
         {
             if (cell == null) return;
             string text = Convert.ToString(cell.Value);
-            bool missing = string.Equals(text, "로그없음", StringComparison.Ordinal);
+            bool missing = string.Equals(
+                text,
+                AppText.Get("Main.Connection.State.LogUnavailable"),
+                StringComparison.Ordinal);
             // Null restores the normal inherited metric font for measured,
             // local-PvE, and neutral values. Only the compact missing state uses
             // the connection-result font beside it.
@@ -5452,7 +5961,10 @@ namespace TarkovServerReporter
 
         private static bool IsCompactMetricState(string text)
         {
-            return string.Equals(text, "로그없음", StringComparison.Ordinal);
+            return string.Equals(
+                text,
+                AppText.Get("Main.Connection.State.LogUnavailable"),
+                StringComparison.Ordinal);
         }
 
         private static string CreateMetricAccessibleDescription(string value, string help)
@@ -5475,37 +5987,38 @@ namespace TarkovServerReporter
         private static Color GetConnectionResultColor(ServerSession session)
         {
             if (session == null) return TextMuted;
-            string state = session.ConnectionStateText ?? string.Empty;
-            if (state == "정상종료") return TextMuted;
-            if (session.TimedOut || state == "접속실패" || state == "비정상종료") return Danger;
-            if (state == "해당 없음") return TextMuted;
-            return TextMuted;
+            ConnectionPresentationState state = GetConnectionPresentationState(session);
+            return session.TimedOut
+                    || state == ConnectionPresentationState.Failed
+                    || state == ConnectionPresentationState.Abnormal
+                ? Danger
+                : TextMuted;
         }
 
         private static string GetConnectionResultHelp(ServerSession session)
         {
             if (session == null) return string.Empty;
-            string state = session.ConnectionStateText ?? string.Empty;
-            if (state == "정상종료")
-                return "서버 연결이 정상적으로 종료된 기록입니다. 탈출·사망 같은 레이드 결과는 구분하지 않습니다.";
+            ConnectionPresentationState state = GetConnectionPresentationState(session);
+            if (state == ConnectionPresentationState.Normal)
+                return AppText.Get("Main.Connection.Help.Normal");
             if (session.TimedOut)
             {
                 bool connected = session.ConnectedOnce || session.CurrentAttemptConnected;
                 return connected
-                    ? "서버 연결 뒤 시간 초과로 비정상 종료된 기록입니다."
-                    : "서버 연결이 완료되기 전에 시간 초과되어 접속에 실패한 기록입니다.";
+                    ? AppText.Get("Main.Connection.Help.AbnormalTimeout")
+                    : AppText.Get("Main.Connection.Help.FailedTimeout");
             }
-            if (state == "접속실패")
-                return "서버가 배정됐지만 마지막 연결 시도가 성공하기 전에 끝난 기록입니다.";
-            if (state == "비정상종료")
-                return "서버 연결 뒤 정상 종료가 아닌 명시적인 종료 사유가 기록됐습니다.";
-            if (state == "접속기록 없음")
-                return "서버 IP는 배정됐지만 대응하는 Connect 로그를 찾지 못했습니다.";
-            if (state == "해당 없음")
-                return "로컬 레이드는 연결할 게임 서버가 없어 서버연결 결과가 적용되지 않습니다.";
-            if (state == "로그없음")
-                return RaidMetricPresentation.MissingLogHelp;
-            return "종료 기록이 없거나 사유를 확정할 수 없습니다. 진행 중·강제 종료·로그 누락일 수 있습니다.";
+            if (state == ConnectionPresentationState.Failed)
+                return AppText.Get("Main.Connection.Help.Failed");
+            if (state == ConnectionPresentationState.Abnormal)
+                return AppText.Get("Main.Connection.Help.Abnormal");
+            if (state == ConnectionPresentationState.NoRecord)
+                return AppText.Get("Main.Connection.Help.NoRecord");
+            if (state == ConnectionPresentationState.NotApplicable)
+                return AppText.Get("Main.Connection.Help.NotApplicable");
+            if (state == ConnectionPresentationState.LogUnavailable)
+                return AppText.Get("Main.Metric.MissingLogHelp");
+            return AppText.Get("Main.Connection.Help.Unknown");
         }
 
         private void ShowSelectedResults(ServerSession session, PingResult ping, GeoInfo geo, FirewallQueryResult firewall)
@@ -5514,19 +6027,19 @@ namespace TarkovServerReporter
             _locationValueLabel.ForeColor = geo != null && geo.Success ? TextPrimary : TextMuted;
             if (firewall != null && firewall.Success && firewall.IsBlocked)
             {
-                _pingValueLabel.Text = "차단 중";
+                _pingValueLabel.Text = AppText.Get("Main.Current.Blocked");
                 _pingValueLabel.ForeColor = Danger;
                 return;
             }
             if (ping == null)
             {
-                _pingValueLabel.Text = "조회 전";
+                _pingValueLabel.Text = AppText.Get("Main.Current.BeforeScan");
                 _pingValueLabel.ForeColor = TextMuted;
                 return;
             }
             _pingValueLabel.Text = ping.IsAvailable
-                ? string.Format("평균 {0}ms · 최소 {1} / 최대 {2}ms", ping.AverageMs, ping.MinimumMs, ping.MaximumMs)
-                : "응답 없음";
+                ? AppText.Format("Main.Current.PingDetails", ping.AverageMs, ping.MinimumMs, ping.MaximumMs)
+                : AppText.Get("Main.Current.NoResponse");
             _pingValueLabel.ForeColor = GetPingColor(ping);
         }
 
@@ -5558,19 +6071,39 @@ namespace TarkovServerReporter
             var session = row.Tag as ServerSession;
             if (session == null) return;
             SelectSession(session);
+            if (_demoMode && (args.ColumnIndex == _historyGrid.Columns["note"].Index
+                || args.ColumnIndex == _historyGrid.Columns["userReport"].Index))
+            {
+                ShowActionNotice(AppText.Get("Main.Preview.NoNotes"));
+                return;
+            }
             if (args.ColumnIndex == _historyGrid.Columns["note"].Index)
             {
-                if (RaidNoteUi.ShowFor(this, session))
+                try
                 {
-                    if (_historySortColumn == "note") ReapplyHistorySort();
-                    else UpdateNoteCell(row, _noteStore.Exists(session));
+                    if (RaidNoteUi.ShowFor(this, session))
+                    {
+                        if (_historySortColumn == "note") ReapplyHistorySort();
+                        else UpdateNoteCell(row, _noteStore.Exists(session));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SetStatus(AppText.Format("Notes.OpenFailed", ex.Message), Danger);
                 }
                 return;
             }
             if (args.ColumnIndex == _historyGrid.Columns["userReport"].Index)
             {
-                if (session.UserReportCount > 0)
-                    UserReportMemoUi.ShowFor(this, session);
+                try
+                {
+                    if (session.UserReportCount > 0)
+                        UserReportMemoUi.ShowFor(this, session);
+                }
+                catch (Exception ex)
+                {
+                    SetStatus(AppText.Format("Notes.OpenFailed", ex.Message), Danger);
+                }
                 return;
             }
 
@@ -5600,7 +6133,7 @@ namespace TarkovServerReporter
                 : "unblockAction";
             if (_demoMode)
             {
-                ShowActionNotice("미리보기 모드에서는 실제 방화벽을 변경하지 않습니다.");
+                ShowActionNotice(AppText.Get("Main.Preview.NoFirewall"));
                 return;
             }
             bool enabled = row.Cells[actionColumn].Tag is bool && (bool)row.Cells[actionColumn].Tag;
@@ -5625,26 +6158,26 @@ namespace TarkovServerReporter
         {
             string message;
             if (!FirewallRuleManager.IsValidIpv4(ipAddress))
-                message = "이 기록에는 접속 제어할 서버 IP가 없습니다.";
+                message = AppText.Get("Main.Action.NoServerIp");
             else if (_isMeasuring)
-                message = "서버 상태를 조회하고 있습니다.";
+                message = AppText.Get("Main.Action.Scanning");
             else if (_isFirewallChanging || _firewallBusyIpAddresses.Contains(ipAddress))
-                message = "차단·해제 작업이 진행 중입니다.";
+                message = AppText.Get("Main.Action.FirewallBusy");
             else if (_isRefreshing)
-                message = "로그를 읽고 있습니다. 잠시 후 다시 시도해 주세요.";
+                message = AppText.Get("Main.Action.LogsBusy");
             else
             {
                 FirewallQueryResult firewall;
                 if (!_firewallStates.TryGetValue(ipAddress, out firewall))
-                    message = "먼저 조회를 실행해 주세요.";
+                    message = AppText.Get("Main.Action.ScanFirst");
                 else if (!firewall.Success)
-                    message = "방화벽 상태를 확인하지 못했습니다. 다시 조회해 주세요.";
+                    message = AppText.Get("Main.Action.FirewallUnknown");
                 else if (action == PingKickAction.Block && firewall.IsBlocked)
-                    message = "이미 차단 중인 서버입니다.";
+                    message = AppText.Get("Main.Action.AlreadyBlocked");
                 else if (action == PingKickAction.Unblock && !firewall.IsBlocked)
-                    message = "현재 차단되지 않은 서버입니다.";
+                    message = AppText.Get("Main.Action.NotBlocked");
                 else
-                    message = "현재 이 작업을 실행할 수 없습니다.";
+                    message = AppText.Get("Main.Action.Unavailable");
             }
             ShowActionNotice(message);
         }
@@ -5652,74 +6185,105 @@ namespace TarkovServerReporter
         private void ShowActionNotice(string message)
         {
             SetStatus(message, Warning);
-            MessageBox.Show(this, message, "접속 제어", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(
+                this,
+                message,
+                AppText.Get("Main.Action.DialogTitle"),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
         }
 
         private async Task ChangeFirewallStateAsync(string ipAddress, bool shouldBlock)
         {
             if (!FirewallRuleManager.IsValidIpv4(ipAddress)
-                || _isMeasuring
-                || _isRefreshing
-                || _isFirewallChanging
+                || _isMeasuring || _isRefreshing || _isFirewallChanging
                 || _firewallBusyIpAddresses.Contains(ipAddress)) return;
-
             FirewallQueryResult current;
             if (!_firewallStates.TryGetValue(ipAddress, out current) || !current.Success) return;
             if (current.IsBlocked == shouldBlock) return;
 
+            bool requestEvidence = false;
+            long evidenceRevision = 0;
             _isFirewallChanging = true;
             _firewallBusyIpAddresses.Add(ipAddress);
             UpdateActionButtons();
-            SetStatus(string.Format("{0} 서버 {1} 중… 관리자 권한 요청을 확인해 주세요.", ipAddress, shouldBlock ? "차단" : "해제"), Accent);
+            SetStatus(AppText.Format(shouldBlock ? "Main.Firewall.ChangingBlock"
+                : "Main.Firewall.ChangingUnblock", ipAddress), Accent);
             try
             {
-                FirewallChangeResult result = await FirewallRuleManager.ChangeWithElevationAsync(ipAddress, shouldBlock);
-                if (!result.Success)
+                FirewallChangeResult result = await _changeFirewallState(ipAddress, shouldBlock);
+                if (IsDisposed || Disposing) return;
+                if (result == null || !result.Success)
                 {
-                    if (!result.Cancelled)
-                    {
-                        FirewallQueryResult refreshed = await Task.Run(() => FirewallRuleManager.Query(ipAddress));
-                        _firewallStates[ipAddress] = refreshed;
-                    }
-                    SetStatus(result.ErrorMessage ?? "방화벽 작업을 완료하지 못했습니다.", Danger);
-                    UpdateServerRowsFromCache(ipAddress);
+                    if (result == null || !result.Cancelled)
+                        _firewallStates[ipAddress] = await Task.Run(() => _queryFirewallState(ipAddress));
+                    if (!IsDisposed && !Disposing)
+                        SetStatus(GetFirewallFailureDisplay(result == null ? null : result.ErrorMessage), Danger);
+                    return;
+                }
+                _firewallStates[ipAddress] = new FirewallQueryResult { Success = true, IsBlocked = result.IsBlocked };
+                _pingResults.Remove(ipAddress);
+                if (result.IsBlocked != shouldBlock)
+                {
+                    SetStatus(AppText.Get("Main.Firewall.StateMismatch"), Warning);
                     return;
                 }
 
-                _firewallStates[ipAddress] = new FirewallQueryResult { Success = true, IsBlocked = result.IsBlocked };
-                _pingResults.Remove(ipAddress);
-                RaidQualityEvidenceSummary qualityEvidence = null;
-                if (shouldBlock)
+                bool metadataSaved = true;
+                try
                 {
-                    SaveBlockedServerMetadata(ipAddress);
-                    UpdateServerRowsFromCache(ipAddress);
-                    SetStatus(
-                        GetFirewallChangeSuccessMessage(ipAddress, true),
-                        Danger);
-                    qualityEvidence = await LoadRecentRaidQualityEvidenceAsync(ipAddress);
+                    if (shouldBlock) _saveBlockedMetadata(ipAddress);
+                    else _removeBlockedMetadata(ipAddress);
                 }
-                else
-                {
-                    BlockedServerMetadataStore.Remove(new[] { ipAddress });
-                    UpdateServerRowsFromCache(ipAddress);
-                }
-                SetStatus(
-                    GetFirewallChangeSuccessMessageWithEvidence(
-                        ipAddress,
-                        shouldBlock,
-                        qualityEvidence),
-                    shouldBlock ? Danger : Success);
+                catch { metadataSaved = false; }
+                string message = GetFirewallChangeSuccessMessage(ipAddress, shouldBlock);
+                if (!metadataSaved) message += "\r\n" + AppText.Get("Main.Firewall.MetadataFailed");
+                SetStatus(message, metadataSaved ? (shouldBlock ? Danger : Success) : Warning);
+                evidenceRevision = _statusRevision;
+                requestEvidence = shouldBlock && metadataSaved;
+            }
+            catch (Exception ex)
+            {
+                // A failed native/helper operation leaves the previous cached state uncertain.
+                _firewallStates[ipAddress] = new FirewallQueryResult { Success = false, ErrorMessage = ex.Message };
+                if (!IsDisposed && !Disposing) SetStatus(GetFirewallFailureDisplay(ex.Message), Danger);
             }
             finally
             {
                 _firewallBusyIpAddresses.Remove(ipAddress);
                 _isFirewallChanging = false;
-                UpdateActionButtons();
-                UpdateServerRowsFromCache(ipAddress);
-                if (IsFirewallActionSortColumn(_historySortColumn))
-                    ReapplyHistorySort(false, true);
-                else if (_historySortColumn == "ping")
-                    ReapplyHistorySort();
+                if (!IsDisposed && !Disposing)
+                {
+                    UpdateActionButtons();
+                    UpdateServerRowsFromCache(ipAddress);
+                    if (IsFirewallActionSortColumn(_historySortColumn)) ReapplyHistorySort(false, true);
+                    else if (_historySortColumn == "ping") ReapplyHistorySort();
+                }
+            }
+
+            // Optional history analysis never keeps the successfully completed action busy.
+            if (requestEvidence && !IsDisposed && !Disposing && _statusRevision == evidenceRevision)
+                _pendingQualityEvidence = PublishFirewallEvidenceAsync(ipAddress, evidenceRevision);
+        }
+
+        private async Task PublishFirewallEvidenceAsync(string ipAddress, long expectedRevision)
+        {
+            string eftPath = _appliedEftPath;
+            string arenaPath = _appliedArenaPath;
+            try
+            {
+                RaidQualityEvidenceSummary evidence = await _loadRaidQualityEvidence(ipAddress);
+                if (evidence == null || IsDisposed || Disposing || _statusRevision != expectedRevision
+                    || !string.Equals(eftPath, _appliedEftPath, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(arenaPath, _appliedArenaPath, StringComparison.OrdinalIgnoreCase)) return;
+                FirewallQueryResult current;
+                if (!_firewallStates.TryGetValue(ipAddress, out current)
+                    || !current.Success || !current.IsBlocked) return;
+                SetStatus(GetFirewallChangeSuccessMessageWithEvidence(ipAddress, true, evidence), Danger);
+            }
+            catch
+            {
+                // An optional evidence failure must not replace the confirmed firewall result.
             }
         }
 
@@ -5734,12 +6298,29 @@ namespace TarkovServerReporter
             RaidQualityEvidenceSummary qualityEvidence)
         {
             if (!shouldBlock)
-                return ipAddress + " 서버 차단을 해제했습니다. 핑은 다시 조회해 주세요.";
+                return AppText.Format("Main.Firewall.Unblocked", ipAddress);
 
-            string result = ipAddress + " 서버 차단을 적용했습니다. 핑은 다시 조회해 주세요.\r\n";
+            string result = AppText.Format("Main.Firewall.Blocked", ipAddress);
             if (qualityEvidence != null)
-                result += qualityEvidence.ToDisplayText() + "\r\n";
-            return result + FirewallPersistenceNotice.RulesPersistLine;
+            {
+                result += AppText.Format(
+                    "Main.Firewall.QualityEvidence",
+                    qualityEvidence.WindowRaidCount,
+                    qualityEvidence.MatchingRaidCount,
+                    qualityEvidence.ProblemRaidCount) + "\r\n";
+            }
+            return result + AppText.Get("Main.Firewall.Persistence");
+        }
+
+        private static string GetFirewallFailureDisplay(string serviceMessage)
+        {
+            if (string.Equals(
+                AppText.CurrentLanguage,
+                AppText.KoreanLanguage,
+                StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(serviceMessage))
+                return serviceMessage;
+            return AppText.Get("Main.Firewall.Failed");
         }
 
         private async Task<RaidQualityEvidenceSummary> LoadRecentRaidQualityEvidenceAsync(
@@ -5826,7 +6407,7 @@ namespace TarkovServerReporter
             {
                 ApplyActionCellStyle(blockCell, false, true);
                 ApplyActionCellStyle(unblockCell, false, false);
-                blockCell.ToolTipText = "이 기록에는 접속 제어할 서버 IP가 없습니다.";
+                blockCell.ToolTipText = AppText.Get("Main.Action.NoServerIp");
                 unblockCell.ToolTipText = blockCell.ToolTipText;
                 UpdateStickyActionRow(row);
                 return;
@@ -5837,14 +6418,16 @@ namespace TarkovServerReporter
             ApplyActionCellStyle(blockCell, actionState.BlockAvailable, true);
             ApplyActionCellStyle(unblockCell, actionState.UnblockAvailable, false);
             string help = actionState.Busy
-                ? "차단·해제 작업이 진행 중입니다."
+                ? AppText.Get("Main.Action.FirewallBusy")
                 : (_isMeasuring
-                    ? "서버 상태를 조회하고 있습니다."
+                    ? AppText.Get("Main.Action.Scanning")
                     : (!actionState.HasResult
-                        ? "먼저 조회를 실행해 주세요."
+                        ? AppText.Get("Main.Action.ScanFirst")
                         : (!actionState.Known
-                            ? "방화벽 상태를 확인하지 못했습니다. 다시 조회해 주세요."
-                            : (actionState.IsBlocked ? "현재 차단 중인 서버입니다." : "현재 차단되지 않은 서버입니다."))));
+                            ? AppText.Get("Main.Action.FirewallUnknown")
+                            : AppText.Get(actionState.IsBlocked
+                                ? "Main.Action.AlreadyBlocked"
+                                : "Main.Action.NotBlocked"))));
             blockCell.ToolTipText = help;
             unblockCell.ToolTipText = help;
             _historyGrid.InvalidateCell(blockCell);
@@ -5872,7 +6455,9 @@ namespace TarkovServerReporter
             cell.Style.SelectionBackColor = Color.FromArgb(56, 65, 76);
             cell.Style.ForeColor = ReportOrange;
             cell.Style.SelectionForeColor = ReportOrange;
-            cell.ToolTipText = hasNote ? "저장된 메모를 엽니다." : "이 레이드에 메모를 추가합니다.";
+            cell.ToolTipText = AppText.Get(hasNote
+                ? "Main.Note.OpenTooltip"
+                : "Main.Note.AddTooltip");
             _historyGrid.InvalidateCell(cell);
         }
 
@@ -5896,13 +6481,14 @@ namespace TarkovServerReporter
             if (_isRefreshing || _isMeasuring || _isFirewallChanging) return;
             if (_demoMode)
             {
-                ShowActionNotice("미리보기 모드에서는 실제 서버차단현황을 열지 않습니다.");
+                ShowActionNotice(AppText.Get("Main.Preview.NoBlockedServers"));
                 return;
             }
 
             bool changed;
             using (var form = new BlockedServersForm())
             {
+                ColumnWidthPersistence.Attach(form, "blocked", AppPreferencesStore.GetDefaultStorageRoot());
                 form.ShowDialog(this);
                 changed = form.FirewallStateChanged;
             }
@@ -5917,7 +6503,7 @@ namespace TarkovServerReporter
             IList<string> ipAddresses = PingBatchPlanner.GetUniqueServerIps(_visibleSessions);
             _isRefreshing = true;
             UpdateActionButtons();
-            SetStatus("변경된 차단 상태를 목록에 반영하는 중…", Accent);
+            SetStatus(AppText.Get("Main.BlockedServers.Refreshing"), Accent);
             try
             {
                 Dictionary<string, FirewallQueryResult> states = await Task.Run(
@@ -5930,12 +6516,12 @@ namespace TarkovServerReporter
                     _pingResults.Remove(ipAddress);
                     UpdateServerRowsFromCache(ipAddress);
                 }
-                SetStatus("서버차단현황의 변경 사항을 반영했습니다. 필요한 서버는 다시 조회해 주세요.", Success);
+                SetStatus(AppText.Get("Main.BlockedServers.Refreshed"), Success);
             }
             catch (Exception ex)
             {
                 _firewallStates.Clear();
-                SetStatus("서버차단현황은 변경됐지만 목록을 새로 고치지 못했습니다: " + ex.Message, Warning);
+                SetStatus(AppText.Format("Main.BlockedServers.RefreshFailed", ex.Message), Warning);
             }
             finally
             {
@@ -5953,18 +6539,18 @@ namespace TarkovServerReporter
             try
             {
                 Clipboard.SetText(_selectedSession.IpAddress);
-                SetStatus("서버 IP를 클립보드에 복사했습니다.", Success);
+                SetStatus(AppText.Get("Main.Clipboard.Copied"), Success);
             }
             catch (Exception ex)
             {
-                SetStatus("클립보드 복사 실패: " + ex.Message, Danger);
+                SetStatus(AppText.Format("Main.Clipboard.Failed", ex.Message), Danger);
             }
         }
 
         private void ShowNoServer(string message)
         {
             _selectedSession = null;
-            _ipLabel.Text = "서버를 찾지 못했습니다";
+            _ipLabel.Text = AppText.Get("Main.Current.NotFound");
             _ipLabel.ForeColor = TextMuted;
             _mapValueLabel.Text = "-";
             _mapValueLabel.AccessibleDescription = "-";
@@ -5999,18 +6585,20 @@ namespace TarkovServerReporter
                 {
                     bool cancellationRequested = _queryCancellation != null
                         && _queryCancellation.IsCancellationRequested;
-                    _queryButton.Text = cancellationRequested ? "취소 중…" : "취소";
+                    _queryButton.Text = AppText.Get(cancellationRequested
+                        ? "Main.Query.ButtonCancelling"
+                        : "Main.Query.ButtonCancel");
                     _queryButton.Enabled = !cancellationRequested;
                     StyleDangerButton(_queryButton);
                     _toolTip.SetToolTip(
                         _queryButton,
                         cancellationRequested
-                            ? "진행 중인 조회가 끝나기를 기다리고 있습니다."
-                            : "진행 중인 서버 조회와 지역 DB 최초 준비를 취소합니다.");
+                            ? AppText.Get("Main.Query.WaitingForStop")
+                            : AppText.Get("Main.Query.CancelTooltip"));
                 }
                 else
                 {
-                    _queryButton.Text = "조회";
+                    _queryButton.Text = AppText.Get("Common.Button.Scan");
                     bool canRefreshLogs = !_demoMode
                         && (!string.IsNullOrWhiteSpace(_appliedEftPath)
                             || !string.IsNullOrWhiteSpace(_appliedArenaPath));
@@ -6019,7 +6607,7 @@ namespace TarkovServerReporter
                     StyleButton(_queryButton, true);
                     _toolTip.SetToolTip(
                         _queryButton,
-                        "최신 로그를 다시 읽은 뒤 현재 목록의 고유 IP에 대해 방화벽 상태·핑·지역을 조회합니다.");
+                        AppText.Get("Main.Scan.Tooltip"));
                 }
             }
             if (_applyPathButton != null)
@@ -6031,7 +6619,7 @@ namespace TarkovServerReporter
             if (_eftBrowseButton != null) _eftBrowseButton.Enabled = controlsAvailable;
             if (_arenaBrowseButton != null) _arenaBrowseButton.Enabled = controlsAvailable;
             if (_blockedServersButton != null) _blockedServersButton.Enabled = controlsAvailable;
-            if (_notesArchiveButton != null) _notesArchiveButton.Enabled = controlsAvailable;
+            if (_notesArchiveButton != null) _notesArchiveButton.Enabled = true;
             if (_allFilterButton != null) _allFilterButton.Enabled = controlsAvailable;
             if (_eftFilterButton != null) _eftFilterButton.Enabled = controlsAvailable;
             if (_arenaFilterButton != null) _arenaFilterButton.Enabled = controlsAvailable;
@@ -6047,6 +6635,7 @@ namespace TarkovServerReporter
         private void SetStatus(string message, Color color)
         {
             if (_statusLabel == null) return;
+            _statusRevision++;
             message = message ?? string.Empty;
             _statusLabel.Text = message;
             _statusLabel.ForeColor = color;
@@ -6107,12 +6696,20 @@ namespace TarkovServerReporter
                     EftPath = _appliedEftPath,
                     ArenaPath = _appliedArenaPath
                 };
-                RaidLogScanResult scan = await Task.Run(() => RaidLogScanner.Scan(
-                    paths,
-                    new RaidLogScanQuery
-                    {
-                        MaximumRecords = RaidQualityEvidence.MaximumRecentRaids
-                    }));
+                Task<RaidLogScanResult> pending = _qualityEvidenceScan;
+                if (pending == null || pending.IsCompleted
+                    || !string.Equals(_qualityEvidenceEftPath, paths.EftPath, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(_qualityEvidenceArenaPath, paths.ArenaPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _qualityEvidenceEftPath = paths.EftPath;
+                    _qualityEvidenceArenaPath = paths.ArenaPath;
+                    pending = Task.Run(() => RaidLogScanner.Scan(paths,
+                        new RaidLogScanQuery { MaximumRecords = RaidQualityEvidence.MaximumRecentRaids }));
+                    _qualityEvidenceScan = pending;
+                }
+                RaidLogScanResult scan;
+                try { scan = await pending; }
+                finally { if (ReferenceEquals(_qualityEvidenceScan, pending)) _qualityEvidenceScan = null; }
                 if (scan == null || scan.Sessions == null)
                 {
                     return new RaidLogScanResult
@@ -6192,12 +6789,27 @@ namespace TarkovServerReporter
                 Math.Max(0, version.Build));
         }
 
+        private static string GetApplicationDisplayVersion()
+        {
+            Version version = typeof(MainForm).Assembly.GetName().Version;
+            if (version == null) return "0.0.0";
+            string semanticVersion = string.Format(
+                "{0}.{1}.{2}",
+                Math.Max(0, version.Major),
+                Math.Max(0, version.Minor),
+                Math.Max(0, version.Build));
+            return version.Revision > 0
+                ? semanticVersion + "." + version.Revision.ToString(CultureInfo.InvariantCulture)
+                : semanticVersion;
+        }
+
         private void LoadDemoData()
         {
             DateTime now = new DateTime(2026, 8, 14, 0, 32, 10);
-            _eftPathTextBox.Text = @"C:\Battlestate Games\EFT\Logs  (미리보기)";
-            _arenaPathTextBox.Text = @"C:\Battlestate Games\Escape from Tarkov Arena\Logs  (미리보기)";
-            _launcherSelectionLabel.Text = "게임런처 선택 서버   EFT: Singapore, Japan (08-14 00:30)   |   Arena: Korea, Japan (08-13 22:10)";
+            string previewSuffix = AppText.Get("Main.Preview.PathSuffix");
+            _eftPathTextBox.Text = @"C:\Battlestate Games\EFT\Logs  (" + previewSuffix + ")";
+            _arenaPathTextBox.Text = @"C:\Battlestate Games\Escape from Tarkov Arena\Logs  (" + previewSuffix + ")";
+            _launcherSelectionLabel.Text = AppText.Get("Main.Preview.LauncherSelection");
             _allSessions = new List<ServerSession>
             {
                 new ServerSession
@@ -6327,7 +6939,7 @@ namespace TarkovServerReporter
             _firewallStates["192.0.2.77"] = new FirewallQueryResult { Success = true, IsBlocked = false };
 
             RefreshVisibleSessions();
-            SetStatus("미리보기용 샘플입니다. 실제 실행에서는 EFT·Arena 로그에서 최근 100개 기록을 읽습니다.", Accent);
+            SetStatus(AppText.Get("Main.Preview.Status"), Accent);
         }
 
         public void SavePreview(string outputPath)

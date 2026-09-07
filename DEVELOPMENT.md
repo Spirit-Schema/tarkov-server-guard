@@ -10,7 +10,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 .NET Framework 4.8에 포함된 C# 컴파일러로 `dist\TarkovServerGuard.exe`를 만들고 테스트를 함께 실행합니다. 이 단계에는 별도 SDK나 NuGet 패키지가 필요하지 않습니다.
 
-테스트 범위에는 합성 EFT·Arena·런처 로그, EFT 캐릭터·솔로/파티·파티 인원 판정, 실게임 지표 상태와 최근 레이드 차단 근거, 차단현황 표시, Arena 지역 설정, 기간 경계, 방화벽 입력, 메모 저장·통합 백업·없는 항목만 복원, MMDB 파싱·월간 갱신·손상 복구와 GitHub 업데이트 판단이 포함됩니다.
+창 크기·열 너비 기억은 임시 저장소로 검증하며 실제 사용자 설정을 사용하지 않습니다. 열 너비는 세 목록과 두 언어별로 검증하고, 실제 WinForms 드래그 완료·취소·재실행 및 화면 배율 변경 계산을 확인합니다. 작은 화면에서 창 전체가 화면에 들어오는지와 전체 스크롤로 하단에 접근 가능한지도 검사합니다.
+
+검증된 실행본을 다시 빌드하지 않고 로컬 배포 패키지를 만들려면 `package-release.ps1 -VerifiedBuildDirectory .\build\release-v0.8.5`를 사용합니다. 입력 해시·실행본·검사 완료 기록이 일치해야 재사용하며, 실제 업데이트 런타임 검사는 패키징 시 별도로 실행합니다. `tools\Test-OfflineReleaseUpdate.ps1`는 공식 0.8.3 패키지와 로컬 후보의 업데이트 탐지·다운로드·손상 패키지 거절을 검증합니다. 실제 설치본 교체와 재실행 검수는 별도입니다.
+
+테스트 범위에는 로그 캐시 무효화·부분 읽기·큰 파일 스트리밍, 메모 동시 저장·손상 복구·엄격한 백업, 보관함 검색과 숨겨진 선택 보호, 차단 완료 후 지연 분석의 상태 보호, 파티 소유권 저장 실패를 포함합니다. 기존 회귀에는 합성 EFT·Arena·런처 로그, EFT 캐릭터·솔로/파티·파티 인원 판정, 실게임 지표 상태와 최근 레이드 차단 근거, 차단현황 표시, Arena 지역 설정, 기간 경계, 방화벽 입력, 메모 저장·통합 백업·없는 항목만 복원, MMDB 파싱·월간 갱신·손상 복구와 GitHub 업데이트 판단이 포함됩니다.
 
 ### v0.8.3 판정·표시 기준
 
@@ -36,22 +40,28 @@ UI 데모는 다음 명령으로 실행할 수 있습니다.
 
 별도 사용자 선택형 설치 제거 UI·인자·Velopack install/uninstall hook은 현재 제품 빌드에서 제외했습니다. 시험 설계는 공개 저장소 밖의 로컬 보류 자료로만 보존합니다. Windows 제어판·`설치된 앱`의 Velopack 기본 제거 동작은 그대로 유지합니다.
 
-### v0.8.3 검증 빌드
+### 개발 검수 빌드
 
 기능 구현 중에는 정식 배포 폴더와 분리된 출력 경로로 다음 명령을 사용합니다.
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -OutputDirectory .\build\test-v0.8.3
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -OutputDirectory .\build\test-v0.8.4.3
 ```
 
-이 명령은 `/warn:4` 앱과 전체 단위·저장소·UI 테스트를 실행하지만 Setup, Portable, Velopack 패키지, 업데이트 피드, 소스 ZIP과 배포 해시는 만들지 않습니다. 짧은 UI 반복에서는 `-SkipTests`로 컴파일만 확인할 수 있지만 최종 검증에서는 생략하지 않습니다. `package-release.ps1`은 기능 반복 중에는 실행하지 않고 최종 배포 검증에서만 실행합니다.
+이 명령은 `/warn:4 /warnaserror+`로 앱과 전체 단위·저장소·UI 테스트를 실행합니다. 컴파일 경고도 실패로 처리합니다. Setup, Portable, Velopack 패키지, 업데이트 피드와 소스 ZIP은 만들지 않습니다. `package-release.ps1`은 기능 반복 중에는 실행하지 않습니다.
+
+각 실행은 `build/runs/<실행 ID>/`에 앱, 테스트 실행 파일, 화면 캡처, 단계별 표준 출력·오류 로그와 `summary.json`을 남깁니다. 하네스 자체 테스트와 모든 제품 테스트가 통과하고 실행 중 소스가 바뀌지 않았을 때 지정 출력 폴더에 검수본을 복사합니다. 검수본 옆 `build-verification.json`의 버전·SHA-256·입력 해시·완료 테스트 목록으로 실행 파일과 검증 결과를 대조할 수 있습니다. `build/latest-run.json`은 가장 최근 시도의 결과이므로 실패 시 이전 검수본의 통과 기록과 혼동하지 않습니다.
+
+컴파일과 테스트 프로세스의 기본 제한 시간은 각각 120초, 180초입니다. 필요한 경우 `-CompileTimeoutSeconds`, `-TestTimeoutSeconds`로 조정합니다. 비정상 종료·시간 초과는 통과로 처리하지 않으며, 기존 정상 출력이 남아 있어도 실패한 실행에서 새 검증 완료를 주장하지 않습니다.
+
+짧은 반복에서는 `-SkipTests`로 컴파일만 확인할 수 있지만 출력과 요약에 `Unverified`로 표시됩니다. 최종 검수본에는 사용하지 않습니다. UI 테스트는 실제 STA 메시지 루프에서 실행하고 명시적으로 종료 콜백을 처리합니다. 미리보기와 메모 회귀 테스트는 사용자 메모·설정 대신 격리된 합성 자료를 사용합니다.
 
 시험 구현했던 Build ID·provenance, 공개 자산 재다운로드 검증과 최종 배포물 전용 민감정보 검사는 현재 빌드·패키징·배포 절차에서 제외했습니다. 관련 시험 자료와 재도입 조건은 공개 저장소 밖의 로컬 보류 영역에만 보존합니다.
 
-## v0.8.3 배포 패키지
+## v0.8.5 배포 패키지
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package-release.ps1 -Version 0.8.3
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package-release.ps1 -Version 0.8.5
 ```
 
 패키징에는 .NET 8 런타임이 필요합니다. 스크립트는 SHA-256으로 고정 검증한 Velopack 1.2.0과 Newtonsoft.Json 13.0.4를 빌드 캐시에 준비하고 런타임 연결 테스트 후 다음 결과를 생성합니다.

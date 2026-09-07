@@ -2,16 +2,25 @@
 # Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 param(
-    [string]$Version = '0.8.3',
+    [string]$Version,
+    [string]$VerifiedBuildDirectory,
     [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
+$projectRoot = $PSScriptRoot
+. (Join-Path $projectRoot 'tools\ReleaseVerification.ps1')
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $sourceVersion = [regex]::Match(
+        (Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'src\Program.cs')),
+        'AssemblyVersion\("(?<version>\d+\.\d+\.\d+)\.0"\)')
+    if (-not $sourceVersion.Success) { throw '소스에서 정식 릴리스 버전을 읽지 못했습니다.' }
+    $Version = $sourceVersion.Groups['version'].Value
+}
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw '릴리스 버전은 1.2.3 같은 3자리 SemVer 형식이어야 합니다.'
 }
 
-$projectRoot = $PSScriptRoot
 $buildRoot = Join-Path $projectRoot 'build'
 $publishRoot = Join-Path $buildRoot ("publish-v" + $Version)
 $releasesRoot = Join-Path $buildRoot ("Releases-v" + $Version)
@@ -22,6 +31,24 @@ $appIcon = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg.ico'
 
 if (-not (Test-Path -LiteralPath $appIcon -PathType Leaf)) {
     throw "앱 아이콘을 찾지 못했습니다: $appIcon"
+}
+if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) {
+    throw "릴리스 패치 내역을 찾지 못했습니다: $releaseNotes"
+}
+$verifiedBuild = $null
+if (-not [string]::IsNullOrWhiteSpace($VerifiedBuildDirectory)) {
+    if ($SkipTests) { throw '-VerifiedBuildDirectory cannot be combined with -SkipTests.' }
+    if (-not [IO.Path]::IsPathRooted($VerifiedBuildDirectory)) {
+        $VerifiedBuildDirectory = Join-Path $projectRoot $VerifiedBuildDirectory
+    }
+    $verifiedBuild = Get-VerifiedReleaseBuild -ProjectRoot $projectRoot -BuildDirectory $VerifiedBuildDirectory
+    foreach ($resetDirectory in @($publishRoot, $releasesStageRoot)) {
+        $resetPath = [IO.Path]::GetFullPath($resetDirectory).TrimEnd('\')
+        if ([string]::Equals($verifiedBuild.Directory, $resetPath, [StringComparison]::OrdinalIgnoreCase) -or
+            $verifiedBuild.Directory.StartsWith($resetPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The reusable build must be outside the packaging staging directories.'
+        }
+    }
 }
 
 function Reset-ProjectChild([string]$Path, [string]$ExpectedParent) {
@@ -50,10 +77,24 @@ $releasesStageRoot = Reset-ProjectChild $releasesStageRoot $buildRoot
 $dependencies = & (Join-Path $projectRoot 'tools\Prepare-Velopack.ps1')
 if ($dependencies -is [array]) { $dependencies = $dependencies[-1] }
 
-$buildParameters = @{ OutputDirectory = $publishRoot }
-if ($SkipTests) { $buildParameters.SkipTests = $true }
-& (Join-Path $projectRoot 'build.ps1') @buildParameters
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($null -ne $verifiedBuild) {
+    Copy-Item -LiteralPath $verifiedBuild.Executable, $verifiedBuild.Configuration -Destination $publishRoot -Force
+    Write-Host ('Reusing verified build: ' + $verifiedBuild.Summary.RunId)
+} else {
+    $buildParameters = @{ OutputDirectory = $publishRoot }
+    if ($SkipTests) { $buildParameters.SkipTests = $true }
+    & (Join-Path $projectRoot 'build.ps1') @buildParameters
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (-not $SkipTests) {
+        $verifiedBuild = Get-VerifiedReleaseBuild -ProjectRoot $projectRoot -BuildDirectory $publishRoot
+    }
+}
+# Build records contain private local paths and belong only in build/runs.
+# build.ps1 writes a convenience copy beside the EXE; never ship that copy.
+$publishVerification = Join-Path $publishRoot 'build-verification.json'
+if (Test-Path -LiteralPath $publishVerification -PathType Leaf) {
+    Remove-Item -LiteralPath $publishVerification -Force
+}
 
 $builtExecutable = Join-Path $publishRoot 'TarkovServerGuard.exe'
 $expectedFileVersion = $Version + '.0'
@@ -70,7 +111,7 @@ Copy-Item -Force -LiteralPath $dependencies.VelopackDll `
 Copy-Item -Force -LiteralPath $dependencies.NewtonsoftJsonDll `
     -Destination (Join-Path $publishRoot 'Newtonsoft.Json.dll')
 foreach ($document in @(
-    'README.md',
+    'README.md', 'README.en.md',
     'PRIVACY.md',
     'TROUBLESHOOTING.md',
     'LICENSING.md',
@@ -96,16 +137,24 @@ Copy-Item -Force `
 if (-not $SkipTests) {
     $updateTestRoot = Join-Path $buildRoot 'update-runtime-test'
     $updateTestRoot = Reset-ProjectChild $updateTestRoot $buildRoot
-    foreach ($file in @('GitHubUpdateTests.exe')) {
-        Copy-Item -Force -LiteralPath (Join-Path $buildRoot $file) `
-            -Destination (Join-Path $updateTestRoot $file)
-    }
+    Copy-Item -Force -LiteralPath $verifiedBuild.UpdateTestExecutable `
+        -Destination (Join-Path $updateTestRoot 'GitHubUpdateTests.exe')
     Copy-Item -Force -LiteralPath $dependencies.VelopackDll `
         -Destination (Join-Path $updateTestRoot 'Velopack.dll')
     Copy-Item -Force -LiteralPath $dependencies.NewtonsoftJsonDll `
         -Destination (Join-Path $updateTestRoot 'Newtonsoft.Json.dll')
-    & (Join-Path $updateTestRoot 'GitHubUpdateTests.exe')
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    . (Join-Path $projectRoot 'tools\BuildHarness.ps1')
+    $runtimeContext = New-BuildRunContext $updateTestRoot
+    $runtimeResult = Invoke-BuildProcess -Context $runtimeContext -Name 'GitHubUpdateTests.WithRuntime' `
+        -FilePath (Join-Path $updateTestRoot 'GitHubUpdateTests.exe') -WorkingDirectory $updateTestRoot -TimeoutSeconds 180
+    Assert-BuildProcessPassed $runtimeResult
+    if ((Get-Content -Raw -LiteralPath $runtimeResult.StdoutPath) -match 'runtime probe skipped') {
+        throw 'The packaged updater runtime was not exercised.'
+    }
+    $runtimeContext.Status = 'Passed'
+    $runtimeContext.CompletedUtc = [DateTime]::UtcNow.ToString('o')
+    $runtimeContext.Metadata['BuildRunId'] = $verifiedBuild.Summary.RunId
+    Save-BuildRunSummary $runtimeContext
 }
 
 $vpkArguments = @(
@@ -167,7 +216,7 @@ foreach ($sourceFile in @(
         -Destination (Join-Path $sourceReviewRoot $sourceFile)
 }
 foreach ($sourceDocument in @(
-    'README.md',
+    'README.md', 'README.en.md',
     'PRIVACY.md',
     'TROUBLESHOOTING.md',
     'LICENSING.md',

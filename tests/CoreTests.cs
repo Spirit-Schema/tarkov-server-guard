@@ -332,8 +332,8 @@ namespace TarkovServerReporter.Tests
             Assert(season.ProgressionMode == TarkovProgressionMode.PvpSeason
                 && season.HostingMode == TarkovHostingMode.Server
                 && season.PvpSeasonNumber == 1
-                && season.ProgressionModeText == "PvP시즌1"
-                && season.RaidTypeText == "PvP시즌1",
+                && season.ProgressionModeText == "PvP/S1"
+                && season.RaidTypeText == "PvP/S1",
                 "PvpSeason is numbered and classified independently from regular PvP");
             Assert(pveServer.ProgressionMode == TarkovProgressionMode.Pve
                 && pveServer.HostingMode == TarkovHostingMode.Server
@@ -417,22 +417,22 @@ namespace TarkovServerReporter.Tests
                 && seasonOne.PvpSeasonEvidence == PvpSeasonEvidence.ExplicitLogValue
                 && seasonOne.PvpSeasonKey == "kord-breach"
                 && seasonOne.PvpSeasonName == "KORD BREACH"
-                && seasonOne.ProgressionModeText == "PvP시즌1"
-                && seasonOne.RaidTypeText == "PvP시즌1",
-                "the exact PvpSeason1 token renders as PvP시즌1 independently of client version");
+                && seasonOne.ProgressionModeText == "PvP/S1"
+                && seasonOne.RaidTypeText == "PvP/S1",
+                "the exact PvpSeason1 token renders as PvP/S1 independently of client version");
             Assert(seasonTwo.ProgressionMode == TarkovProgressionMode.PvpSeason
                 && seasonTwo.PvpSeasonNumber == 2
                 && seasonTwo.PvpSeasonEvidence == PvpSeasonEvidence.ExplicitLogValue
                 && string.IsNullOrEmpty(seasonTwo.PvpSeasonKey)
                 && string.IsNullOrEmpty(seasonTwo.PvpSeasonName)
-                && seasonTwo.ProgressionModeText == "PvP시즌2"
-                && seasonTwo.RaidTypeText == "PvP시즌2",
+                && seasonTwo.ProgressionModeText == "PvP/S2"
+                && seasonTwo.RaidTypeText == "PvP/S2",
                 "the exact PvpSeason2 token wins over a conflicting season-1 client version");
             Assert(unknownFuture.ProgressionMode == TarkovProgressionMode.PvpSeason
                 && !unknownFuture.PvpSeasonNumber.HasValue
                 && unknownFuture.PvpSeasonEvidence == PvpSeasonEvidence.None
-                && unknownFuture.ProgressionModeText == "PvP시즌",
-                "an unknown future version safely falls back to the unnumbered PvP season label");
+                && unknownFuture.ProgressionModeText == "PvP/S?",
+                "an unknown future version safely falls back to the unknown PvP season label");
             Assert(regular.ProgressionMode == TarkovProgressionMode.Pvp
                 && !regular.PvpSeasonNumber.HasValue
                 && regular.ProgressionModeText == "PvP"
@@ -447,7 +447,7 @@ namespace TarkovServerReporter.Tests
             Assert(cachedSeasonOne.PvpSeasonNumber == 1
                 && cachedSeasonOne.PvpSeasonKey == "kord-breach"
                 && cachedSeasonOne.PvpSeasonName == "KORD BREACH"
-                && cachedSeasonOne.ProgressionModeText == "PvP시즌1",
+                && cachedSeasonOne.ProgressionModeText == "PvP/S1",
                 "the cache clone preserves the historical season identity and display value");
 
             MethodInfo mergeMethod = typeof(RaidLogScanner).GetMethod(
@@ -483,7 +483,7 @@ namespace TarkovServerReporter.Tests
                 new object[] { duplicateCandidates })).Single();
             Assert(merged.PvpSeasonNumber == 2
                 && merged.PvpSeasonEvidence == PvpSeasonEvidence.ExplicitLogValue
-                && merged.ProgressionModeText == "PvP시즌2",
+                && merged.ProgressionModeText == "PvP/S2",
                 "duplicate merging preserves the strongest season evidence atomically");
         }
 
@@ -1430,6 +1430,34 @@ namespace TarkovServerReporter.Tests
 
         private static void TestLauncherSelectionReading(string tempRoot)
         {
+            string noApplyLogs = Path.Combine(tempRoot, "LauncherWithoutApply");
+            Directory.CreateDirectory(noApplyLogs);
+            string noApplyFile = Path.Combine(noApplyLogs, "BSG_Launcher_20260906.log");
+            File.WriteAllText(noApplyFile,
+                "2026.09.06 17:01:20.000 [INFO] Settings loaded: {\"selectedGame\":\"eft\"}\r\n",
+                Encoding.UTF8);
+            var withoutApply = LauncherSelectionReader.ReadFromDirectory(noApplyLogs);
+            Assert(withoutApply.EftSelection == null && !withoutApply.EftUpdatedAt.HasValue
+                    && withoutApply.GetDisplay(TarkovGame.Eft) == "런처에서 확인",
+                "game selection alone must not imply an empty or automatic server selection");
+            File.AppendAllText(noApplyFile,
+                "2026.09.06 17:01:29.105 [DEBUG] JS->.NET: MainWindow.ShowMatchingConfig()\r\n"
+                + "2026.09.06 17:01:30.960 [DEBUG] JS->.NET: MatchingConfigurationWindow.Apply(\"{\"dataCenters\":[\"China\"]}\")\r\n"
+                + "2026.09.06 17:01:31.057 [INFO] MatchingConfigurationWindow closed\r\n",
+                Encoding.UTF8);
+            var applied = LauncherSelectionReader.ReadFromDirectory(noApplyLogs);
+            Assert(applied.EftSelection == "China"
+                    && applied.EftUpdatedAt == new DateTime(2026, 9, 6, 17, 1, 30),
+                "observed launcher format without escaped inner quotes updates a missing selection");
+            File.AppendAllText(noApplyFile,
+                "2026.09.06 17:01:31.100 ERROR .NET->JS: ErrorWindow initialized\r\n", Encoding.UTF8);
+            var rejected = LauncherSelectionReader.ReadFromDirectory(noApplyLogs);
+            Assert(rejected.EftSelection == null && rejected.EftSelectionInvalidated,
+                "a rejected first Apply explicitly invalidates the tentative selection");
+            File.Delete(noApplyFile);
+            Assert(LauncherSelectionReader.ReadFromDirectory(noApplyLogs).GetDisplay(TarkovGame.Eft)
+                    == "런처에서 확인",
+                "removed launcher history must direct users to the launcher without inventing a value");
             string logs = Path.Combine(tempRoot, "LauncherLogs");
             Directory.CreateDirectory(logs);
             string launcherLog = string.Join("\r\n", new[]
@@ -1731,8 +1759,8 @@ namespace TarkovServerReporter.Tests
 
         private static void TestProductUserAgent()
         {
-            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.3",
-                "network requests use the v0.8.3 product user agent");
+            Assert(NetworkServices.ProductUserAgent == "TarkovServerGuard/0.8.4",
+                "network requests use the v0.8.4 product user agent");
         }
 
         private static void TestGeoFormatting()

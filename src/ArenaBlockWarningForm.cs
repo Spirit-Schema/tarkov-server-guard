@@ -25,7 +25,7 @@ namespace TarkovServerReporter
 
         public ArenaBlockWarningForm()
         {
-            Text = DialogTitle;
+            Text = AppText.Get("Arena.Warning.Title");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -56,7 +56,7 @@ namespace TarkovServerReporter
             {
                 Dock = DockStyle.Fill,
                 AutoSize = false,
-                Text = DialogTitle,
+                Text = AppText.Get("Arena.Warning.Title"),
                 Font = new Font("Malgun Gothic", 13F, FontStyle.Bold, GraphicsUnit.Point),
                 ForeColor = Accent,
                 BackColor = Background,
@@ -68,7 +68,7 @@ namespace TarkovServerReporter
             {
                 Dock = DockStyle.Fill,
                 AutoSize = false,
-                Text = WarningText,
+                Text = AppText.Get("Arena.Warning.Body"),
                 Font = new Font("Malgun Gothic", 9.5F, FontStyle.Regular, GraphicsUnit.Point),
                 ForeColor = TextPrimary,
                 BackColor = Surface,
@@ -89,7 +89,7 @@ namespace TarkovServerReporter
             };
             layout.Controls.Add(buttons, 0, 2);
 
-            var blockButton = CreateButton("차단", Danger, Color.White);
+            var blockButton = CreateButton(AppText.Get("Common.Button.Block"), Danger, Color.White);
             blockButton.TabIndex = 1;
             blockButton.Click += delegate
             {
@@ -97,7 +97,7 @@ namespace TarkovServerReporter
                 Close();
             };
 
-            _cancelButton = CreateButton("취소", Success, Color.FromArgb(16, 38, 29));
+            _cancelButton = CreateButton(AppText.Get("Common.Button.Cancel"), Success, Color.FromArgb(16, 38, 29));
             _cancelButton.DialogResult = DialogResult.Cancel;
             _cancelButton.TabIndex = 0;
 

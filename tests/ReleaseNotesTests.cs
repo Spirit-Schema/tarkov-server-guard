@@ -3,8 +3,13 @@
 
 using System;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace TarkovServerReporter.Tests
@@ -12,17 +17,41 @@ namespace TarkovServerReporter.Tests
     internal static class ReleaseNotesTests
     {
         private static int _failed;
+        private static Assembly _application;
+        private static string _currentVersion;
+        private static string _artifacts;
+        private const BindingFlags Static = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+        private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        [DllImport("user32.dll")]
+        private static extern bool PrintWindow(IntPtr window, IntPtr destination, uint flags);
 
         [STAThread]
-        private static int Main()
+        private static int Main(string[] args)
         {
-            Run("bundled notes require the exact current version", TestBundledNotes);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Run("actual application version has bilingual bundled notes", delegate
+            {
+                Assert(args.Length >= 2, "Pass the actual built application and artifact directory; current-version verification may not be skipped.");
+                _application = Assembly.LoadFrom(Path.GetFullPath(args[0]));
+                Version version = _application.GetName().Version;
+                _currentVersion = string.Format("{0}.{1}.{2}", version.Major, version.Minor, version.Build);
+                _artifacts = Path.Combine(Path.GetFullPath(args[1]), "release-notes");
+                Directory.CreateDirectory(_artifacts);
+                TestCurrentBundledNotes();
+            });
+            Run("retained notes require an exact version match", TestBundledNotes);
             Run("notice eligibility excludes demo preview and portable", TestEligibility);
             Run("completed update notice is claimed exactly once", TestClaimExactlyOnce);
+            Run("0.8.3 to current update displays current notes once", TestUpgradeFrom083);
+            Run("parallel starts claim only one completion notice", TestConcurrentClaim);
+            Run("missing bundled notes never consume the pending notice", TestMissingNotes);
             Run("fresh install and mismatched versions never display", TestFreshAndMismatch);
             Run("receipt failure loses the notice instead of repeating", TestReceiptFailurePolicy);
             Run("corrupt and oversized markers fail closed", TestInvalidMarkers);
             Run("completion dialog has no history or online action", TestCompletionDialog);
+            Run("actual current completion dialogs render in Korean and English", TestCurrentCompletionDialogs);
             Run("update prompt has no changes button", TestUpdatePrompt);
 
             if (_failed == 0)
@@ -32,6 +61,36 @@ namespace TarkovServerReporter.Tests
             }
             Console.Error.WriteLine(_failed + " release notes test(s) failed.");
             return 1;
+        }
+
+        private static void TestCurrentBundledNotes()
+        {
+            Type catalog = _application.GetType("TarkovServerReporter.ReleaseNotesCatalog", true);
+            object current = catalog.GetMethod("FindBundled", Static).Invoke(null, new object[] { _currentVersion });
+            Assert(current != null, "The actual application version " + _currentVersion + " has no bundled completion notes.");
+            string korean = GetApplicationNotes(current, AppText.KoreanLanguage);
+            string english = GetApplicationNotes(current, AppText.EnglishLanguage);
+            Assert(korean.Contains("0.8.3 이후") && korean.Contains("열 너비")
+                && korean.Contains("메모 보관함") && korean.Contains("파티") && korean.Contains("영어"),
+                "Current notes do not cover the cumulative update from the last public release.");
+            Assert(english.Contains("since 0.8.3") && english.Contains("column widths")
+                && english.Contains("Saved Notes") && english.Contains("party"),
+                "Current English notes do not cover the cumulative update.");
+            Assert(english != korean && !english.Any(c => c >= '\uac00' && c <= '\ud7a3'),
+                "The actual English completion notice fell back to Korean.");
+            Assert(korean.Split('\n').Count(line => line.StartsWith("- ", StringComparison.Ordinal))
+                == english.Split('\n').Count(line => line.StartsWith("- ", StringComparison.Ordinal)),
+                "The translated completion notes omit an item.");
+            Assert(ReleaseNotesCatalog.FindBundled(_currentVersion) != null,
+                "The test and actual application catalogs do not share the current version.");
+        }
+
+        private static string GetApplicationNotes(object entry, string language)
+        {
+            _application.GetType("TarkovServerReporter.AppText", true)
+                .GetMethod("SetLanguage", Static).Invoke(null, new object[] { language });
+            return (string)_application.GetType("TarkovServerReporter.ReleaseNotesCatalog", true)
+                .GetMethod("GetDisplayNotes", Static).Invoke(null, new[] { entry });
         }
 
         private static void TestBundledNotes()
@@ -109,6 +168,73 @@ namespace TarkovServerReporter.Tests
                 Assert(UpdateCompletionNotice.TryClaimCompletedUpdate(root, "0.8.3", out claimed)
                     && claimed == "0.8.3",
                     "A later version did not receive its own one-time claim.");
+            });
+        }
+
+        private static void TestUpgradeFrom083()
+        {
+            Assert(!string.IsNullOrEmpty(_currentVersion), "The current application version was not verified.");
+            WithTemporaryRoot(delegate(string root)
+            {
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "0.8.3"), "Could not prepare the prior update.");
+                ReleaseNotesEntry entry;
+                Assert(UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, "0.8.3", false, true, out entry),
+                    "Could not prepare the prior version's consumed receipt.");
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, _currentVersion), "The current update hook was not recorded.");
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, _currentVersion, true, true, out entry)
+                    && File.Exists(Path.Combine(root, UpdateCompletionNotice.PendingFileName)),
+                    "A preview consumed the installed update notice.");
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, _currentVersion, false, false, out entry)
+                    && File.Exists(Path.Combine(root, UpdateCompletionNotice.PendingFileName)),
+                    "A portable launch consumed the installed update notice.");
+                Assert(UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, _currentVersion, false, true, out entry)
+                    && entry != null && entry.VersionText == _currentVersion && entry.NotesText.Contains("0.8.3 이후"),
+                    "Updating directly from 0.8.3 did not return the cumulative current-version notes.");
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, _currentVersion, false, true, out entry),
+                    "Restarting displayed the current update notice again.");
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, _currentVersion)
+                    && !UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, _currentVersion, false, true, out entry),
+                    "Replaying the update hook displayed the current notice again.");
+            });
+        }
+
+        private static void TestConcurrentClaim()
+        {
+            Assert(!string.IsNullOrEmpty(_currentVersion), "The current application version was not verified.");
+            WithTemporaryRoot(delegate(string root)
+            {
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, _currentVersion), "Could not prepare a pending notice.");
+                using (var ready = new CountdownEvent(2))
+                using (var start = new ManualResetEventSlim(false))
+                {
+                    Func<bool> claim = delegate
+                    {
+                        ready.Signal();
+                        if (!start.Wait(5000)) throw new TimeoutException("Concurrent claim start was not signaled.");
+                        ReleaseNotesEntry entry;
+                        return UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, _currentVersion, false, true, out entry);
+                    };
+                    Task<bool> first = Task.Factory.StartNew(claim);
+                    Task<bool> second = Task.Factory.StartNew(claim);
+                    bool bothReady = ready.Wait(5000);
+                    start.Set();
+                    Assert(Task.WaitAll(new Task[] { first, second }, 10000) && bothReady,
+                        "Concurrent notice claims timed out.");
+                    Assert(first.Result != second.Result, "Parallel launches did not produce exactly one notice.");
+                }
+            });
+        }
+
+        private static void TestMissingNotes()
+        {
+            WithTemporaryRoot(delegate(string root)
+            {
+                Assert(UpdateCompletionNotice.TryRecordCompletedUpdate(root, "99.0.0"), "Could not prepare a future version marker.");
+                ReleaseNotesEntry entry;
+                Assert(!UpdateCompletionNotice.TryClaimCompletedUpdateEntry(root, "99.0.0", false, true, out entry)
+                    && entry == null && File.Exists(Path.Combine(root, UpdateCompletionNotice.PendingFileName))
+                    && !File.Exists(Path.Combine(root, UpdateCompletionNotice.ConsumedFileName)),
+                    "A missing bundle consumed a notice that could not be displayed.");
             });
         }
 
@@ -200,6 +326,49 @@ namespace TarkovServerReporter.Tests
                 Assert(!labels.Contains("변경 사항") && labels.Length == 2,
                     "The pre-update prompt still exposes arbitrary patch notes.");
             }
+        }
+
+        private static void TestCurrentCompletionDialogs()
+        {
+            Assert(_application != null && !string.IsNullOrEmpty(_currentVersion),
+                "The current application was not loaded for dialog verification.");
+            Type catalog = _application.GetType("TarkovServerReporter.ReleaseNotesCatalog", true);
+            object entry = catalog.GetMethod("FindBundled", Static).Invoke(null, new object[] { _currentVersion });
+            Assert(entry != null, "The current application's completion entry is missing.");
+            foreach (string language in new[] { AppText.KoreanLanguage, AppText.EnglishLanguage })
+            {
+                string expected = GetApplicationNotes(entry, language);
+                using (var form = (Form)Activator.CreateInstance(
+                    _application.GetType("TarkovServerReporter.PatchNotesForm", true), Instance, null, new[] { entry }, null))
+                {
+                    form.ShowInTaskbar = false;
+                    form.Show();
+                    Application.DoEvents();
+                    RichTextBox notes = Descendants(form).OfType<RichTextBox>().Single();
+                    Assert(notes.Text.Replace("\r\n", "\n") == expected.Replace("\r\n", "\n"),
+                        language + ": The actual dialog does not display the complete current notes.");
+                    Assert(notes.ReadOnly && notes.WordWrap && notes.ScrollBars == RichTextBoxScrollBars.ForcedVertical,
+                        language + ": Long cumulative notes cannot be read using the established scrolling area.");
+                    Assert(Descendants(form).OfType<Label>().Any(label => label.Text.Contains("v" + _currentVersion)),
+                        language + ": The completion heading shows the wrong version.");
+                    Button close = Descendants(form).OfType<Button>().Single();
+                    Assert(close.Visible && form.RectangleToScreen(form.ClientRectangle)
+                        .Contains(close.RectangleToScreen(close.ClientRectangle)),
+                        language + ": The confirmation button is outside the completion dialog.");
+                    using (var bitmap = new Bitmap(form.Width, form.Height))
+                    {
+                        using (Graphics graphics = Graphics.FromImage(bitmap))
+                        {
+                            IntPtr dc = graphics.GetHdc();
+                            try { Assert(PrintWindow(form.Handle, dc, 0), "Could not capture " + language + " completion dialog."); }
+                            finally { graphics.ReleaseHdc(dc); }
+                        }
+                        bitmap.Save(Path.Combine(_artifacts, "update-complete-" + language + ".png"), ImageFormat.Png);
+                    }
+                    form.Close();
+                }
+            }
+            GetApplicationNotes(entry, AppText.KoreanLanguage);
         }
 
         private static System.Collections.Generic.IEnumerable<Control> Descendants(Control root)

@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -27,7 +27,7 @@ namespace TarkovServerReporter
 
         internal UpdatePromptForm(string versionText)
         {
-            Text = "Tarkov Server Guard 업데이트";
+            Text = AppText.Get("UpdateDialog.Title");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -35,7 +35,7 @@ namespace TarkovServerReporter
             ShowInTaskbar = false;
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(500, 260);
-            MinimumSize = new Size(500, 260);
+            MinimumSize = SizeFromClientSize(ClientSize);
             BackColor = Background;
             ForeColor = TextPrimary;
             Font = new Font("Malgun Gothic", 9F, FontStyle.Regular, GraphicsUnit.Point);
@@ -61,7 +61,7 @@ namespace TarkovServerReporter
             {
                 Dock = DockStyle.Fill,
                 AutoSize = false,
-                Text = "새 버전이 있습니다",
+                Text = AppText.Get("UpdateDialog.Heading"),
                 Font = new Font("Malgun Gothic", 13F, FontStyle.Bold, GraphicsUnit.Point),
                 ForeColor = Accent,
                 BackColor = Background,
@@ -73,8 +73,7 @@ namespace TarkovServerReporter
             {
                 Dock = DockStyle.Fill,
                 AutoSize = false,
-                Text = "Tarkov Server Guard v" + versionText
-                    + " 업데이트가 있습니다.\r\n지금 업데이트하시겠습니까?",
+                Text = AppText.Format("UpdateDialog.Prompt", versionText),
                 Font = new Font("Malgun Gothic", 9.5F, FontStyle.Regular, GraphicsUnit.Point),
                 ForeColor = TextPrimary,
                 BackColor = Surface,
@@ -127,7 +126,7 @@ namespace TarkovServerReporter
             };
             layout.Controls.Add(buttons, 0, 3);
 
-            _updateButton = CreateButton("업데이트", Accent, Color.FromArgb(29, 24, 17));
+            _updateButton = CreateButton(AppText.Get("UpdateDialog.Update"), Accent, Color.FromArgb(29, 24, 17));
             _updateButton.TabIndex = 0;
             _updateButton.Click += delegate
             {
@@ -136,7 +135,7 @@ namespace TarkovServerReporter
             };
             _updateButton.FlatAppearance.MouseOverBackColor = AccentHover;
 
-            _laterButton = CreateButton("나중에", Surface, TextPrimary);
+            _laterButton = CreateButton(AppText.Get("UpdateDialog.Later"), Surface, TextPrimary);
             _laterButton.TabIndex = 1;
             _laterButton.DialogResult = DialogResult.Cancel;
 
@@ -171,8 +170,8 @@ namespace TarkovServerReporter
         {
             RunOnUiThread(delegate
             {
-                _messageLabel.Text = "업데이트를 다운로드하고 있습니다.\r\n완료되면 자동으로 다시 시작합니다.";
-                _statusLabel.Text = "다운로드 준비 중...";
+                _messageLabel.Text = AppText.Get("UpdateDialog.Downloading");
+                _statusLabel.Text = AppText.Get("UpdateDialog.Preparing");
                 _progressBar.Value = 0;
                 _progressBar.Visible = true;
                 _updateButton.Enabled = false;
@@ -187,18 +186,18 @@ namespace TarkovServerReporter
             {
                 int value = Math.Max(0, Math.Min(100, percentage));
                 _progressBar.Value = value;
-                _statusLabel.Text = "다운로드 " + value + "%";
+                _statusLabel.Text = AppText.Format("UpdateDialog.Progress", value);
             });
         }
 
         internal void ShowDownloadError()
         {
-            ShowError("업데이트하지 못했습니다. 현재 버전은 그대로 유지됩니다.\r\n잠시 후 다시 시도해 주세요.");
+            ShowError(AppText.Get("UpdateDialog.DownloadError"));
         }
 
         internal void ShowApplyDidNotRestartError()
         {
-            ShowError("업데이트를 적용하지 못했습니다. 현재 버전은 그대로 유지됩니다.\r\n잠시 후 다시 시도해 주세요.");
+            ShowError(AppText.Get("UpdateDialog.ApplyError"));
         }
 
         internal void CloseAfterCancellation()
@@ -218,9 +217,9 @@ namespace TarkovServerReporter
                 _messageLabel.Text = message;
                 _statusLabel.Text = string.Empty;
                 _progressBar.Visible = false;
-                _updateButton.Text = "다시 시도";
+                _updateButton.Text = AppText.Get("UpdateDialog.Retry");
                 _updateButton.Enabled = true;
-                _laterButton.Text = "닫기";
+                _laterButton.Text = AppText.Get("Common.Button.Close");
                 _laterButton.Enabled = true;
                 ControlBox = true;
                 _updateButton.Focus();

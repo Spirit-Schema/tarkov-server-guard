@@ -16,10 +16,6 @@ namespace TarkovServerReporter
     {
         internal const string ResultSummaryFormat =
             "추가 {0}개 · 기존 항목 건너뜀 {1}개 · 실패 {2}개";
-        internal const string RestorePolicyNotice =
-            "기존 메모는 덮어쓰지 않으며, 체크한 새 메모만 추가합니다.\r\n"
-            + "스크린샷 원본 파일 없이 검증된 로컬 이미지 연결 경로만 복원됩니다.";
-
         private static readonly Color Background = Color.FromArgb(15, 18, 22);
         private static readonly Color Surface = Color.FromArgb(24, 29, 35);
         private static readonly Color SurfaceAlt = Color.FromArgb(31, 38, 46);
@@ -91,9 +87,8 @@ namespace TarkovServerReporter
         {
             get
             {
-                return string.Format(
-                    CultureInfo.CurrentCulture,
-                    ResultSummaryFormat,
+                return AppText.Format(
+                    "NoteRestore.ResultSummary",
                     AddedCount,
                     SkippedCount,
                     FailedCount);
@@ -102,7 +97,7 @@ namespace TarkovServerReporter
 
         private void InitializeWindow()
         {
-            Text = "메모 백업 복원 미리보기";
+            Text = AppText.Get("NoteRestore.Title");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(1180, 610);
             MinimumSize = new Size(820, 480);
@@ -139,7 +134,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(0, 0),
-                Text = "메모 백업 복원 미리보기",
+                Text = AppText.Get("NoteRestore.Title"),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = TextPrimary
             });
@@ -164,9 +159,9 @@ namespace TarkovServerReporter
                 ForeColor = TextMuted,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true,
-                AccessibleName = "메모 복원 결과",
-                AccessibleDescription = RestorePolicyNotice,
-                Text = RestorePolicyNotice
+                AccessibleName = AppText.Get("NoteRestore.ResultA11y"),
+                AccessibleDescription = AppText.Get("NoteRestore.Policy"),
+                Text = AppText.Get("NoteRestore.Policy")
             };
             root.Controls.Add(_resultLabel, 0, 2);
 
@@ -188,10 +183,12 @@ namespace TarkovServerReporter
                 WrapContents = false,
                 Margin = Padding.Empty
             };
-            _selectAllButton = CreateButton("전체 선택", 88, false);
+            _selectAllButton = CreateButton(
+                AppText.Get("BlockedServers.Selection.SelectAll"), 88, false);
             _selectAllButton.Name = "MemoRestoreSelectAllButton";
             _selectAllButton.Click += delegate { SetAllSelectable(true); };
-            _selectNoneButton = CreateButton("전체 해제", 88, false);
+            _selectNoneButton = CreateButton(
+                AppText.Get("BlockedServers.Selection.ClearAll"), 88, false);
             _selectNoneButton.Name = "MemoRestoreSelectNoneButton";
             _selectNoneButton.Click += delegate { SetAllSelectable(false); };
             selectionActions.Controls.Add(_selectAllButton);
@@ -207,10 +204,10 @@ namespace TarkovServerReporter
                 WrapContents = false,
                 Margin = Padding.Empty
             };
-            _closeButton = CreateButton("취소", 82, false);
+            _closeButton = CreateButton(AppText.Get("Common.Button.Cancel"), 82, false);
             _closeButton.Name = "MemoRestoreCloseButton";
             _closeButton.DialogResult = DialogResult.Cancel;
-            _applyButton = CreateButton("선택 항목 복원", 126, true);
+            _applyButton = CreateButton(AppText.Get("NoteRestore.Button.Apply"), 126, true);
             _applyButton.Name = "MemoRestoreApplyButton";
             _applyButton.Click += ApplyClicked;
             confirmActions.Controls.Add(_closeButton);
@@ -226,7 +223,7 @@ namespace TarkovServerReporter
             {
                 Name = "MemoRestorePreviewGrid",
                 Dock = DockStyle.Fill,
-                AccessibleName = "복원할 메모 선택 목록",
+                AccessibleName = AppText.Get("NoteRestore.Grid.Name"),
                 BackgroundColor = Surface,
                 BorderStyle = BorderStyle.FixedSingle,
                 GridColor = Border,
@@ -266,21 +263,26 @@ namespace TarkovServerReporter
                 Name = "selected",
                 HeaderCell = new MemoSelectionHeaderCell(),
                 HeaderText = string.Empty,
-                ToolTipText = "복원할 새 메모를 선택합니다.",
+                ToolTipText = AppText.Get("NoteRestore.Grid.SelectTooltip"),
                 Width = 54,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
                 FlatStyle = FlatStyle.Flat,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             });
-            grid.Columns.Add(CreateColumn("status", "상태", 112));
-            grid.Columns.Add(CreateColumn("kind", "종류", 112));
-            grid.Columns.Add(CreateColumn("game", "게임", 72));
-            grid.Columns.Add(CreateColumn("map", "맵 · 게임유형", 180));
-            grid.Columns.Add(CreateColumn("date", "레이드 시각", 145));
+            grid.Columns.Add(CreateColumn(
+                "status", AppText.Get("NoteRestore.Column.Status"), 112));
+            grid.Columns.Add(CreateColumn(
+                "kind", AppText.Get("NoteRestore.Column.Kind"), 112));
+            grid.Columns.Add(CreateColumn(
+                "game", AppText.Get("NoteRestore.Column.Game"), 72));
+            grid.Columns.Add(CreateColumn(
+                "map", AppText.Get("NoteRestore.Column.MapGameType"), 180));
+            grid.Columns.Add(CreateColumn(
+                "date", AppText.Get("NoteRestore.Column.RaidTime"), 145));
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "preview",
-                HeaderText = "메모 미리보기",
+                HeaderText = AppText.Get("NoteRestore.Column.Preview"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 MinimumWidth = 180,
@@ -289,7 +291,7 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "detail",
-                HeaderText = "확인 결과",
+                HeaderText = AppText.Get("NoteRestore.Column.Result"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 MinimumWidth = 170,
@@ -345,8 +347,8 @@ namespace TarkovServerReporter
                         selectable && item.Selected,
                         GetStatusText(item.Status),
                         source.Kind == MemoArchiveBackupKind.RaidNote
-                            ? "레이드 메모"
-                            : "유저신고 메모",
+                            ? AppText.Get("NoteArchive.Kind.Raid")
+                            : AppText.Get("NoteArchive.Kind.PlayerReport"),
                         Empty(source.Kind == MemoArchiveBackupKind.RaidNote
                             ? source.RaidNote.Game
                             : source.UserReportMemo.Game),
@@ -355,7 +357,9 @@ namespace TarkovServerReporter
                             ? source.RaidNote.RaidStartedUtc
                             : source.UserReportMemo.RaidStartedUtc),
                         CreateSafePreview(source.PreviewText),
-                        item.Detail ?? string.Empty);
+                        LocalizeRestoreDetail(
+                            item.Detail,
+                            "NoteRestore.Detail.ItemFailed"));
                     DataGridViewRow row = _grid.Rows[rowIndex];
                     row.Tag = item;
                     row.Cells["map"].ToolTipText = mapAndGameType;
@@ -380,10 +384,8 @@ namespace TarkovServerReporter
                 ? _items.Count(item => item.Status == MemoArchiveRestoreStatus.New)
                 : GetSelectableRows().Count();
             int existingCount = _skippedItems.Count;
-            return string.Format(
-                CultureInfo.CurrentCulture,
-                "전체 {0}개 · 레이드 메모 {1}개 · 유저신고 메모 {2}개\r\n"
-                    + "새로 추가될 메모 {3}개 · 기존 항목 건너뜀 {4}개",
+            return AppText.Format(
+                "NoteRestore.Count",
                 _items.Count,
                 raidCount,
                 reportCount,
@@ -455,9 +457,8 @@ namespace TarkovServerReporter
             if (_grid == null) return;
             int selectableCount = GetSelectableRows().Count();
             int selectedCount = GetSelectableRows().Count(IsRowChecked);
-            _grid.AccessibleDescription = "복원 가능한 메모 " + selectableCount
-                + "개 중 " + selectedCount + "개가 선택되었습니다. "
-                + "선택 열 머리글은 전체 선택 또는 전체 해제이며, Ctrl+A는 전체 선택입니다.";
+            _grid.AccessibleDescription = AppText.Format(
+                "NoteRestore.Selection.Description", selectableCount, selectedCount);
             if (_applyButton != null)
             {
                 _applyButton.Enabled = !_busy && selectedCount > 0;
@@ -466,8 +467,9 @@ namespace TarkovServerReporter
                     ? Color.FromArgb(18, 36, 27)
                     : TextMuted;
                 _applyButton.AccessibleDescription = selectedCount > 0
-                    ? "선택한 새 메모 " + selectedCount + "개를 복원합니다."
-                    : "복원 대상으로 선택한 새 메모가 없습니다.";
+                    ? AppText.Format(
+                        "NoteRestore.Selection.ApplyCount", selectedCount)
+                    : AppText.Get("NoteRestore.Selection.None");
             }
             if (_selectAllButton != null) _selectAllButton.Enabled = !_busy && selectableCount > 0;
             if (_selectNoneButton != null)
@@ -528,9 +530,10 @@ namespace TarkovServerReporter
                     MemoArchiveRestoreItem item = row.Tag as MemoArchiveRestoreItem;
                     if (item == null) continue;
                     _failedItems.Add(item);
-                    row.Cells["status"].Value = "실패 · 재시도";
+                    row.Cells["status"].Value = AppText.Get("NoteRestore.Status.Retry");
                     row.Cells["status"].Style.ForeColor = Danger;
-                    row.Cells["detail"].Value = "선택한 메모를 안전하게 복원하지 못했습니다.";
+                    row.Cells["detail"].Value = AppText.Get(
+                        "NoteRestore.Detail.SelectionFailed");
                 }
                 _resultLabel.Text = ResultSummary;
                 _resultLabel.AccessibleDescription = _resultLabel.Text;
@@ -573,9 +576,9 @@ namespace TarkovServerReporter
                     item.Selected = false;
                     row.Cells["selected"].Value = false;
                     row.Cells["selected"].ReadOnly = true;
-                    row.Cells["status"].Value = "추가 완료";
+                    row.Cells["status"].Value = AppText.Get("NoteRestore.Status.Added");
                     row.Cells["status"].Style.ForeColor = Success;
-                    row.Cells["detail"].Value = "없는 메모를 새로 추가하고 저장 결과를 확인했습니다.";
+                    row.Cells["detail"].Value = AppText.Get("NoteRestore.Detail.Added");
                     row.DefaultCellStyle.ForeColor = TextMuted;
                 }
                 else if (itemResult.Skipped)
@@ -585,9 +588,9 @@ namespace TarkovServerReporter
                     item.Selected = false;
                     row.Cells["selected"].Value = false;
                     row.Cells["selected"].ReadOnly = true;
-                    row.Cells["status"].Value = "기존 건너뜀";
+                    row.Cells["status"].Value = AppText.Get("NoteRestore.Status.Existing");
                     row.Cells["status"].Style.ForeColor = Warning;
-                    row.Cells["detail"].Value = "같은 종류와 키의 기존 메모는 덮어쓰지 않았습니다.";
+                    row.Cells["detail"].Value = AppText.Get("NoteRestore.Detail.Skipped");
                     row.DefaultCellStyle.ForeColor = TextMuted;
                 }
                 else
@@ -598,14 +601,16 @@ namespace TarkovServerReporter
                     row.Cells["selected"].ReadOnly = !retryable;
                     row.Cells["selected"].Value = retryable;
                     row.Cells["status"].Value = retryable
-                        ? "실패 · 재시도"
+                        ? AppText.Get("NoteRestore.Status.Retry")
                         : item.Status == MemoArchiveRestoreStatus.ExistingConflict
-                            ? "기존 내용 충돌"
-                            : "복원 실패";
+                            ? AppText.Get("NoteRestore.Status.Conflict")
+                            : AppText.Get("NoteRestore.Status.Failed");
                     row.Cells["status"].Style.ForeColor = Danger;
                     row.Cells["detail"].Value = string.IsNullOrWhiteSpace(itemResult.ErrorMessage)
-                        ? "이 항목을 안전하게 복원하지 못했습니다."
-                        : itemResult.ErrorMessage;
+                        ? AppText.Get("NoteRestore.Detail.ItemFailed")
+                        : LocalizeRestoreDetail(
+                            itemResult.ErrorMessage,
+                            "NoteRestore.Detail.ItemFailed");
                 }
             }
         }
@@ -712,10 +717,13 @@ namespace TarkovServerReporter
 
         private static string GetStatusText(MemoArchiveRestoreStatus status)
         {
-            if (status == MemoArchiveRestoreStatus.New) return "새로 추가";
-            if (status == MemoArchiveRestoreStatus.Existing) return "기존 건너뜀";
-            if (status == MemoArchiveRestoreStatus.ExistingConflict) return "기존 내용 충돌";
-            return "확인 불가";
+            if (status == MemoArchiveRestoreStatus.New)
+                return AppText.Get("NoteRestore.Status.New");
+            if (status == MemoArchiveRestoreStatus.Existing)
+                return AppText.Get("NoteRestore.Status.Existing");
+            if (status == MemoArchiveRestoreStatus.ExistingConflict)
+                return AppText.Get("NoteRestore.Status.Conflict");
+            return AppText.Get("NoteRestore.Status.Unavailable");
         }
 
         private static string FormatDate(DateTime value)
@@ -730,23 +738,60 @@ namespace TarkovServerReporter
             return string.IsNullOrWhiteSpace(value) ? "-" : value;
         }
 
+        private static string LocalizeRestoreDetail(string detail, string fallbackKey)
+        {
+            if (string.IsNullOrWhiteSpace(detail)) return AppText.Get(fallbackKey);
+            if (detail == "없는 메모이므로 새로 추가할 수 있습니다.")
+                return AppText.Get("NoteRestore.Detail.New");
+            if (detail == "같은 종류와 키의 기존 메모가 있어 건너뜁니다.")
+                return AppText.Get("NoteRestore.Detail.Exists");
+            if (detail == "현재 저장소 상태를 확인하지 못했습니다.")
+                return AppText.Get("NoteRestore.Detail.StoreUnavailable");
+            if (detail == "같은 메모가 먼저 저장되어 안전하게 건너뛰었습니다.")
+                return AppText.Get("NoteRestore.Detail.RaceSkipped");
+            if (detail == "적용 전에 같은 종류와 키의 다른 메모가 생겨 덮어쓰지 않았습니다.")
+                return AppText.Get("NoteRestore.Detail.RaceConflict");
+            if (string.Equals(
+                AppText.CurrentLanguage,
+                AppText.KoreanLanguage,
+                StringComparison.OrdinalIgnoreCase))
+                return detail;
+            for (int index = 0; index < detail.Length; index++)
+            {
+                char value = detail[index];
+                if ((value >= '\u3131' && value <= '\u318E')
+                    || (value >= '\uAC00' && value <= '\uD7A3'))
+                    return AppText.Get(fallbackKey);
+            }
+            return detail;
+        }
+
         private static string BuildMapAndGameType(string mapName, string gameType)
         {
             string map = Empty(mapName);
+            string normalizedGameType = string.IsNullOrWhiteSpace(gameType)
+                ? string.Empty
+                : AppText.NormalizePvpSeasonDisplay(gameType.Trim());
             return string.IsNullOrWhiteSpace(gameType)
                 ? map
-                : map + " · " + gameType.Trim();
+                : map + " · " + (string.Equals(
+                    AppText.CurrentLanguage,
+                    AppText.EnglishLanguage,
+                    StringComparison.OrdinalIgnoreCase)
+                        ? AppText.LocalizeDomainDisplay(normalizedGameType)
+                        : normalizedGameType);
         }
 
         private static string CreateSafePreview(string value)
         {
-            if (string.IsNullOrWhiteSpace(value)) return "(내용 없음)";
+            if (string.IsNullOrWhiteSpace(value))
+                return AppText.Get("NoteRestore.EmptyPreview");
             string compact = string.Join(
                 " ",
                 value.Split(new[] { '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(part => part.Trim())
                     .Where(part => part.Length > 0));
-            if (compact.Length == 0) return "(내용 없음)";
+            if (compact.Length == 0) return AppText.Get("NoteRestore.EmptyPreview");
             return compact.Length <= 100 ? compact : compact.Substring(0, 97) + "…";
         }
 
@@ -773,7 +818,7 @@ namespace TarkovServerReporter
         {
             public MemoSelectionHeaderCell()
             {
-                ToolTipText = "복원 가능한 새 메모를 전체 선택하거나 전체 해제합니다.";
+                ToolTipText = AppText.Get("NoteRestore.Header.Tooltip");
             }
 
             protected override AccessibleObject CreateAccessibilityInstance()
@@ -799,7 +844,7 @@ namespace TarkovServerReporter
 
                 public override string Name
                 {
-                    get { return "복원 메모 전체 선택 또는 전체 해제"; }
+                    get { return AppText.Get("NoteRestore.Header.Name"); }
                 }
 
                 public override string Description
@@ -807,13 +852,14 @@ namespace TarkovServerReporter
                     get
                     {
                         DataGridView grid = _owner.DataGridView;
-                        if (grid == null) return "복원할 새 메모를 전체 선택하거나 전체 해제합니다.";
+                        if (grid == null)
+                            return AppText.Get("NoteRestore.Header.DescriptionEmpty");
                         int selectable = grid.Rows.Cast<DataGridViewRow>()
                             .Count(row => !row.Cells["selected"].ReadOnly);
                         int selected = grid.Rows.Cast<DataGridViewRow>()
                             .Count(row => !row.Cells["selected"].ReadOnly && IsRowChecked(row));
-                        return "복원 가능한 메모 " + selectable + "개 중 " + selected
-                            + "개가 선택되었습니다. 클릭하면 전체 선택 또는 전체 해제합니다.";
+                        return AppText.Format(
+                            "NoteRestore.Header.Description", selectable, selected);
                     }
                 }
 
@@ -822,13 +868,14 @@ namespace TarkovServerReporter
                     get
                     {
                         DataGridView grid = _owner.DataGridView;
-                        if (grid == null) return "전체 선택";
+                        if (grid == null)
+                            return AppText.Get("BlockedServers.Selection.SelectAll");
                         IList<DataGridViewRow> selectable = grid.Rows.Cast<DataGridViewRow>()
                             .Where(row => !row.Cells["selected"].ReadOnly)
                             .ToList();
                         return selectable.Count > 0 && selectable.All(IsRowChecked)
-                            ? "전체 해제"
-                            : "전체 선택";
+                            ? AppText.Get("BlockedServers.Selection.ClearAll")
+                            : AppText.Get("BlockedServers.Selection.SelectAll");
                     }
                 }
 

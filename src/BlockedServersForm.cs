@@ -56,6 +56,7 @@ namespace TarkovServerReporter
         private static readonly Color NoteOrange = Color.FromArgb(205, 132, 48);
         private static readonly Color Success = Color.FromArgb(68, 184, 121);
         private static readonly Color Danger = Color.FromArgb(224, 91, 91);
+        private static readonly Color Warning = Color.FromArgb(231, 184, 73);
 
         private readonly DataGridView _grid;
         private readonly Label _summaryLabel;
@@ -66,8 +67,15 @@ namespace TarkovServerReporter
         private readonly Button _removeAllButton;
         private readonly Button _exportButton;
         private readonly Button _importButton;
+        private readonly Button _partyAddButton;
+        private readonly Button _partyReleaseButton;
         private readonly Button _closeButton;
         private readonly ToolTip _toolTip;
+        private readonly PartyBlockBundleStore _partyBundleStore;
+        private IDictionary<string, PartyBlockSourceInfo> _partySources =
+            new Dictionary<string, PartyBlockSourceInfo>(StringComparer.OrdinalIgnoreCase);
+        private bool _partyStoreAvailable = true;
+        private int _partyBundleCount;
         private bool _busy;
         private bool _updatingSelections;
         private string _blockedServerSortColumn;
@@ -133,11 +141,10 @@ namespace TarkovServerReporter
                 get
                 {
                     string nextAction = _totalCount > 0 && _selectedCount == _totalCount
-                        ? "전체 해제"
-                        : "전체 선택";
-                    return string.Format(
-                        "차단 해제 대상을 고르는 체크박스 열입니다. 헤더를 누르면 {0}합니다. "
-                            + "현재 {1}개 중 {2}개가 선택되어 있습니다.",
+                        ? AppText.Get("BlockedServers.Selection.ClearAllVerb")
+                        : AppText.Get("BlockedServers.Selection.SelectAllVerb");
+                    return AppText.Format(
+                        "BlockedServers.Selection.HeaderDescription",
                         nextAction,
                         _totalCount,
                         _selectedCount);
@@ -149,8 +156,8 @@ namespace TarkovServerReporter
                 get
                 {
                     return _totalCount > 0 && _selectedCount == _totalCount
-                        ? "전체 해제"
-                        : "전체 선택";
+                        ? AppText.Get("BlockedServers.Selection.ClearAll")
+                        : AppText.Get("BlockedServers.Selection.SelectAll");
                 }
             }
 
@@ -184,7 +191,7 @@ namespace TarkovServerReporter
 
                 public override string Name
                 {
-                    get { return "차단 서버 선택 열 헤더"; }
+                    get { return AppText.Get("BlockedServers.Selection.HeaderName"); }
                 }
 
                 public override string Description
@@ -360,7 +367,9 @@ namespace TarkovServerReporter
                     string text = Convert.ToString(formattedValue);
                     TextRenderer.DrawText(
                         graphics,
-                        string.IsNullOrWhiteSpace(text) ? "해제" : text,
+                        string.IsNullOrWhiteSpace(text)
+                            ? AppText.Get("BlockedServers.Button.UnblockOne")
+                            : text,
                         cellStyle.Font,
                         Rectangle.Inflate(buttonBounds, -4, -2),
                         textColor,
@@ -467,7 +476,7 @@ namespace TarkovServerReporter
             public BlockNoteEditorForm(string ipAddress, string note)
             {
                 _ipAddress = ipAddress;
-                Text = "차단 메모";
+                Text = AppText.Get("BlockedServers.Note.Title");
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(560, 220);
                 MinimumSize = new Size(480, 210);
@@ -499,7 +508,7 @@ namespace TarkovServerReporter
                 {
                     AutoSize = true,
                     Location = new Point(0, 0),
-                    Text = "차단 메모",
+                    Text = AppText.Get("BlockedServers.Note.Title"),
                     Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                     ForeColor = TextPrimary
                 });
@@ -507,7 +516,7 @@ namespace TarkovServerReporter
                 {
                     AutoSize = true,
                     Location = new Point(2, 37),
-                    Text = ipAddress + " · 이 PC에만 저장됩니다.",
+                    Text = AppText.Format("BlockedServers.Note.LocalOnly", ipAddress),
                     ForeColor = TextMuted
                 });
                 root.Controls.Add(header, 0, 0);
@@ -529,9 +538,9 @@ namespace TarkovServerReporter
                     Multiline = false,
                     Dock = DockStyle.Top,
                     Text = note ?? string.Empty,
-                    CueText = ExampleText,
-                    AccessibleName = "차단 메모",
-                    AccessibleDescription = ExampleText,
+                    CueText = AppText.Get("BlockedServers.Note.Example"),
+                    AccessibleName = AppText.Get("BlockedServers.Note.Title"),
+                    AccessibleDescription = AppText.Get("BlockedServers.Note.Example"),
                     TabIndex = 0
                 };
                 editorHost.Controls.Add(_noteTextBox);
@@ -540,7 +549,7 @@ namespace TarkovServerReporter
                 _statusLabel = new Label
                 {
                     Dock = DockStyle.Fill,
-                    Text = "선택 입력 · 한 줄, 최대 300자",
+                    Text = AppText.Get("BlockedServers.Note.InputHelp"),
                     TextAlign = ContentAlignment.MiddleLeft,
                     ForeColor = TextMuted,
                     AutoEllipsis = true
@@ -556,13 +565,15 @@ namespace TarkovServerReporter
                     Padding = new Padding(0, 6, 0, 0),
                     BackColor = Background
                 };
-                Button cancelButton = CreateEditorButton("취소", SurfaceAlt, TextPrimary, Border);
+                Button cancelButton = CreateEditorButton(
+                    AppText.Get("Common.Button.Cancel"), SurfaceAlt, TextPrimary, Border);
                 Button saveButton = CreateEditorButton(
-                    "저장",
+                    AppText.Get("Common.Button.Save"),
                     Accent,
                     Color.FromArgb(43, 29, 13),
                     Color.FromArgb(185, 116, 38));
-                _deleteButton = CreateEditorButton("삭제", SurfaceAlt, Danger, Danger);
+                _deleteButton = CreateEditorButton(
+                    AppText.Get("Common.Button.Delete"), SurfaceAlt, Danger, Danger);
                 _deleteButton.Enabled = !string.IsNullOrWhiteSpace(note);
                 actions.Controls.Add(cancelButton);
                 actions.Controls.Add(saveButton);
@@ -613,8 +624,8 @@ namespace TarkovServerReporter
                 {
                     _statusLabel.ForeColor = Danger;
                     _statusLabel.Text = action == NoteEditorAction.Deleted
-                        ? "차단 메모를 삭제하지 못했습니다."
-                        : "차단 메모를 저장하지 못했습니다.";
+                        ? AppText.Get("BlockedServers.Note.DeleteFailed")
+                        : AppText.Get("BlockedServers.Note.SaveFailed");
                     return;
                 }
 
@@ -626,7 +637,8 @@ namespace TarkovServerReporter
 
         public BlockedServersForm()
         {
-            Text = "서버차단현황";
+            _partyBundleStore = PartyBlockBundleStore.Default;
+            Text = AppText.Get("BlockedServers.Window.Title");
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(1120, 550);
             MinimumSize = new Size(900, 430);
@@ -655,7 +667,7 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(0, 0),
-                Text = "서버차단현황",
+                Text = AppText.Get("BlockedServers.Window.Title"),
                 Font = new Font("Malgun Gothic", 15F, FontStyle.Bold),
                 ForeColor = TextPrimary
             });
@@ -663,35 +675,71 @@ namespace TarkovServerReporter
             {
                 AutoSize = true,
                 Location = new Point(2, 36),
-                Text = "앱이 관리하는 차단 규칙을 확인하는 중…",
+                Text = AppText.Get("BlockedServers.Loading"),
                 ForeColor = TextMuted
             };
             header.Controls.Add(_summaryLabel);
+            var partyActions = new FlowLayoutPanel
+            {
+                Name = "PartyActions",
+                Size = new Size(AppText.CurrentLanguage == AppText.EnglishLanguage ? 302 : 268, 34),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                BackColor = Background,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
+            };
+            _partyReleaseButton = CreateButton(AppText.Get("파티 묶음 종료"), false);
+            _partyReleaseButton.Size = new Size(AppText.CurrentLanguage == AppText.EnglishLanguage ? 166 : 140, 32);
+            _partyAddButton = CreateButton(AppText.Get("파티 IP 추가"), false);
+            _partyAddButton.Size = new Size(108, 32);
+            _partyAddButton.AccessibleName = AppText.Get("파티 IP 추가");
+            _partyAddButton.AccessibleDescription = AppText.Get(
+                "P2P 없이 전달받은 공인 IPv4를 출처 묶음으로 미리본 뒤 이 PC에 적용합니다.");
+            _partyReleaseButton.AccessibleName = AppText.Get("파티 묶음 종료");
+            _partyReleaseButton.AccessibleDescription = AppText.Get(
+                "파티 출처 묶음별 보존·해제 대상을 미리본 뒤 안전하게 종료합니다.");
+            partyActions.Controls.Add(_partyReleaseButton);
+            partyActions.Controls.Add(_partyAddButton);
+            header.Controls.Add(partyActions);
+            EventHandler positionPartyActions = delegate
+            {
+                // Position against the actual parent, after its table cell has
+                // been laid out. Anchoring to its initial size can push it outside.
+                partyActions.Location = new Point(Math.Max(0,
+                    header.ClientSize.Width - partyActions.Width), 0);
+            };
+            header.Resize += positionPartyActions;
+            header.HandleCreated += positionPartyActions;
+            positionPartyActions(null, EventArgs.Empty);
             header.Controls.Add(new Label
             {
                 Name = "firewallPersistenceNotice",
                 Dock = DockStyle.Bottom,
                 Height = 38,
-                Text = FirewallPersistenceNotice.FullText,
+                Text = AppText.Get("BlockedServers.Notice.ProcessExit") + "\r\n"
+                    + AppText.Get("BlockedServers.Notice.RulesPersist"),
                 Font = new Font("Malgun Gothic", 8F),
                 ForeColor = TextMuted,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = false,
-                AccessibleName = "앱 종료와 차단 리스트 유지 안내",
-                AccessibleDescription = FirewallPersistenceNotice.FullText
+                AccessibleName = AppText.Get("BlockedServers.Notice.PersistenceA11y"),
+                AccessibleDescription = AppText.Get("BlockedServers.Notice.ProcessExit") + "\r\n"
+                    + AppText.Get("BlockedServers.Notice.RulesPersist")
             });
             header.Controls.Add(new Label
             {
                 Name = "firewallPartyScopeNotice",
                 Dock = DockStyle.Bottom,
                 Height = 22,
-                Text = FirewallPartyScopeNotice.LocalOnlyLine,
+                Text = AppText.Get("BlockedServers.Notice.PartyLocal"),
                 Font = new Font("Malgun Gothic", 8F),
                 ForeColor = TextMuted,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = false,
-                AccessibleName = "파티 매칭의 로컬 차단 적용 범위 안내",
-                AccessibleDescription = FirewallPartyScopeNotice.LocalOnlyLine
+                AccessibleName = AppText.Get("BlockedServers.Notice.PartyA11y"),
+                AccessibleDescription = AppText.Get("BlockedServers.Notice.PartyLocal")
             });
             root.Controls.Add(header, 0, 0);
 
@@ -715,33 +763,36 @@ namespace TarkovServerReporter
                 Padding = new Padding(0, 8, 0, 0),
                 BackColor = Background
             };
-            _closeButton = CreateButton("닫기", false);
-            _removeAllButton = CreateButton("전체 해제", true);
-            _removeSelectedButton = CreateButton("선택 해제", false);
-            _refreshButton = CreateButton("새로고침", false);
-            _exportButton = CreateButton("내보내기", false);
-            _importButton = CreateButton("불러오기", false);
+            _closeButton = CreateButton(AppText.Get("Common.Button.Close"), false);
+            _removeAllButton = CreateButton(AppText.Get("BlockedServers.Button.UnblockAll"), true);
+            _removeSelectedButton = CreateButton(AppText.Get("BlockedServers.Button.UnblockSelected"), false);
+            _refreshButton = CreateButton(AppText.Get("Common.Button.Refresh"), false);
+            _exportButton = CreateButton(AppText.Get("Common.Button.Export"), false);
+            _importButton = CreateButton(AppText.Get("Common.Button.Import"), false);
             _selectedCountLabel = new Label
             {
                 AutoSize = false,
                 Size = new Size(90, 32),
                 Margin = new Padding(8, 0, 0, 0),
-                Text = "선택 0개",
+                Text = AppText.Format("BlockedServers.Selection.Count", 0),
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = TextMuted,
-                AccessibleName = "선택된 차단 서버 수: 0개",
-                AccessibleDescription = "현재 차단 서버 0개 중 0개가 선택되어 있습니다."
+                AccessibleName = AppText.Format("BlockedServers.Selection.CountA11y", 0),
+                AccessibleDescription = AppText.Format(
+                    "BlockedServers.Selection.Description", 0, 0)
             };
-            _removeSelectedButton.AccessibleName = "선택 해제";
+            _removeSelectedButton.AccessibleName = AppText.Get("BlockedServers.Button.UnblockSelected");
             _removeSelectedButton.AccessibleDescription =
-                "선택한 서버의 Windows 방화벽 차단만 해제합니다.";
-            _removeAllButton.AccessibleName = "전체 해제";
+                AppText.Get("BlockedServers.Button.UnblockSelectedA11y");
+            _removeAllButton.AccessibleName = AppText.Get("BlockedServers.Button.UnblockAll");
             _removeAllButton.AccessibleDescription =
-                "목록에 있는 모든 서버의 Windows 방화벽 차단을 해제합니다.";
-            _refreshButton.AccessibleName = "차단 규칙 목록 새로고침";
-            _refreshButton.AccessibleDescription = RefreshRulesOnlyHelp;
+                AppText.Get("BlockedServers.Button.UnblockAllA11y");
+            _refreshButton.AccessibleName = AppText.Get("BlockedServers.Button.RefreshA11y");
+            _refreshButton.AccessibleDescription = AppText.Get("BlockedServers.Refresh.Help");
             _toolTip = new ToolTip();
-            _toolTip.SetToolTip(_refreshButton, RefreshRulesOnlyHelp);
+            _toolTip.SetToolTip(_refreshButton, AppText.Get("BlockedServers.Refresh.Help"));
+            _toolTip.SetToolTip(_partyAddButton, _partyAddButton.AccessibleDescription);
+            _toolTip.SetToolTip(_partyReleaseButton, _partyReleaseButton.AccessibleDescription);
             actions.Controls.Add(_closeButton);
             actions.Controls.Add(_removeAllButton);
             actions.Controls.Add(_removeSelectedButton);
@@ -757,12 +808,23 @@ namespace TarkovServerReporter
             _removeAllButton.Click += async delegate { await RemoveAllAsync(); };
             _exportButton.Click += async delegate { await ExportBackupAsync(); };
             _importButton.Click += async delegate { await ImportBackupAsync(); };
+            _partyAddButton.Click += async delegate { await AddPartyBundleAsync(); };
+            _partyReleaseButton.Click += async delegate { await ReleasePartyBundleAsync(); };
             _grid.CellContentClick += GridCellContentClick;
             _grid.CellMouseClick += GridCellMouseClick;
             _grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
             _grid.CellPainting += GridCellPainting;
             _grid.CellMouseMove += GridCellMouseMove;
-            _grid.MouseLeave += delegate { _grid.Cursor = Cursors.Default; };
+            _grid.CellMouseLeave += delegate
+            {
+                if (!_grid.Capture && _grid.Cursor == Cursors.Hand)
+                    _grid.Cursor = Cursors.Default;
+            };
+            _grid.MouseLeave += delegate
+            {
+                if (!_grid.Capture && _grid.Cursor == Cursors.Hand)
+                    _grid.Cursor = Cursors.Default;
+            };
             _grid.KeyDown += GridKeyDown;
             _grid.CurrentCellDirtyStateChanged += delegate
             {
@@ -778,7 +840,7 @@ namespace TarkovServerReporter
                 if (!_busy || e.CloseReason != CloseReason.UserClosing) return;
                 e.Cancel = true;
                 _statusLabel.ForeColor = Color.FromArgb(231, 184, 73);
-                _statusLabel.Text = "방화벽·파일 작업과 최종 확인이 끝난 뒤 창을 닫을 수 있습니다.";
+                _statusLabel.Text = AppText.Get("BlockedServers.Busy.CloseBlocked");
             };
             Disposed += delegate { _toolTip.Dispose(); };
             Shown += async delegate { await RefreshRulesAsync(); };
@@ -795,7 +857,7 @@ namespace TarkovServerReporter
 
         private DataGridView BuildGrid()
         {
-            var grid = new DataGridView
+            var grid = new ResizeGuideDataGridView
             {
                 Dock = DockStyle.Fill,
                 BackgroundColor = Surface,
@@ -813,12 +875,9 @@ namespace TarkovServerReporter
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 AutoGenerateColumns = false,
                 ReadOnly = false,
-                AccessibleName = "차단 서버 목록",
-                AccessibleDescription =
-                    "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
-                        + "현재 차단 서버 0개 중 0개가 선택되어 있습니다. "
-                        + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다. "
-                        + "현재 핑은 차단 규칙이 ICMP를 포함한 통신을 막아 차단 중에는 측정할 수 없습니다."
+                AccessibleName = AppText.Get("BlockedServers.Grid.Name"),
+                AccessibleDescription = AppText.Format(
+                    "BlockedServers.Selection.GridDescription", 0, 0)
             };
             grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
@@ -844,7 +903,7 @@ namespace TarkovServerReporter
                 Name = "selected",
                 HeaderCell = new SelectionColumnHeaderCell
                 {
-                    ToolTipText = "차단 해제 대상을 전체 선택하거나 전체 해제합니다."
+                    ToolTipText = AppText.Get("BlockedServers.Selection.HeaderTooltip")
                 },
                 HeaderText = string.Empty,
                 Width = 54,
@@ -855,7 +914,7 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "ip",
-                HeaderText = "서버 IP",
+                HeaderText = AppText.Get("BlockedServers.Column.Ip"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 45F
@@ -863,7 +922,7 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "status",
-                HeaderText = "상태",
+                HeaderText = AppText.Get("BlockedServers.Column.Status"),
                 ReadOnly = true,
                 Width = 88
             });
@@ -871,19 +930,20 @@ namespace TarkovServerReporter
             {
                 Name = "currentPing",
                 HeaderCell = new DescribedColumnHeaderCell(
-                    "현재 핑 열",
-                    CurrentPingBlockedHelp),
+                    AppText.Get("BlockedServers.Column.CurrentPingA11y"),
+                    AppText.Get("BlockedServers.Ping.BlockedHelp")),
                 CellTemplate = new DescribedTextBoxCell(),
-                HeaderText = "현재 핑",
+                HeaderText = AppText.Get("BlockedServers.Column.CurrentPing"),
                 ReadOnly = true,
                 Width = 132,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             });
-            grid.Columns["currentPing"].HeaderCell.ToolTipText = CurrentPingBlockedHelp;
+            grid.Columns["currentPing"].HeaderCell.ToolTipText =
+                AppText.Get("BlockedServers.Ping.BlockedHelp");
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "location",
-                HeaderText = "데이터센터 / 지역",
+                HeaderText = AppText.Get("BlockedServers.Column.Location"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 40F
@@ -891,14 +951,14 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "blockedAt",
-                HeaderText = "차단시각",
+                HeaderText = AppText.Get("BlockedServers.Column.BlockedAt"),
                 ReadOnly = true,
                 Width = 145
             });
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "note",
-                HeaderText = "메모",
+                HeaderText = AppText.Get("BlockedServers.Column.Note"),
                 ReadOnly = true,
                 Width = 58,
                 SortMode = DataGridViewColumnSortMode.NotSortable,
@@ -918,16 +978,17 @@ namespace TarkovServerReporter
             grid.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "kind",
-                HeaderText = "규칙 구분",
+                HeaderText = AppText.Get("출처 구분"),
                 ReadOnly = true,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
-                FillWeight = 18F
+                MinimumWidth = AppText.CurrentLanguage == AppText.EnglishLanguage ? 70 : 5,
+                FillWeight = 24F
             });
             var removeColumn = new ContainedActionButtonColumn
             {
                 Name = "remove",
-                HeaderText = "개별해제",
-                Text = "해제",
+                HeaderText = AppText.Get("BlockedServers.Column.Unblock"),
+                Text = AppText.Get("BlockedServers.Button.UnblockOne"),
                 UseColumnTextForButtonValue = true,
                 ReadOnly = true,
                 Width = 88,
@@ -954,8 +1015,8 @@ namespace TarkovServerReporter
                 column.SortMode = DataGridViewColumnSortMode.Programmatic;
                 string metricHelp = column.HeaderCell.ToolTipText;
                 column.HeaderCell.ToolTipText = string.IsNullOrWhiteSpace(metricHelp)
-                    ? HeaderSortInstruction
-                    : metricHelp + " " + HeaderSortInstruction;
+                    ? AppText.Get("BlockedServers.Sort.Help")
+                    : metricHelp + " " + AppText.Get("BlockedServers.Sort.Help");
             }
             grid.HandleCreated += delegate { ApplyGridDpiMetrics(grid); };
             grid.DpiChangedAfterParent += delegate { ApplyGridDpiMetrics(grid); };
@@ -978,8 +1039,18 @@ namespace TarkovServerReporter
             TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
             using (Graphics graphics = grid.CreateGraphics())
             {
-                headerText = TextRenderer.MeasureText(graphics, "개별해제", headerFont, new Size(1000, 1000), flags);
-                buttonText = TextRenderer.MeasureText(graphics, "해제", buttonFont, new Size(1000, 1000), flags);
+                headerText = TextRenderer.MeasureText(
+                    graphics,
+                    AppText.Get("BlockedServers.Column.Unblock"),
+                    headerFont,
+                    new Size(1000, 1000),
+                    flags);
+                buttonText = TextRenderer.MeasureText(
+                    graphics,
+                    AppText.Get("BlockedServers.Button.UnblockOne"),
+                    buttonFont,
+                    new Size(1000, 1000),
+                    flags);
                 headerLineText = TextRenderer.MeasureText(
                     graphics,
                     "가A",
@@ -1007,15 +1078,19 @@ namespace TarkovServerReporter
 
         private static Button CreateButton(string text, bool emphasized)
         {
+            bool english = AppText.CurrentLanguage == AppText.EnglishLanguage;
+            var font = new Font(english ? "Segoe UI" : "Malgun Gothic", 8.5F, FontStyle.Bold);
             var button = new Button
             {
                 Text = text,
-                Size = new Size(text.Length > 4 ? 100 : 82, 32),
+                Size = new Size(english
+                    ? Math.Max(82, TextRenderer.MeasureText(text, font).Width + 22)
+                    : (text.Length > 4 ? 100 : 82), 32),
                 Margin = new Padding(8, 0, 0, 0),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = emphasized ? Success : SurfaceAlt,
                 ForeColor = emphasized ? Color.FromArgb(18, 36, 27) : TextPrimary,
-                Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
+                Font = font,
                 Cursor = Cursors.Hand
             };
             button.FlatAppearance.BorderColor = emphasized ? Color.FromArgb(42, 137, 87) : Border;
@@ -1028,20 +1103,24 @@ namespace TarkovServerReporter
         private async Task RefreshRulesAsync()
         {
             if (_busy) return;
-            SetBusy(true, "앱이 관리하는 차단 규칙을 확인하는 중…");
+            SetBusy(true, AppText.Get("BlockedServers.Loading"));
             ManagedBlockedServerQueryResult result = await Task.Run(
                 () => FirewallRuleManager.QueryManagedBlockedServers());
             if (IsDisposed) return;
             IDictionary<string, BlockedServerMetadata> metadataByIp = await Task.Run(
                 () => BlockedServerMetadataStore.LoadAll());
             if (IsDisposed) return;
+            PartyBlockBundleSnapshot partySnapshot = await RefreshPartyBundleStateAsync();
+            if (IsDisposed) return;
 
             _blockedServerOriginalOrder.Clear();
             _grid.Rows.Clear();
             if (!result.Success)
             {
-                _summaryLabel.Text = "서버차단현황을 확인하지 못했습니다.";
-                SetBusy(false, result.ErrorMessage ?? "Windows 방화벽을 확인할 수 없습니다.");
+                _summaryLabel.Text = AppText.Get("BlockedServers.LoadFailed");
+                SetBusy(false, LocalizeExternalError(
+                    result.ErrorMessage,
+                    "BlockedServers.FirewallUnavailable"));
                 return;
             }
 
@@ -1049,32 +1128,156 @@ namespace TarkovServerReporter
             {
                 BlockedServerMetadata metadata;
                 metadataByIp.TryGetValue(server.IpAddress, out metadata);
+                PartyBlockSourceInfo partySource;
+                _partySources.TryGetValue(server.IpAddress, out partySource);
+                string blockedAtText = metadata == null
+                    ? AppText.Get("BlockedServers.Unknown")
+                    : metadata.BlockedAtText;
+                if (metadata == null
+                    && partySource != null
+                    && partySource.EarliestCreatedAtUtc.HasValue)
+                {
+                    blockedAtText = partySource.EarliestCreatedAtUtc.Value.ToLocalTime()
+                        .ToString("yyyy-MM-dd HH:mm");
+                }
                 int index = _grid.Rows.Add(
                     false,
                     server.IpAddress,
-                    server.StatusText,
-                    CurrentPingBlockedText,
+                    AppText.Get("BlockedServers.RowStatus.Blocked"),
+                    AppText.Get("BlockedServers.Ping.BlockedText"),
                     metadata == null ? "-" : metadata.DataCenterLocationText,
-                    metadata == null ? "확인 안 됨" : metadata.BlockedAtText,
+                    blockedAtText,
                     string.Empty,
-                    server.RuleKindText,
-                    "해제");
+                    partySource == null
+                        ? GetRuleKindText(server.RuleKind)
+                        : GetPartySourceBadgeText(partySource),
+                    AppText.Get("BlockedServers.Button.UnblockOne"));
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = server;
                 _blockedServerOriginalOrder[row] = index;
                 row.Cells["status"].Style.ForeColor = Danger;
                 ApplyCurrentPingCell(row);
                 UpdateNoteCell(row, metadata == null ? null : metadata.Note);
+                if (partySource != null)
+                {
+                    row.Cells["kind"].Style.ForeColor = Accent;
+                    row.Cells["kind"].Style.SelectionForeColor = Accent;
+                    row.Cells["kind"].ToolTipText = GetPartySourceToolTip(
+                        partySource,
+                        GetRuleKindText(server.RuleKind));
+                }
             }
 
             ApplyBlockedServerSort();
 
             _summaryLabel.Text = result.Servers.Count == 0
-                ? "현재 앱이 관리하는 차단 서버가 없습니다."
-                : string.Format("현재 {0}개 서버가 차단되어 있습니다.", result.Servers.Count);
+                ? AppText.Get("BlockedServers.Empty")
+                : AppText.Format("BlockedServers.Count", result.Servers.Count);
             SetBusy(false, result.Servers.Count == 0
-                ? "현재 규칙과 v1.1.1 호환 규칙을 모두 확인했습니다."
-                : "해제할 서버를 선택하거나 행의 ‘해제’를 누르세요.");
+                ? AppText.Get("BlockedServers.RefreshEmpty")
+                : AppText.Get("BlockedServers.RefreshReady"));
+            if (!partySnapshot.Success)
+            {
+                _statusLabel.ForeColor = Color.FromArgb(231, 184, 73);
+                _statusLabel.Text = AppText.Get(
+                    "파티 묶음 정보가 손상되어 파티 IP 추가·묶음 종료를 안전을 위해 비활성화했습니다.");
+            }
+        }
+
+        private async Task<PartyBlockBundleSnapshot> RefreshPartyBundleStateAsync()
+        {
+            PartyBlockBundleSnapshot snapshot = await Task.Run(
+                () => _partyBundleStore.LoadSnapshot());
+            if (!snapshot.Success)
+            {
+                _partyStoreAvailable = false;
+                _partyBundleCount = 0;
+                _partySources = new Dictionary<string, PartyBlockSourceInfo>(
+                    StringComparer.OrdinalIgnoreCase);
+                return snapshot;
+            }
+
+            string[] addresses = snapshot.Bundles
+                .SelectMany(bundle => bundle.Members)
+                .Select(member => member.IpAddress)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (addresses.Length > 0)
+            {
+                Dictionary<string, FirewallQueryResult> states = await Task.Run(
+                    () => FirewallRuleManager.QueryMany(addresses));
+                PartyBlockStoreResult reconciled = await Task.Run(
+                    () => _partyBundleStore.ReconcileStates(states));
+                if (!reconciled.Success)
+                {
+                    snapshot.Success = false;
+                    snapshot.ErrorMessage = reconciled.ErrorMessage;
+                    _partyStoreAvailable = false;
+                    _partyBundleCount = 0;
+                    _partySources = new Dictionary<string, PartyBlockSourceInfo>(
+                        StringComparer.OrdinalIgnoreCase);
+                    return snapshot;
+                }
+                snapshot = await Task.Run(() => _partyBundleStore.LoadSnapshot());
+            }
+
+            _partyStoreAvailable = snapshot.Success;
+            _partyBundleCount = snapshot.Success ? snapshot.Bundles.Count : 0;
+            _partySources = PartyBlockBundleStore.CreateSourceMap(snapshot);
+            return snapshot;
+        }
+
+        private static string GetPartySourceBadgeText(PartyBlockSourceInfo source)
+        {
+            if (source == null || source.Bundles.Count == 0)
+                return AppText.Get("Party-shared");
+            string badge = source.Bundles.Count == 1
+                ? AppText.Format("Party-shared · {0}", source.Bundles[0].SourceName)
+                : AppText.Format("Party-shared · {0}개 묶음", source.Bundles.Count);
+            return source.HasPendingReconcile
+                ? badge + AppText.Get(" · 확인 대기")
+                : badge;
+        }
+
+        private static string GetRuleKindText(ManagedFirewallRuleKind kind)
+        {
+            if (kind == ManagedFirewallRuleKind.Legacy)
+                return AppText.Get("BlockedServers.Rule.Legacy");
+            if (kind == ManagedFirewallRuleKind.CurrentAndLegacy)
+                return AppText.Get("BlockedServers.Rule.CurrentAndLegacy");
+            return AppText.Get("BlockedServers.Rule.Current");
+        }
+
+        private static string LocalizeExternalError(string error, string fallbackKey)
+        {
+            return AppText.TranslateDiagnostic(error, fallbackKey);
+        }
+
+        private static string GetPartySourceToolTip(
+            PartyBlockSourceInfo source,
+            string firewallRuleKind)
+        {
+            string details = string.Join(
+                " / ",
+                source.Bundles.Select(bundle => AppText.Format(
+                    "{0} ({1})",
+                    bundle.SourceName,
+                    GetPartyReasonText(bundle.ReasonCode))));
+            return AppText.Format(
+                "Party-shared 출처: {0}\r\n방화벽 규칙: {1}",
+                details,
+                firewallRuleKind);
+        }
+
+        private static string GetPartyReasonText(string reasonCode)
+        {
+            if (string.Equals(reasonCode, "party-leader", StringComparison.Ordinal))
+                return AppText.Get("파티장 공유");
+            if (string.Equals(reasonCode, "party-member", StringComparison.Ordinal))
+                return AppText.Get("파티원 공유");
+            if (string.Equals(reasonCode, "manual-confirmed", StringComparison.Ordinal))
+                return AppText.Get("직접 확인");
+            return AppText.Get("기타");
         }
 
         private async void GridCellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -1086,8 +1289,8 @@ namespace TarkovServerReporter
 
             DialogResult answer = MessageBox.Show(
                 this,
-                server.IpAddress + " 서버의 차단을 해제할까요?",
-                "차단 해제 확인",
+                AppText.Format("BlockedServers.UnblockOnePrompt", server.IpAddress),
+                AppText.Get("BlockedServers.UnblockConfirmTitle"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question,
                 MessageBoxDefaultButton.Button2);
@@ -1291,7 +1494,7 @@ namespace TarkovServerReporter
             string value = Convert.ToString(row.Cells[columnName].Value);
             if (string.IsNullOrWhiteSpace(value)
                 || value == "-"
-                || value == "확인 안 됨")
+                || value == AppText.Get("BlockedServers.Unknown"))
                 return string.Empty;
             return value.Trim();
         }
@@ -1312,12 +1515,14 @@ namespace TarkovServerReporter
 
         private void GridCellMouseMove(object sender, DataGridViewCellMouseEventArgs e)
         {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || _grid.Capture) return;
             bool interactiveBodyCell = !_busy
                 && e.RowIndex >= 0
                 && e.ColumnIndex >= 0
                 && (_grid.Columns[e.ColumnIndex].Name == "note"
                     || _grid.Columns[e.ColumnIndex].Name == "remove");
-            _grid.Cursor = interactiveBodyCell ? Cursors.Hand : Cursors.Default;
+            Cursor cursor = interactiveBodyCell ? Cursors.Hand : Cursors.Default;
+            if (_grid.Cursor != cursor) _grid.Cursor = cursor;
         }
 
         private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
@@ -1686,8 +1891,8 @@ namespace TarkovServerReporter
                 ApplyBlockedServerSort();
             _statusLabel.ForeColor = Success;
             _statusLabel.Text = metadata == null || string.IsNullOrWhiteSpace(metadata.Note)
-                ? server.IpAddress + " 서버의 차단 메모를 삭제했습니다."
-                : server.IpAddress + " 서버의 차단 메모를 저장했습니다.";
+                ? AppText.Format("BlockedServers.Note.Deleted", server.IpAddress)
+                : AppText.Format("BlockedServers.Note.Saved", server.IpAddress);
         }
 
         private void UpdateNoteCell(DataGridViewRow row, string note)
@@ -1695,9 +1900,13 @@ namespace TarkovServerReporter
             if (row == null || !_grid.Columns.Contains("note")) return;
             bool hasNote = !string.IsNullOrWhiteSpace(note);
             DataGridViewCell cell = row.Cells["note"];
-            cell.Value = hasNote ? "저장된 차단 메모" : "차단 메모 추가";
+            cell.Value = hasNote
+                ? AppText.Get("BlockedServers.Note.SavedCell")
+                : AppText.Get("BlockedServers.Note.AddCell");
             cell.Tag = hasNote;
-            cell.ToolTipText = hasNote ? note : "차단 메모를 추가합니다.";
+            cell.ToolTipText = hasNote
+                ? note
+                : AppText.Get("BlockedServers.Note.AddTooltip");
             cell.Style.ForeColor = NoteOrange;
             cell.Style.SelectionForeColor = NoteOrange;
             _grid.InvalidateCell(cell);
@@ -1707,10 +1916,219 @@ namespace TarkovServerReporter
         {
             if (row == null) return;
             DataGridViewCell currentPingCell = row.Cells["currentPing"];
-            currentPingCell.Value = CurrentPingBlockedText;
+            currentPingCell.Value = AppText.Get("BlockedServers.Ping.BlockedText");
             currentPingCell.Tag = null;
-            currentPingCell.ToolTipText = CurrentPingBlockedHelp;
+            currentPingCell.ToolTipText = AppText.Get("BlockedServers.Ping.BlockedHelp");
             currentPingCell.Style.ForeColor = TextMuted;
+        }
+
+        private async Task AddPartyBundleAsync()
+        {
+            if (_busy || !_partyStoreAvailable) return;
+            PartyBlockInputRequest request;
+            using (var form = new PartyBlockInputForm())
+            {
+                if (form.ShowDialog(this) != DialogResult.OK || form.Request == null) return;
+                request = form.Request;
+            }
+
+            SetBusy(true, AppText.Get("파티 묶음 적용 정보를 안전하게 저장하는 중…"));
+            PartyBlockStoreResult plan = await Task.Run(() => _partyBundleStore.BeginApply(
+                request.SourceName,
+                request.ReasonCode,
+                request.Addresses,
+                request.InitialStates));
+            if (IsDisposed) return;
+            if (!plan.Success)
+            {
+                SetBusy(false, AppText.Get(
+                    "파티 묶음 정보를 저장하지 못해 방화벽 작업을 시작하지 않았습니다."));
+                _statusLabel.ForeColor = Danger;
+                return;
+            }
+
+            var batch = new FirewallBatchChangeResult { Success = true };
+            if (plan.AddressesToChange.Count > 0)
+            {
+                SetBusy(true, AppText.Format(
+                    "새 파티 서버 {0}개를 한 번의 관리자 권한 요청으로 차단하는 중…",
+                    plan.AddressesToChange.Count));
+                batch = await FirewallRuleManager.AddManyWithElevationAsync(
+                    plan.AddressesToChange);
+                if (IsDisposed) return;
+                if (batch.Cancelled)
+                {
+                    PartyBlockStoreResult abandoned = await Task.Run(
+                        () => _partyBundleStore.AbandonBundle(plan.BundleId));
+                    SetBusy(false, abandoned.Success
+                        ? LocalizeExternalError(
+                            batch.ErrorMessage,
+                            "관리자 권한 요청이 취소되었습니다.")
+                        : AppText.Get(
+                            "관리자 권한 요청은 취소됐지만 파티 묶음 정보 정리에 실패했습니다."));
+                    _statusLabel.ForeColor = abandoned.Success ? TextMuted : Warning;
+                    return;
+                }
+            }
+
+            Dictionary<string, FirewallQueryResult> finalStates = await Task.Run(
+                () => FirewallRuleManager.QueryMany(plan.AllAddresses));
+            PartyBlockStoreResult completed = await Task.Run(
+                () => _partyBundleStore.CompleteApply(
+                    plan.BundleId,
+                    finalStates,
+                    batch));
+            if (IsDisposed) return;
+            int newlyBlocked = plan.AddressesToChange.Count(ipAddress =>
+            {
+                FirewallQueryResult state;
+                return finalStates.TryGetValue(ipAddress, out state)
+                    && state != null
+                    && state.Success
+                    && state.IsBlocked;
+            });
+            if (newlyBlocked > 0) NotifyFirewallRulesChanged();
+
+            await RefreshRulesAfterChangeAsync();
+            if (IsDisposed) return;
+            if (!completed.Success)
+            {
+                _statusLabel.ForeColor = Warning;
+                _statusLabel.Text = AppText.Get(
+                    "방화벽 최종 상태는 확인했지만 파티 묶음 결과 저장을 완료하지 못했습니다.");
+                return;
+            }
+            _statusLabel.ForeColor = completed.PendingCount == 0 ? Success : Warning;
+            _statusLabel.Text = completed.PendingCount == 0
+                ? AppText.Format(
+                    "'{0}' 파티 묶음 {1}개 IP를 적용했습니다.",
+                    request.SourceName,
+                    completed.ActiveCount)
+                : AppText.Format(
+                    "파티 묶음 적용 {0}개 · 상태 재확인 대기 {1}개",
+                    completed.ActiveCount,
+                    completed.PendingCount);
+        }
+
+        private async Task ReleasePartyBundleAsync()
+        {
+            if (_busy || !_partyStoreAvailable || _partyBundleCount == 0) return;
+            string bundleId;
+            using (var form = new PartyBlockBundleReleaseForm(_partyBundleStore))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK
+                    || string.IsNullOrWhiteSpace(form.SelectedBundleId))
+                    return;
+                bundleId = form.SelectedBundleId;
+            }
+
+            SetBusy(true, AppText.Get("선택한 파티 묶음의 최신 상태를 다시 확인하는 중…"));
+            PartyBlockBundleSnapshot snapshot = await Task.Run(
+                () => _partyBundleStore.LoadSnapshot());
+            PartyBlockBundle bundle = snapshot.Success
+                ? snapshot.Bundles.FirstOrDefault(item => string.Equals(
+                    item.BundleId,
+                    bundleId,
+                    StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (bundle == null)
+            {
+                SetBusy(false, snapshot.Success
+                    ? AppText.Get("선택한 파티 묶음이 이미 종료되었거나 존재하지 않습니다.")
+                    : AppText.Get("파티 묶음 정보를 안전하게 읽지 못해 종료하지 않았습니다."));
+                _statusLabel.ForeColor = snapshot.Success ? TextMuted : Danger;
+                return;
+            }
+
+            string[] allAddresses = bundle.Members
+                .Select(item => item.IpAddress)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            Dictionary<string, FirewallQueryResult> currentStates = await Task.Run(
+                () => FirewallRuleManager.QueryMany(allAddresses));
+            PartyBlockStoreResult plan = await Task.Run(
+                () => _partyBundleStore.BeginRelease(bundleId, currentStates));
+            if (IsDisposed) return;
+            if (!plan.Success)
+            {
+                SetBusy(false, AppText.Get(
+                    "파티 묶음 종료 정보를 먼저 저장하지 못해 방화벽 작업을 시작하지 않았습니다."));
+                _statusLabel.ForeColor = Danger;
+                return;
+            }
+
+            var batch = new FirewallBatchChangeResult { Success = true };
+            if (plan.AddressesToChange.Count > 0)
+            {
+                SetBusy(true, AppText.Format(
+                    "마지막 참조 파티 서버 {0}개를 한 번의 관리자 권한 요청으로 해제하는 중…",
+                    plan.AddressesToChange.Count));
+                batch = await FirewallRuleManager.RemoveManyWithElevationAsync(
+                    plan.AddressesToChange);
+                if (IsDisposed) return;
+            }
+
+            Dictionary<string, FirewallQueryResult> finalStates = plan.AllAddresses.Count == 0
+                ? new Dictionary<string, FirewallQueryResult>(StringComparer.OrdinalIgnoreCase)
+                : await Task.Run(() => FirewallRuleManager.QueryMany(plan.AllAddresses));
+            PartyBlockStoreResult completed = plan.BundleCompleted
+                ? plan
+                : await Task.Run(() => _partyBundleStore.CompleteRelease(
+                    bundleId,
+                    finalStates,
+                    batch));
+            if (IsDisposed) return;
+
+            string[] removedAddresses = plan.AddressesToChange.Where(ipAddress =>
+            {
+                FirewallQueryResult state;
+                return finalStates.TryGetValue(ipAddress, out state)
+                    && state != null
+                    && state.Success
+                    && !state.IsBlocked;
+            }).ToArray();
+            bool metadataRemoved = removedAddresses.Length == 0
+                || BlockedServerMetadataStore.Remove(removedAddresses);
+            if (removedAddresses.Length > 0) NotifyFirewallRulesChanged();
+
+            await RefreshRulesAfterChangeAsync();
+            if (IsDisposed) return;
+            if (!completed.Success)
+            {
+                _statusLabel.ForeColor = Warning;
+                _statusLabel.Text = AppText.Get(
+                    "방화벽 최종 상태는 확인했지만 파티 묶음 종료 결과 저장을 완료하지 못했습니다.");
+                return;
+            }
+            if (batch.Cancelled)
+            {
+                _statusLabel.ForeColor = Warning;
+                _statusLabel.Text = LocalizeExternalError(
+                    batch.ErrorMessage,
+                    "관리자 권한 요청이 취소되어 묶음 해제를 다시 확인해야 합니다.");
+                return;
+            }
+            _statusLabel.ForeColor = completed.BundleCompleted && metadataRemoved
+                ? Success
+                : Warning;
+            _statusLabel.Text = completed.BundleCompleted
+                ? AppText.Format(
+                    "파티 묶음을 종료했습니다. 차단 해제 {0}개 · 안전하게 유지 {1}개",
+                    removedAddresses.Length,
+                    allAddresses.Length - removedAddresses.Length)
+                : AppText.Format(
+                    "차단 해제 {0}개 · 상태 재확인 대기 {1}개",
+                    removedAddresses.Length,
+                    completed.PendingCount);
+            if (!metadataRemoved)
+                _statusLabel.Text += AppText.Get(" · 로컬 표시 정보 정리 실패");
+        }
+
+        private void NotifyFirewallRulesChanged()
+        {
+            FirewallStateChanged = true;
+            EventHandler handler = FirewallRulesChanged;
+            if (handler != null) handler(this, EventArgs.Empty);
         }
 
         private async Task ExportBackupAsync()
@@ -1719,8 +2137,8 @@ namespace TarkovServerReporter
             string selectedPath;
             using (var dialog = new SaveFileDialog
             {
-                Title = "차단 목록 내보내기",
-                Filter = "Tarkov Server Guard 차단 목록 (*.json)|*.json|모든 파일 (*.*)|*.*",
+                Title = AppText.Get("BlockedServers.Backup.ExportTitle"),
+                Filter = AppText.Get("BlockedServers.Backup.Filter"),
                 DefaultExt = "json",
                 AddExtension = true,
                 OverwritePrompt = true,
@@ -1731,34 +2149,54 @@ namespace TarkovServerReporter
                 selectedPath = dialog.FileName;
             }
 
-            SetBusy(true, "Windows 방화벽의 실제 관리 규칙을 확인하는 중…");
+            SetBusy(true, AppText.Get("BlockedServers.Backup.CheckingRules"));
             ManagedBlockedServerQueryResult query = await Task.Run(
                 () => FirewallRuleManager.QueryManagedBlockedServers());
             if (IsDisposed) return;
             if (!query.Success)
             {
-                SetBusy(false, query.ErrorMessage ?? "현재 차단 규칙을 확인하지 못했습니다.");
-                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                SetBusy(false, LocalizeExternalError(
+                    query.ErrorMessage,
+                    "BlockedServers.Backup.QueryFailed"));
+                MessageBox.Show(this, _statusLabel.Text,
+                    AppText.Get("BlockedServers.Backup.ExportTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             IDictionary<string, BlockedServerMetadata> metadata = await Task.Run(
                 () => BlockedServerMetadataStore.LoadAll());
+            IList<ManagedBlockedServer> exportServers = query.Servers
+                .Where(server =>
+                {
+                    PartyBlockSourceInfo source;
+                    return !_partySources.TryGetValue(server.IpAddress, out source)
+                        || source == null
+                        || !source.IsTemporaryOnly;
+                })
+                .ToList();
+            int temporaryPartyExcludedCount = query.Servers.Count - exportServers.Count;
             BlockedServerBackupExportResult export = await Task.Run(
-                () => BlockedServerBackupService.CreateExport(query.Servers, metadata));
+                () => BlockedServerBackupService.CreateExport(exportServers, metadata));
             if (IsDisposed) return;
             if (!export.Success)
             {
-                SetBusy(false, export.ErrorMessage ?? "차단 목록 백업을 만들지 못했습니다.");
-                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                SetBusy(false, LocalizeExternalError(
+                    export.ErrorMessage,
+                    "BlockedServers.Backup.CreateFailed"));
+                MessageBox.Show(this, _statusLabel.Text,
+                    AppText.Get("BlockedServers.Backup.ExportTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             if (export.Entries.Count == 0)
             {
-                SetBusy(false, "현재 백업할 복원 가능한 앱 관리 차단 규칙이 없어 파일을 저장하지 않았습니다.");
-                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                SetBusy(false, temporaryPartyExcludedCount > 0
+                    ? AppText.Get(
+                        "임시 Party-shared 차단만 있어 개인 차단 목록 백업 파일을 저장하지 않았습니다.")
+                    : AppText.Get("BlockedServers.Backup.Empty"));
+                MessageBox.Show(this, _statusLabel.Text,
+                    AppText.Get("BlockedServers.Backup.ExportTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1770,19 +2208,34 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetBusy(false, "백업 파일 저장 실패: " + ex.Message);
-                MessageBox.Show(this, _statusLabel.Text, "차단 목록 내보내기",
+                SetBusy(false, AppText.Format(
+                    "BlockedServers.Backup.SaveFailed", ex.Message));
+                MessageBox.Show(this, _statusLabel.Text,
+                    AppText.Get("BlockedServers.Backup.ExportTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             if (IsDisposed) return;
 
-            string status = BlockedServerBackupPresentation.CreateExportSuccessStatus(
+            string status = AppText.Format(
+                "BlockedServers.Backup.ExportSuccess",
                 export.Entries.Count,
-                export.ExcludedAddresses.Count,
-                selectedPath);
+                Path.GetFileName(selectedPath ?? string.Empty));
+            if (export.ExcludedAddresses.Count > 0)
+                status += AppText.Format(
+                    "BlockedServers.Backup.ExportExcluded",
+                    export.ExcludedAddresses.Count);
+            if (temporaryPartyExcludedCount > 0)
+            {
+                status += AppText.Format(
+                    " · 임시 Party-shared {0}개 제외",
+                    temporaryPartyExcludedCount);
+            }
             SetBusy(false, status);
-            _statusLabel.ForeColor = export.ExcludedAddresses.Count == 0 ? Success : Color.FromArgb(231, 184, 73);
+            _statusLabel.ForeColor = export.ExcludedAddresses.Count == 0
+                    && temporaryPartyExcludedCount == 0
+                ? Success
+                : Color.FromArgb(231, 184, 73);
         }
 
         private async Task ImportBackupAsync()
@@ -1791,8 +2244,8 @@ namespace TarkovServerReporter
             string selectedPath;
             using (var dialog = new OpenFileDialog
             {
-                Title = "차단 목록 불러오기",
-                Filter = "Tarkov Server Guard 차단 목록 (*.json)|*.json|모든 파일 (*.*)|*.*",
+                Title = AppText.Get("BlockedServers.Backup.ImportTitle"),
+                Filter = AppText.Get("BlockedServers.Backup.Filter"),
                 DefaultExt = "json",
                 CheckFileExists = true,
                 Multiselect = false
@@ -1802,7 +2255,7 @@ namespace TarkovServerReporter
                 selectedPath = dialog.FileName;
             }
 
-            SetBusy(true, "백업 파일의 형식·크기·주소를 검증하는 중…");
+            SetBusy(true, AppText.Get("BlockedServers.Backup.Validating"));
             BlockedServerBackupParseResult parsed;
             try
             {
@@ -1811,16 +2264,22 @@ namespace TarkovServerReporter
             }
             catch (Exception ex)
             {
-                SetBusy(false, "백업 파일을 읽지 못했습니다: " + ex.Message);
-                MessageBox.Show(this, _statusLabel.Text, "차단 목록 불러오기",
+                SetBusy(false, AppText.Format(
+                    "BlockedServers.Backup.ReadFailed",
+                    LocalizeExternalError(ex.Message, "BlockedServers.Backup.Unsupported")));
+                MessageBox.Show(this, _statusLabel.Text,
+                    AppText.Get("BlockedServers.Backup.ImportTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             if (IsDisposed) return;
             if (!parsed.Success)
             {
-                SetBusy(false, parsed.ErrorMessage ?? "지원하지 않는 차단 목록 백업입니다.");
-                MessageBox.Show(this, _statusLabel.Text, "차단 목록 불러오기",
+                SetBusy(false, LocalizeExternalError(
+                    parsed.ErrorMessage,
+                    "BlockedServers.Backup.Unsupported"));
+                MessageBox.Show(this, _statusLabel.Text,
+                    AppText.Get("BlockedServers.Backup.ImportTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1842,8 +2301,8 @@ namespace TarkovServerReporter
             int existingCount = preview.Count(
                 item => item.Status == BlockedServerRestoreStatus.AlreadyBlocked);
             int excludedCount = preview.Count(item => item.Status == BlockedServerRestoreStatus.Excluded);
-            SetBusy(false, string.Format(
-                "새로 차단 {0}개 · 이미 차단됨 {1}개 · 적용 제외 {2}개를 확인했습니다.",
+            SetBusy(false, AppText.Format(
+                "BlockedServers.Backup.Preview",
                 newCount,
                 existingCount,
                 excludedCount));
@@ -1864,9 +2323,8 @@ namespace TarkovServerReporter
                 .Where(item => item.Status == BlockedServerRestoreStatus.NewBlock)
                 .ToList();
             SetBusy(true, newItems.Count == 0
-                ? "이미 차단된 서버의 백업 정보를 최종 확인하는 중…"
-                : string.Format("선택한 {0}개 서버를 한 번의 관리자 권한 요청으로 차단하는 중…",
-                    newItems.Count));
+                ? AppText.Get("BlockedServers.Backup.VerifyingExisting")
+                : AppText.Format("BlockedServers.Backup.Applying", newItems.Count));
 
             var batch = new FirewallBatchChangeResult { Success = true };
             if (newItems.Count > 0)
@@ -1876,7 +2334,9 @@ namespace TarkovServerReporter
                 if (IsDisposed) return;
                 if (batch.Cancelled)
                 {
-                    SetBusy(false, batch.ErrorMessage ?? "관리자 권한 요청이 취소되었습니다.");
+                    SetBusy(false, LocalizeExternalError(
+                        batch.ErrorMessage,
+                        "관리자 권한 요청이 취소되었습니다."));
                     return;
                 }
             }
@@ -1913,14 +2373,20 @@ namespace TarkovServerReporter
                 string error;
                 if (!batchErrors.TryGetValue(item.Entry.IpAddress, out error))
                     error = state == null || string.IsNullOrWhiteSpace(state.ErrorMessage)
-                        ? "최종 앱 관리 차단 규칙이 확인되지 않았습니다."
-                        : state.ErrorMessage;
+                        ? AppText.Get("BlockedServers.Backup.FinalRuleMissing")
+                        : LocalizeExternalError(
+                            state.ErrorMessage,
+                            "BlockedServers.Backup.FinalRuleMissing");
                 failures.Add(new KeyValuePair<string, string>(item.Entry.IpAddress, error));
             }
 
             bool metadataSaved = await Task.Run(() =>
                 BlockedServerMetadataStore.MergeMissingFromBackup(
                     verified.Where(item => item.Entry.HasMetadata).Select(item => item.Entry)));
+            PartyBlockStoreResult promoted = await Task.Run(() =>
+                _partyBundleStore.PromoteAddresses(
+                    verified.Select(item => item.Entry.IpAddress)));
+            bool partyPromotionSaved = promoted.Success;
             int newSucceeded = verified.Count(
                 item => item.Status == BlockedServerRestoreStatus.NewBlock);
             if (newSucceeded > 0)
@@ -1932,27 +2398,36 @@ namespace TarkovServerReporter
 
             await RefreshRulesAfterChangeAsync();
             if (IsDisposed) return;
-            _statusLabel.ForeColor = failures.Count == 0 && metadataSaved
+            _statusLabel.ForeColor = failures.Count == 0
+                    && metadataSaved
+                    && partyPromotionSaved
                 ? Success
                 : Color.FromArgb(231, 184, 73);
-            _statusLabel.Text = string.Format(
-                "새 차단 {0}개 · 최종 확인 {1}개 · 실패 {2}개",
+            _statusLabel.Text = AppText.Format(
+                "BlockedServers.Backup.RestoreSummary",
                 newSucceeded,
                 verified.Count,
                 failures.Count);
-            if (!metadataSaved) _statusLabel.Text += " · 백업 정보 저장 실패";
+            if (!metadataSaved)
+                _statusLabel.Text += AppText.Get(
+                    "BlockedServers.Backup.MetadataFailedSuffix");
+            if (!partyPromotionSaved)
+                _statusLabel.Text += AppText.Get(" · 파티 묶음 영구 유지 표시 실패");
 
             if (failures.Count > 0)
             {
                 using (var form = new BlockedServerRestoreFailuresForm(failures))
                     form.ShowDialog(this);
             }
-            else if (!metadataSaved)
+            else if (!metadataSaved || !partyPromotionSaved)
             {
                 MessageBox.Show(
                     this,
-                    "방화벽 차단은 최종 확인했지만 비어 있던 지역·메모·차단시각 일부를 저장하지 못했습니다.",
-                    "차단 목록 복원 결과",
+                    !metadataSaved
+                        ? AppText.Get("BlockedServers.Backup.MetadataRestoreFailed")
+                        : AppText.Get(
+                            "방화벽 차단은 확인했지만 활성 파티 묶음의 영구 유지 표시를 저장하지 못했습니다."),
+                    AppText.Get("BlockedServers.Backup.RestoreResultTitle"),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
@@ -1990,15 +2465,18 @@ namespace TarkovServerReporter
             IList<string> addresses = GetSelectedAddresses();
             if (addresses.Count == 0)
             {
-                MessageBox.Show(this, "해제할 서버를 먼저 선택해 주세요.", "선택 해제",
+                MessageBox.Show(
+                    this,
+                    AppText.Get("BlockedServers.Unblock.NoneSelected"),
+                    AppText.Get("BlockedServers.Unblock.SelectedTitle"),
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             DialogResult answer = MessageBox.Show(
                 this,
-                string.Format("선택한 {0}개 서버의 차단을 해제할까요?", addresses.Count),
-                "선택 차단 해제",
+                AppText.Format("BlockedServers.Unblock.SelectedPrompt", addresses.Count),
+                AppText.Get("BlockedServers.Unblock.SelectedTitle"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question,
                 MessageBoxDefaultButton.Button2);
@@ -2012,12 +2490,8 @@ namespace TarkovServerReporter
 
             DialogResult answer = MessageBox.Show(
                 this,
-                string.Format(
-                    "앱이 관리하는 차단 서버 {0}개를 모두 해제할까요?\r\n\r\n"
-                    + "Tarkov Server Guard의 현재 규칙과 v1.1.1 호환 규칙만 삭제합니다.\r\n"
-                    + "사용자가 직접 만든 다른 방화벽 규칙은 삭제하지 않습니다.",
-                    addresses.Count),
-                "전체 차단 해제 확인",
+                AppText.Format("BlockedServers.Unblock.AllPrompt", addresses.Count),
+                AppText.Get("BlockedServers.Unblock.AllTitle"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2);
@@ -2027,16 +2501,23 @@ namespace TarkovServerReporter
         private async Task RemoveAddressesAsync(IEnumerable<string> ipAddresses)
         {
             IList<string> addresses = ipAddresses.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            SetBusy(true, string.Format("선택한 {0}개 서버의 차단을 해제하는 중…", addresses.Count));
+            SetBusy(true, AppText.Format(
+                "BlockedServers.Unblock.Working", addresses.Count));
             FirewallBatchChangeResult result = await FirewallRuleManager.RemoveManyWithElevationAsync(addresses);
             if (IsDisposed) return;
 
             int succeeded = result.Items.Count(item => item.Success);
             bool metadataRemoved = true;
+            bool partyMetadataRemoved = true;
             if (succeeded > 0)
             {
-                metadataRemoved = BlockedServerMetadataStore.Remove(
-                    result.Items.Where(item => item.Success).Select(item => item.IpAddress));
+                string[] succeededAddresses = result.Items
+                    .Where(item => item.Success)
+                    .Select(item => item.IpAddress)
+                    .ToArray();
+                metadataRemoved = BlockedServerMetadataStore.Remove(succeededAddresses);
+                partyMetadataRemoved = _partyBundleStore.ForgetAddresses(
+                    succeededAddresses).Success;
                 FirewallStateChanged = true;
                 EventHandler handler = FirewallRulesChanged;
                 if (handler != null) handler(this, EventArgs.Empty);
@@ -2044,29 +2525,40 @@ namespace TarkovServerReporter
 
             if (result.Cancelled)
             {
-                SetBusy(false, result.ErrorMessage);
+                SetBusy(false, LocalizeExternalError(
+                    result.ErrorMessage,
+                    "관리자 권한 요청이 취소되었습니다."));
                 return;
             }
 
             await RefreshRulesAfterChangeAsync();
             if (result.Success)
             {
-                _statusLabel.ForeColor = metadataRemoved ? Success : Color.FromArgb(231, 184, 73);
-                _statusLabel.Text = metadataRemoved
-                    ? string.Format("{0}개 서버의 차단을 해제했습니다.", succeeded)
-                    : string.Format("{0}개 서버를 해제했지만 로컬 표시 정보 정리에 실패했습니다.", succeeded);
+                bool localMetadataRemoved = metadataRemoved && partyMetadataRemoved;
+                _statusLabel.ForeColor = localMetadataRemoved
+                    ? Success
+                    : Color.FromArgb(231, 184, 73);
+                _statusLabel.Text = localMetadataRemoved
+                    ? AppText.Format("BlockedServers.Unblock.Succeeded", succeeded)
+                    : AppText.Format(
+                        "BlockedServers.Unblock.SucceededCleanupFailed", succeeded);
                 return;
             }
 
             IList<FirewallBatchItemResult> failed = result.Items.Where(item => !item.Success).ToList();
             string failureDetail = string.Join(", ", failed.Take(3).Select(item => item.IpAddress));
-            if (failed.Count > 3) failureDetail += " 외 " + (failed.Count - 3) + "개";
+            if (failed.Count > 3)
+                failureDetail += AppText.Format(
+                    "BlockedServers.Unblock.More", failed.Count - 3);
             _statusLabel.ForeColor = Danger;
             _statusLabel.Text = succeeded > 0
-                ? string.Format("{0}개 해제, {1}개 실패: {2}", succeeded, failed.Count, failureDetail)
-                : (result.ErrorMessage ?? "차단 해제를 완료하지 못했습니다.");
-            if (succeeded > 0 && !metadataRemoved)
-                _statusLabel.Text += " · 로컬 표시 정보 정리 실패";
+                ? AppText.Format(
+                    "BlockedServers.Unblock.Partial", succeeded, failed.Count, failureDetail)
+                : LocalizeExternalError(
+                    result.ErrorMessage,
+                    "BlockedServers.Unblock.Failed");
+            if (succeeded > 0 && (!metadataRemoved || !partyMetadataRemoved))
+                _statusLabel.Text += AppText.Get(" · 로컬 표시 정보 정리 실패");
         }
 
         private async Task RefreshRulesAfterChangeAsync()
@@ -2111,19 +2603,17 @@ namespace TarkovServerReporter
             int count = _grid == null ? 0 : _grid.Rows.Count;
             int selectedCount = count == 0 ? 0 : GetSelectedAddresses().Count;
             bool hasSelected = !_busy && selectedCount > 0;
-            _selectedCountLabel.Text = string.Format("선택 {0}개", selectedCount);
+            _selectedCountLabel.Text = AppText.Format(
+                "BlockedServers.Selection.Count", selectedCount);
             _selectedCountLabel.ForeColor = selectedCount > 0 ? Accent : TextMuted;
             _selectedCountLabel.AccessibleName =
-                string.Format("선택된 차단 서버 수: {0}개", selectedCount);
-            _selectedCountLabel.AccessibleDescription = string.Format(
-                "현재 차단 서버 {0}개 중 {1}개가 선택되어 있습니다.",
+                AppText.Format("BlockedServers.Selection.CountA11y", selectedCount);
+            _selectedCountLabel.AccessibleDescription = AppText.Format(
+                "BlockedServers.Selection.Description",
                 count,
                 selectedCount);
-            _grid.AccessibleDescription = string.Format(
-                "선택 체크박스 열에서 차단 해제할 서버를 고릅니다. "
-                    + "현재 차단 서버 {0}개 중 {1}개가 선택되어 있습니다. "
-                    + "선택 열 헤더는 전체 선택 또는 전체 해제하고 Ctrl+A는 전체 선택합니다. "
-                    + "현재 핑은 차단 규칙이 ICMP를 포함한 통신을 막아 차단 중에는 측정할 수 없습니다.",
+            _grid.AccessibleDescription = AppText.Format(
+                "BlockedServers.Selection.GridDescription",
                 count,
                 selectedCount);
             var selectionHeader = _grid.Columns["selected"].HeaderCell
@@ -2154,6 +2644,10 @@ namespace TarkovServerReporter
                 : Border;
             _exportButton.Enabled = !_busy && count > 0;
             _importButton.Enabled = !_busy;
+            _partyAddButton.Enabled = !_busy && _partyStoreAvailable;
+            _partyReleaseButton.Enabled = !_busy
+                && _partyStoreAvailable
+                && _partyBundleCount > 0;
             _closeButton.Enabled = !_busy;
         }
     }
