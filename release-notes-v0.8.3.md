@@ -3,13 +3,17 @@
 <details>
 <summary><strong>English — Overview, download, release notes and features</strong></summary>
 
-Tarkov Server Guard (TSG) is a free Windows app for reviewing servers you have connected to and blocking those with recurring connection problems. It also helps you browse EFT and Arena raid history and keep notes.
+**You wait to get into a raid, only for a ping spike to get you kicked.** The time you spent preparing and queuing, and the gear you brought in, can be lost in an instant.
+
+Even within the same selected region, you can connect to different server IPs with different connection quality.
+
+**Tarkov Server Guard (TSG) is a free Windows app built to help reduce the time and gear lost to repeated high-ping kicks.** It uses EFT and Arena logs to review past connections, helping you identify servers with recurring problems and block further connections to them.
 
 **v0.8.3 has a Korean interface.** The following is English documentation for this release.
 
 ## At a glance
 
-- **Check and block servers** — Compare servers from your connection history and block those you want to avoid.
+- **Reduce high-ping kick risk** — Compare ping and packet loss, then block problematic servers to prevent further connections to them.
 - **Browse raid history** — Look up past EFT and Arena raids and their connection results.
 - **Keep your notes** — Save raid and player-report notes, even after the game logs are deleted.
 
@@ -58,11 +62,15 @@ This is not an official tool from Battlestate Games or Escape from Tarkov.
 
 </details>
 
-타르코프에서 접속했던 서버의 품질을 확인하고, 문제가 반복되는 서버를 골라 차단하는 무료 Windows 프로그램입니다. EFT와 아레나의 레이드 기록과 메모도 함께 관리할 수 있습니다.
+**한참 기다려 들어간 레이드에서 핑이 치솟고, 결국 강제로 연결이 끊기는 순간.** 들인 시간도, 챙겨 간 장비도 허무하게 잃을 수 있습니다.
+
+같은 서버 지역을 선택해도 실제 접속하는 서버 IP는 여럿이고, 연결 품질도 다를 수 있습니다.
+
+**타르코프 서버 가드(TSG)는 핑킥으로 반복되는 시간·장비 손실을 줄이고 싶어 만든 무료 Windows 프로그램입니다.** EFT·아레나의 게임 로그로 지난 접속 기록을 살펴보고, 문제가 반복되는 서버를 골라 차단해 같은 서버로 다시 연결되는 것을 막을 수 있습니다.
 
 ## 핵심 기능
 
-- **서버 품질 확인·차단** — 접속했던 서버를 비교하고, 다시 연결하고 싶지 않은 서버를 차단합니다.
+- **핑킥 위험 줄이기** — 핑·패킷 손실을 비교해 문제가 반복되는 서버를 차단하고, 같은 서버에 다시 접속하는 것을 막습니다.
 - **레이드 기록 조회** — EFT·아레나의 지난 레이드와 연결 결과를 찾아봅니다.
 - **메모 보관** — 레이드·신고 메모를 남기고, 게임 로그를 지운 뒤에도 확인합니다.
 

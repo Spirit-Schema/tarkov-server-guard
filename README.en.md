@@ -6,13 +6,17 @@
   <img src="assets/branding/tarkov-server-guard-tsg-icon-master.png" width="128" alt="Tarkov Server Guard shield logo">
 </p>
 
-Tarkov Server Guard (TSG) is a free Windows app for reviewing servers you have connected to and blocking those with recurring connection problems. It also helps you browse EFT and Arena raid history and keep notes.
+**You wait to get into a raid, only for a ping spike to get you kicked.** The time you spent preparing and queuing, and the gear you brought in, can be lost in an instant.
+
+Even within the same selected region, you can connect to different server IPs with different connection quality.
+
+**Tarkov Server Guard (TSG) is a free Windows app built to help reduce the time and gear lost to repeated high-ping kicks.** It uses EFT and Arena logs to review past connections, helping you identify servers with recurring problems and block further connections to them.
 
 Current public release: **v0.8.3**. The app interface is in Korean; this page provides English instructions.
 
 ## At a glance
 
-- **Check and block servers** — Compare servers from your connection history and block those you want to avoid.
+- **Reduce high-ping kick risk** — Compare ping and packet loss, then block problematic servers to prevent further connections to them.
 - **Browse raid history** — Look up past EFT and Arena raids and their connection results.
 - **Keep your notes** — Save raid and player-report notes, even after the game logs are deleted.
 
