@@ -12,7 +12,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 창 크기·열 너비 기억은 임시 저장소로 검증하며 실제 사용자 설정을 사용하지 않습니다. 열 너비는 세 목록과 두 언어별로 검증하고, 실제 WinForms 드래그 완료·취소·재실행 및 화면 배율 변경 계산을 확인합니다. 작은 화면에서 창 전체가 화면에 들어오는지와 전체 스크롤로 하단에 접근 가능한지도 검사합니다.
 
-검증된 실행본을 다시 빌드하지 않고 로컬 배포 패키지를 만들려면 `package-release.ps1 -VerifiedBuildDirectory .\build\release-v0.8.5`를 사용합니다. 입력 해시·실행본·검사 완료 기록이 일치해야 재사용하며, 실제 업데이트 런타임 검사는 패키징 시 별도로 실행합니다. `tools\Test-OfflineReleaseUpdate.ps1`는 공식 0.8.3 패키지와 로컬 후보의 업데이트 탐지·다운로드·손상 패키지 거절을 검증합니다. 실제 설치본 교체와 재실행 검수는 별도입니다.
+검증된 실행본을 다시 빌드하지 않고 로컬 배포 패키지를 만들려면 `package-release.ps1 -VerifiedBuildDirectory .\build\release-v0.8.6`를 사용합니다. 입력 해시·실행본·검사 완료 기록이 일치해야 재사용하며, 실제 업데이트 런타임 검사는 패키징 시 별도로 실행합니다. `tools\Test-OfflineReleaseUpdate.ps1`는 공식 0.8.3 패키지와 로컬 후보의 업데이트 탐지·다운로드·손상 패키지 거절을 검증합니다. 실제 설치본 교체와 재실행 검수는 별도입니다.
 
 테스트 범위에는 로그 캐시 무효화·부분 읽기·큰 파일 스트리밍, 메모 동시 저장·손상 복구·엄격한 백업, 보관함 검색과 숨겨진 선택 보호, 차단 완료 후 지연 분석의 상태 보호, 파티 소유권 저장 실패를 포함합니다. 기존 회귀에는 합성 EFT·Arena·런처 로그, EFT 캐릭터·솔로/파티·파티 인원 판정, 실게임 지표 상태와 최근 레이드 차단 근거, 차단현황 표시, Arena 지역 설정, 기간 경계, 방화벽 입력, 메모 저장·통합 백업·없는 항목만 복원, MMDB 파싱·월간 갱신·손상 복구와 GitHub 업데이트 판단이 포함됩니다.
 
@@ -58,10 +58,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -OutputDirec
 
 시험 구현했던 Build ID·provenance, 공개 자산 재다운로드 검증과 최종 배포물 전용 민감정보 검사는 현재 빌드·패키징·배포 절차에서 제외했습니다. 관련 시험 자료와 재도입 조건은 공개 저장소 밖의 로컬 보류 영역에만 보존합니다.
 
-## v0.8.5 배포 패키지
+## v0.8.6 배포 패키지
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package-release.ps1 -Version 0.8.5
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package-release.ps1 -Version 0.8.6
 ```
 
 패키징에는 .NET 8 런타임이 필요합니다. 스크립트는 SHA-256으로 고정 검증한 Velopack 1.2.0과 Newtonsoft.Json 13.0.4를 빌드 캐시에 준비하고 런타임 연결 테스트 후 다음 결과를 생성합니다.

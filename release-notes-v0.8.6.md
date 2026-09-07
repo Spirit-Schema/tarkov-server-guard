@@ -1,7 +1,7 @@
-# Tarkov Server Guard v0.8.5
+# Tarkov Server Guard v0.8.6
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Spirit-Schema/tarkov-server-guard/v0.8.5/assets/branding/tarkov-server-guard-tsg-icon-master.png" width="128" alt="Tarkov Server Guard logo">
+  <img src="https://raw.githubusercontent.com/Spirit-Schema/tarkov-server-guard/v0.8.6/assets/branding/tarkov-server-guard-tsg-icon-master.png" width="128" alt="Tarkov Server Guard logo">
 </p>
 
 <details>
@@ -21,7 +21,7 @@ I started building this free Windows app to stop those situations where your pin
 
 It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
-Current public release: **v0.8.5**. Choose Korean or English in Settings.
+Current public release: **v0.8.6**. Choose Korean or English in Settings.
 
 <br>
 
@@ -37,16 +37,22 @@ Current public release: **v0.8.5**. Choose Korean or English in Settings.
 
 ## Download
 
-- **[Download installer — recommended](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.5/SpiritSchema.TarkovServerGuard-win-Setup.exe)**
-- [Download Portable ZIP — no installation](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.5/SpiritSchema.TarkovServerGuard-win-Portable.zip)
+- **[Download installer — recommended](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.6/SpiritSchema.TarkovServerGuard-win-Setup.exe)**
+- [Download Portable ZIP — no installation](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.6/SpiritSchema.TarkovServerGuard-win-Portable.zip)
 
 Windows 10/11 · .NET Framework 4.8. For Portable, extract the ZIP and keep its files together. Both editions support updates after your confirmation.
 
-The executable is unsigned, so Windows may show an unknown-publisher warning. Use the official downloads above; [SHA-256 checksums](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.5/SHA256SUMS.txt) are available.
+The executable is unsigned, so Windows may show an unknown-publisher warning. Use the official downloads above; [SHA-256 checksums](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.6/SHA256SUMS.txt) are available.
 
 <br>
 
 ## What's new
+
+**0.8.6 hotfix**
+
+- Added a step-by-step usage guide to Add Party IPs.
+
+**Also included: the 0.8.5 update**
 
 Changes since 0.8.3:
 
@@ -165,7 +171,7 @@ Developer · Spirit-Schema
 
 타르코프와 아레나의 공식 로그를 자동으로 읽어 지금까지 접속했던 서버의 품질과 레이드 기록을 한 화면에서 확인하고 관리할 수 있습니다.
 
-현재 공개 버전: **v0.8.5**
+현재 공개 버전: **v0.8.6**
 
 <br>
 
@@ -181,16 +187,22 @@ Developer · Spirit-Schema
 
 ## 다운로드
 
-- **[설치형 다운로드 — 권장](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.5/SpiritSchema.TarkovServerGuard-win-Setup.exe)**
-- [포터블 ZIP 다운로드 — 설치 없이 사용](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.5/SpiritSchema.TarkovServerGuard-win-Portable.zip)
+- **[설치형 다운로드 — 권장](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.6/SpiritSchema.TarkovServerGuard-win-Setup.exe)**
+- [포터블 ZIP 다운로드 — 설치 없이 사용](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.6/SpiritSchema.TarkovServerGuard-win-Portable.zip)
 
 Windows 10·11 / .NET Framework 4.8이 필요합니다. 포터블은 압축을 풀고 폴더 안의 파일 구성을 유지해 주세요. 두 방식 모두 사용자 확인 후 업데이트할 수 있습니다.
 
-현재 실행 파일에는 코드 서명이 없어 Windows에서 ‘알 수 없는 게시자’ 안내가 표시될 수 있습니다. 위 공식 링크에서 받고, [SHA-256 확인 파일](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.5/SHA256SUMS.txt)로 검증할 수 있습니다.
+현재 실행 파일에는 코드 서명이 없어 Windows에서 ‘알 수 없는 게시자’ 안내가 표시될 수 있습니다. 위 공식 링크에서 받고, [SHA-256 확인 파일](https://github.com/Spirit-Schema/tarkov-server-guard/releases/download/v0.8.6/SHA256SUMS.txt)로 검증할 수 있습니다.
 
 <br>
 
 ## 이번 업데이트 내역
+
+**0.8.6 핫픽스**
+
+- 파티 IP 추가 창에 단계별 사용방법 안내를 추가했습니다.
+
+**함께 포함된 0.8.5 업데이트**
 
 0.8.3 이후의 변경 사항을 한 번에 담았습니다.
 

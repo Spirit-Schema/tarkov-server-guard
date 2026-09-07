@@ -72,6 +72,7 @@ namespace TarkovServerReporter
         private readonly Label _summaryLabel;
         private readonly Button _previewButton;
         private readonly Button _applyButton;
+        private readonly Button _helpButton;
         private IList<PartyBlockInputPreviewItem> _previewItems =
             new List<PartyBlockInputPreviewItem>();
         private string _previewedInput;
@@ -106,6 +107,22 @@ namespace TarkovServerReporter
             Controls.Add(root);
 
             var header = new Panel { Dock = DockStyle.Fill, BackColor = Background };
+            _helpButton = MainForm.CreateUsageGuideButton();
+            _helpButton.Name = "PartyUsageGuideButton";
+            _helpButton.AccessibleName = AppText.Get("PartyHelp.Title");
+            _helpButton.Click += delegate
+            {
+                using (var help = new PartyBlockHelpForm()) help.ShowDialog(this);
+            };
+            header.Controls.Add(_helpButton);
+            EventHandler positionHelp = delegate
+            {
+                _helpButton.Width = Math.Max(_helpButton.Width, _helpButton.GetPreferredSize(Size.Empty).Width);
+                _helpButton.Location = new Point(Math.Max(0, header.ClientSize.Width - _helpButton.Width), 0);
+            };
+            header.Resize += positionHelp;
+            header.HandleCreated += positionHelp;
+            positionHelp(null, EventArgs.Empty);
             header.Controls.Add(new Label
             {
                 AutoSize = true,

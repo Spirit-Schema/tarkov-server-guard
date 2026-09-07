@@ -45,7 +45,7 @@ $appSourceNames = @(
     'GitHubUpdateService.cs', 'ReleaseNotesService.cs', 'UpdatePromptForm.cs', 'PatchNotesForm.cs',
     'UsageNoticeForm.cs', 'LicenseForm.cs', 'ArenaBlockWarningForm.cs', 'FirewallRuleManager.cs',
     'BlockedServerMetadataStore.cs', 'BlockedServerBackup.cs', 'BlockedServerRestorePreviewForm.cs',
-    'PartyBlockBundleStore.cs', 'PartyBlockInputForm.cs', 'PartyBlockBundleReleaseForm.cs', 'BlockedServersForm.cs',
+    'PartyBlockBundleStore.cs', 'PartyBlockInputForm.cs', 'PartyBlockHelpForm.cs', 'PartyBlockBundleReleaseForm.cs', 'BlockedServersForm.cs',
     'PingKickActionCell.cs', 'RaidNoteStore.cs', 'RaidNoteForm.cs', 'MemoArchiveBackup.cs',
     'MemoArchiveRestorePreviewForm.cs', 'RaidNoteArchiveForm.cs', 'UserReportMemoStore.cs', 'UserReportMemoForm.cs',
     'DbIpLiteMmdbReader.cs', 'DbIpLiteGeoService.cs', 'ServerReportCore.cs', 'RaidQualityEvidence.cs', 'TarkovLogServices.cs'
@@ -111,7 +111,7 @@ try {
     $inputPaths = @($appSources) + @(
         $PSCommandPath, (Join-Path $projectRoot 'tools\BuildHarness.ps1'), (Join-Path $projectRoot 'tools\BuildProcessJob.cs'), $appIcon,
         (Join-Path $projectRoot 'package-release.ps1'), (Join-Path $projectRoot 'tools\ReleaseVerification.ps1'),
-        (Join-Path $projectRoot 'tools\Test-OfflineReleaseUpdate.ps1'), (Join-Path $projectRoot 'release-notes-v0.8.5.md'),
+        (Join-Path $projectRoot 'tools\Test-OfflineReleaseUpdate.ps1'), (Join-Path $projectRoot 'release-notes-v0.8.6.md'),
         (Join-Path $projectRoot 'README.md'), (Join-Path $projectRoot 'README.en.md'), (Join-Path $projectRoot 'PRIVACY.md'), (Join-Path $projectRoot 'DEVELOPMENT.md'),
         (Join-Path $projectRoot 'app.manifest'), (Join-Path $projectRoot 'app.config'),
         (Join-Path $projectRoot 'LICENSE'), (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md')

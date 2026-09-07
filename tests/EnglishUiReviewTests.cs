@@ -205,6 +205,51 @@ namespace TarkovServerReporter.Tests
                         Check(preview.Height >= preview.GetPreferredSize(Size.Empty).Height,
                             "The IP preview button fits its text and border: " + language);
                         Capture(localized, "party-preview-" + language);
+                        var helpButton = (Button)localized.GetType().GetField("_helpButton", Instance).GetValue(localized);
+                        Check(helpButton.Parent.ClientRectangle.Contains(helpButton.Bounds)
+                            && helpButton.Width >= helpButton.GetPreferredSize(Size.Empty).Width,
+                            "Party usage guide button fits the minimum window: " + language);
+                        bool opened = false;
+                        using (var timer = new System.Windows.Forms.Timer { Interval = 50 })
+                        {
+                            timer.Tick += delegate
+                            {
+                                Form help = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.GetType().Name == "PartyBlockHelpForm");
+                                if (help == null) return;
+                                timer.Stop();
+                                opened = true;
+                                try
+                                {
+                                    var body = Descendants(help).OfType<RichTextBox>().Single();
+                                    Check(body.ReadOnly && body.WordWrap && body.ScrollBars == RichTextBoxScrollBars.Vertical,
+                                        "Guide text is read-only and scrollable: " + language);
+                                    Check(body.Text.Contains(language == "en" ? "Remove Party Blocks" : "파티 차단 해제")
+                                        && body.Text.Contains(language == "en" ? "personal blocks" : "개인적으로 차단"),
+                                        "Guide includes removal steps and personal block preservation: " + language);
+                                    help.Size = help.MinimumSize;
+                                    Application.DoEvents();
+                                    Capture(help, "party-help-" + language);
+                                    body.SelectionStart = body.TextLength;
+                                    body.ScrollToCaret();
+                                    Capture(help, "party-help-bottom-" + language);
+                                }
+                                finally { help.Close(); }
+                            };
+                            timer.Start();
+                            helpButton.PerformClick();
+                        }
+                        Check(opened && !localized.IsDisposed, "Usage button opens a dismissible guide without closing the input form: " + language);
+                    }
+                    using (Form license = NewForm("LicenseForm"))
+                    {
+                        license.StartPosition = FormStartPosition.Manual;
+                        license.Location = new Point(-16000, -16000);
+                        license.Show();
+                        license.Size = license.MinimumSize;
+                        Application.DoEvents();
+                        Check(Descendants(license).OfType<Label>().Any(l => l.Text.Contains(language == "en" ? "Future features" : "향후 추가되는 기능")),
+                            "License summary includes the current-release free-use scope: " + language);
+                        Capture(license, "license-scope-" + language);
                     }
                 }
             }

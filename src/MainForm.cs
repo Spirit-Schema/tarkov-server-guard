@@ -897,81 +897,7 @@ namespace TarkovServerReporter
             };
             panel.Controls.Add(title);
 
-            var usageNoticeButton = new Button
-            {
-                AutoSize = false,
-                Text = AppText.Get("Main.Button.UsageGuide"),
-                Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
-                ForeColor = Accent,
-                BackColor = Background,
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
-                TabStop = true,
-                Padding = new Padding(0),
-                Margin = new Padding(0)
-            };
-            Size usageNoticeTextSize = TextRenderer.MeasureText(
-                usageNoticeButton.Text,
-                usageNoticeButton.Font,
-                Size.Empty,
-                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-            usageNoticeButton.Size = new Size(usageNoticeTextSize.Width + 20, 28);
-            usageNoticeButton.FlatAppearance.BorderSize = 0;
-            usageNoticeButton.UseVisualStyleBackColor = false;
-            bool usageNoticeHovered = false;
-            bool usageNoticePressed = false;
-            usageNoticeButton.MouseEnter += delegate
-            {
-                usageNoticeHovered = true;
-                usageNoticeButton.Invalidate();
-            };
-            usageNoticeButton.MouseLeave += delegate
-            {
-                usageNoticeHovered = false;
-                usageNoticePressed = false;
-                usageNoticeButton.Invalidate();
-            };
-            usageNoticeButton.MouseDown += delegate(object sender, MouseEventArgs args)
-            {
-                if (args.Button != MouseButtons.Left) return;
-                usageNoticePressed = true;
-                usageNoticeButton.Invalidate();
-            };
-            usageNoticeButton.MouseUp += delegate
-            {
-                usageNoticePressed = false;
-                usageNoticeButton.Invalidate();
-            };
-            usageNoticeButton.Paint += delegate(object sender, PaintEventArgs args)
-            {
-                args.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                args.Graphics.Clear(Background);
-                int scaleOne = Math.Max(1, (int)Math.Round(usageNoticeButton.DeviceDpi / 96F));
-                int pressedOffset = usageNoticePressed ? scaleOne : 0;
-                Rectangle chipBounds = new Rectangle(
-                    scaleOne,
-                    scaleOne + pressedOffset,
-                    Math.Max(1, usageNoticeButton.ClientSize.Width - (scaleOne * 2) - 1),
-                    Math.Max(1, usageNoticeButton.ClientSize.Height - (scaleOne * 2) - 1));
-                using (GraphicsPath chip = CreateRoundedRectanglePath(
-                    chipBounds,
-                    Math.Max(6, (int)Math.Round(6F * usageNoticeButton.DeviceDpi / 96F))))
-                using (var fill = new SolidBrush(
-                    usageNoticePressed ? Surface : usageNoticeHovered ? SurfaceAlt : Background))
-                using (var outline = new Pen(
-                    usageNoticeHovered ? AccentHover : Color.FromArgb(160, Accent),
-                    scaleOne))
-                {
-                    args.Graphics.FillPath(fill, chip);
-                    args.Graphics.DrawPath(outline, chip);
-                }
-                Rectangle textBounds = chipBounds;
-                textBounds.Offset(0, pressedOffset);
-                TextRenderer.DrawText(args.Graphics, usageNoticeButton.Text, usageNoticeButton.Font,
-                    textBounds, usageNoticeHovered ? AccentHover : Accent,
-                    TextFormatFlags.NoPadding | TextFormatFlags.HorizontalCenter
-                    | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
-            };
+            var usageNoticeButton = CreateUsageGuideButton();
             EventHandler positionUsageNoticeButton = delegate
             {
                 Size currentTitleTextSize = TextRenderer.MeasureText(
@@ -1117,6 +1043,86 @@ namespace TarkovServerReporter
                 Margin = new Padding(2, 4, 2, 0),
                 Padding = new Padding(0)
             };
+        }
+
+        internal static Button CreateUsageGuideButton()
+        {
+            var usageNoticeButton = new Button
+            {
+                AutoSize = false,
+                Text = AppText.Get("Main.Button.UsageGuide"),
+                Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold),
+                ForeColor = Accent,
+                BackColor = Background,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                TabStop = true,
+                Padding = new Padding(0),
+                Margin = new Padding(0)
+            };
+            Size usageNoticeTextSize = TextRenderer.MeasureText(
+                usageNoticeButton.Text,
+                usageNoticeButton.Font,
+                Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            usageNoticeButton.Size = new Size(usageNoticeTextSize.Width + 20, 28);
+            usageNoticeButton.FlatAppearance.BorderSize = 0;
+            usageNoticeButton.UseVisualStyleBackColor = false;
+            bool usageNoticeHovered = false;
+            bool usageNoticePressed = false;
+            usageNoticeButton.MouseEnter += delegate
+            {
+                usageNoticeHovered = true;
+                usageNoticeButton.Invalidate();
+            };
+            usageNoticeButton.MouseLeave += delegate
+            {
+                usageNoticeHovered = false;
+                usageNoticePressed = false;
+                usageNoticeButton.Invalidate();
+            };
+            usageNoticeButton.MouseDown += delegate(object sender, MouseEventArgs args)
+            {
+                if (args.Button != MouseButtons.Left) return;
+                usageNoticePressed = true;
+                usageNoticeButton.Invalidate();
+            };
+            usageNoticeButton.MouseUp += delegate
+            {
+                usageNoticePressed = false;
+                usageNoticeButton.Invalidate();
+            };
+            usageNoticeButton.Paint += delegate(object sender, PaintEventArgs args)
+            {
+                args.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                args.Graphics.Clear(Background);
+                int scaleOne = Math.Max(1, (int)Math.Round(usageNoticeButton.DeviceDpi / 96F));
+                int pressedOffset = usageNoticePressed ? scaleOne : 0;
+                Rectangle chipBounds = new Rectangle(
+                    scaleOne,
+                    scaleOne + pressedOffset,
+                    Math.Max(1, usageNoticeButton.ClientSize.Width - (scaleOne * 2) - 1),
+                    Math.Max(1, usageNoticeButton.ClientSize.Height - (scaleOne * 2) - 1));
+                using (GraphicsPath chip = CreateRoundedRectanglePath(
+                    chipBounds,
+                    Math.Max(6, (int)Math.Round(6F * usageNoticeButton.DeviceDpi / 96F))))
+                using (var fill = new SolidBrush(
+                    usageNoticePressed ? Surface : usageNoticeHovered ? SurfaceAlt : Background))
+                using (var outline = new Pen(
+                    usageNoticeHovered ? AccentHover : Color.FromArgb(160, Accent),
+                    scaleOne))
+                {
+                    args.Graphics.FillPath(fill, chip);
+                    args.Graphics.DrawPath(outline, chip);
+                }
+                Rectangle textBounds = chipBounds;
+                textBounds.Offset(0, pressedOffset);
+                TextRenderer.DrawText(args.Graphics, usageNoticeButton.Text, usageNoticeButton.Font,
+                    textBounds, usageNoticeHovered ? AccentHover : Accent,
+                    TextFormatFlags.NoPadding | TextFormatFlags.HorizontalCenter
+                    | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            };
+            return usageNoticeButton;
         }
 
         private Button CreateHeaderLinkButton(string text, string toolTip)

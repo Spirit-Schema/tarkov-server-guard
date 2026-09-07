@@ -83,6 +83,14 @@ namespace TarkovServerReporter.Tests
                 "The translated completion notes omit an item.");
             Assert(ReleaseNotesCatalog.FindBundled(_currentVersion) != null,
                 "The test and actual application catalogs do not share the current version.");
+            if (_currentVersion == "0.8.6")
+            {
+                Assert(korean.Contains("핫픽스") && korean.Contains("단계별 사용방법")
+                    && english.Contains("hotfix") && english.Contains("step-by-step usage guide"),
+                    "Hotfix completion notes must retain cumulative notes and include the new party guide.");
+                Assert(ReleaseNotesCatalog.FindBundled("0.8.5") != null,
+                    "The previous public release notes remain available.");
+            }
         }
 
         private static string GetApplicationNotes(object entry, string language)

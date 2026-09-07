@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
+// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -59,7 +59,7 @@ namespace TarkovServerReporter
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute,
-                AppText.CurrentLanguage == AppText.EnglishLanguage ? 190F : 150F));
+                AppText.CurrentLanguage == AppText.EnglishLanguage ? 230F : 210F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));

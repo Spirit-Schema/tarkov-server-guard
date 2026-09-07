@@ -20,7 +20,7 @@ I started building this free Windows app to stop those situations where your pin
 
 It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
-Current public release: **v0.8.5**. Choose Korean or English in Settings.
+Current public release: **v0.8.6**. Choose Korean or English in Settings.
 
 <br>
 
@@ -46,6 +46,12 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 <br>
 
 ## What's new
+
+**0.8.6 hotfix**
+
+- Added a step-by-step usage guide to Add Party IPs.
+
+**Also included: the 0.8.5 update**
 
 Changes since 0.8.3:
 
