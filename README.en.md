@@ -16,13 +16,9 @@ All the servers you've selected...<br> For example, even within US West or China
 
 ### Tarkov Server Guard
 
-I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
+I started building this free Windows app to stop those situations where your ping spikes after you enter a raid, you get kicked, and you lose your time and gear.
 
-<br>
-
-It automatically reads the official Tarkov and Arena logs,<br> so you can view and manage the quality of servers you've connected to and your raid history on one screen.
-
-<br>
+It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
 Current public release: **v0.8.3**. The app interface is in Korean; this page provides English instructions.
 
@@ -30,19 +26,11 @@ Current public release: **v0.8.3**. The app interface is in Korean; this page pr
 
 ## At a glance
 
-- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers,<br> reduce the risk of high-ping kicks and prevent the resulting gear loss.
+- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers, reduce the risk of high-ping kicks and prevent the resulting gear loss.<br> (In EFT, if you are assigned to a blocked server, TSG prevents the connection. You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
 
-  (In EFT, if you are assigned to a blocked server, TSG prevents the connection.<br> You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
+- Review maps, game modes, server allocation, connection results and report activity from past EFT and Arena raids by date range.
 
-  <br>
-
-- Review maps, game modes, server allocation, connection results and report activity<br> from past EFT and Arena raids by date range.
-
-  <br>
-
-- Save raid notes, player-report notes, tags and screenshot paths,<br> and find them again in the note archive even after the game logs are deleted.
-
-  (Report activity is available, but reported players' nicknames cannot be retrieved.<br> Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
+- Save raid notes, player-report notes, tags and screenshot paths, and find them again in the note archive even after the game logs are deleted.<br> (Report activity is available, but reported players' nicknames cannot be retrieved. Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
 
 <br>
 

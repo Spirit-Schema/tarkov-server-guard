@@ -13,13 +13,9 @@ All the servers you've selected...<br> For example, even within US West or China
 
 ### Tarkov Server Guard
 
-I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
+I started building this free Windows app to stop those situations where your ping spikes after you enter a raid, you get kicked, and you lose your time and gear.
 
-<br>
-
-It automatically reads the official Tarkov and Arena logs,<br> so you can view and manage the quality of servers you've connected to and your raid history on one screen.
-
-<br>
+It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
 **v0.8.3 has a Korean interface.** The following is English documentation for this release.
 
@@ -27,19 +23,11 @@ It automatically reads the official Tarkov and Arena logs,<br> so you can view a
 
 ## At a glance
 
-- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers,<br> reduce the risk of high-ping kicks and prevent the resulting gear loss.
+- Compare current ping, in-game ping (RTT) and packet loss to block only poor-quality servers, reduce the risk of high-ping kicks and prevent the resulting gear loss.<br> (In EFT, if you are assigned to a blocked server, TSG prevents the connection. You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
 
-  (In EFT, if you are assigned to a blocked server, TSG prevents the connection.<br> You can select `나가기 확인` (Confirm exit) right away and keep your gear.)
+- Review maps, game modes, server allocation, connection results and report activity from past EFT and Arena raids by date range.
 
-  <br>
-
-- Review maps, game modes, server allocation, connection results and report activity<br> from past EFT and Arena raids by date range.
-
-  <br>
-
-- Save raid notes, player-report notes, tags and screenshot paths,<br> and find them again in the note archive even after the game logs are deleted.
-
-  (Report activity is available, but reported players' nicknames cannot be retrieved.<br> Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
+- Save raid notes, player-report notes, tags and screenshot paths, and find them again in the note archive even after the game logs are deleted.<br> (Report activity is available, but reported players' nicknames cannot be retrieved. Click the `유저신고` text to write a player-report note, or the yellow note speech bubble to write a raid note.)
 
 <br>
 
@@ -110,31 +98,19 @@ This is not an official tool from Battlestate Games or Escape from Tarkov.
 
 ### 타르코프 서버 가드
 
-레이드에 들어간 뒤 핑이 튀어서 강제로 쫓겨나<br> 시간과 장비를 잃어버리는 상황을 없애려고 만들기 시작한 무료 Windows 프로그램입니다.
+레이드에 들어간 뒤 핑이 튀어서 강제로 쫓겨나 시간과 장비를 잃어버리는 상황을 없애려고 만들기 시작한 무료 Windows 프로그램입니다.
 
-<br>
-
-타르코프와 아레나의 공식 로그를 자동으로 읽어<br> 지금까지 접속했던 서버의 품질과 레이드 기록을 한 화면에서 확인하고 관리할 수 있습니다.
-
-<br>
+타르코프와 아레나의 공식 로그를 자동으로 읽어 지금까지 접속했던 서버의 품질과 레이드 기록을 한 화면에서 확인하고 관리할 수 있습니다.
 
 <br>
 
 ## 핵심 기능
 
-- 현재 핑·실게임 핑(RTT)·패킷 손실을 비교해 품질이 좋지 않은 서버만 골라 차단하여<br> 핑킥 위험을 줄이고, 그로 인한 장비 손실을 막아줍니다.
+- 현재 핑·실게임 핑(RTT)·패킷 손실을 비교해 품질이 좋지 않은 서버만 골라 차단하여 핑킥 위험을 줄이고, 그로 인한 장비 손실을 막아줍니다.<br> (EFT에서 차단한 서버에 배정되면 해당 서버로의 접속을 막아주며, 바로 `나가기 확인`을 눌러도 장비가 보존됩니다.)
 
-  (EFT에서 차단한 서버에 배정되면 해당 서버로의 접속을 막아주며,<br> 바로 `나가기 확인`을 눌러도 장비가 보존됩니다.)
+- EFT·아레나 과거 레이드의 맵·게임 유형·서버 배정·연결 결과·신고 기록을 기간별로 확인할 수 있습니다.
 
-  <br>
-
-- EFT·아레나 과거 레이드의 맵·게임 유형·서버 배정·연결 결과·신고 기록을<br> 기간별로 확인할 수 있습니다.
-
-  <br>
-
-- 레이드 메모·신고 유저 메모·태그·스크린샷(경로)를 저장하고,<br> 로그 삭제 후에도 메모 보관함에서 다시 확인할 수 있습니다.
-
-  (신고 기록은 조회할 수 있지만 닉네임은 조회할 수 없습니다.<br> 신고 메모는 `유저신고` 텍스트를, 레이드 메모는 노란색 메모 말풍선을 클릭해 작성합니다.)
+- 레이드 메모·신고 유저 메모·태그·스크린샷(경로)를 저장하고, 로그 삭제 후에도 메모 보관함에서 다시 확인할 수 있습니다.<br> (신고 기록은 조회할 수 있지만 닉네임은 조회할 수 없습니다. 신고 메모는 `유저신고` 텍스트를, 레이드 메모는 노란색 메모 말풍선을 클릭해 작성합니다.)
 
 <br>
 
