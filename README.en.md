@@ -84,7 +84,7 @@ The in-app guide is available through `사용방법` (Usage guide). See [Trouble
 
 TSG analyzes game logs on your PC and does not send raw logs, account data, session IDs or local paths to external services. Notes and settings stay on your PC. Ping checks, location-database downloads and GitHub update checks use the network.
 
-> **Scope of free use:** All features in the current release are free for personal, non-commercial use. Future features or separate services may be offered for a fee, with their terms clearly stated when released.
+> **Scope of free use:** All features in the current release are free for personal, non-commercial use. Future features or separate services may be offered for a fee.
 
 The source is available for inspection, but this is not open-source software. Redistribution, distribution of modified versions, sale and commercial use require permission.
 
