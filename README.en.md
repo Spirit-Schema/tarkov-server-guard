@@ -14,7 +14,7 @@ All the servers you've selected...<br> For example, even within US West or China
 
 <br><br><br><br><br><br>
 
-### [Tarkov Server Guard]
+### Tarkov Server Guard
 
 I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
 

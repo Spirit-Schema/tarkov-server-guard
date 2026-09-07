@@ -11,7 +11,7 @@ All the servers you've selected...<br> For example, even within US West or China
 
 <br><br><br><br><br><br>
 
-### [Tarkov Server Guard]
+### Tarkov Server Guard
 
 I started building this free Windows app to stop those situations where your ping spikes after you enter a raid,<br> you get kicked, and you lose your time and gear.
 
@@ -108,13 +108,13 @@ This is not an official tool from Battlestate Games or Escape from Tarkov.
 
 <br><br><br><br><br><br>
 
-### [타르코프 서버 가드]
+### 타르코프 서버 가드
 
-레이드 들어간 뒤 핑이 튀어서 강제로 쫓겨나<br> 시간과 장비를 잃어버리는 상황을 없애려고 만들기 시작한 무.료 Windows 프로그램임.
+레이드에 들어간 뒤 핑이 튀어서 강제로 쫓겨나<br> 시간과 장비를 잃어버리는 상황을 없애려고 만들기 시작한 무료 Windows 프로그램입니다.
 
 <br>
 
-타르코프와 아레나의 공식 로그를 자동으로 읽어서<br> 지금까지 접속했던 서버 품질과 레이드 기록을 한 화면에서 확인 및 관리 할 수 있음.
+타르코프와 아레나의 공식 로그를 자동으로 읽어<br> 지금까지 접속했던 서버의 품질과 레이드 기록을 한 화면에서 확인하고 관리할 수 있습니다.
 
 <br>
 
