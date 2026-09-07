@@ -31,11 +31,10 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 
 ## Main features
 
+- **Review and manage raid records:** Check maps, game modes, connection results and report activity, and keep notes, tags and screenshot links alongside your records.
+- **History filters:** Find up to 100 recent records by date range, game and data-center region.
 - **Server comparison:** View current ping, in-game latency (RTT), packet loss, data center and estimated location.
 - **Block-list management:** Add a reason for each block, unblock individual, selected or all entries, and export or import the list. Blocks remain manageable after logs are deleted.
-- **Raid details:** Review maps, game modes, server allocation time, connection results and report activity. EFT also shows character type, party size and season when confirmed by the logs.
-- **History filters:** Find up to 100 recent records by date range, game and data-center region.
-- **Notes and screenshots:** Write raid notes, add tags, and manually record reported players and reasons. Screenshots are linked by file path; the original images are not copied.
 - **Note backup and restore:** Export raid and player-report notes together and restore missing entries without overwriting existing notes. Original screenshot files are not included.
 - **Convenience features:** Detect official-launcher and Steam installations, show the selected server regions, and install app updates after your confirmation.
 

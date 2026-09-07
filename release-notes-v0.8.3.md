@@ -33,11 +33,10 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 
 ## Main features
 
+- **Review and manage raid records:** Check maps, game modes, connection results and report activity, and keep notes, tags and screenshot links alongside your records.
+- **History filters:** Find up to 100 recent records by date range, game and data-center region.
 - **Server comparison:** View current ping, in-game latency (RTT), packet loss, data center and estimated location.
 - **Block-list management:** Add a reason for each block, unblock individual, selected or all entries, and export or import the list. Blocks remain manageable after logs are deleted.
-- **Raid details:** Review maps, game modes, server allocation time, connection results and report activity. EFT also shows character type, party size and season when confirmed by the logs.
-- **History filters:** Find up to 100 recent records by date range, game and data-center region.
-- **Notes and screenshots:** Write raid notes, add tags, and manually record reported players and reasons. Screenshots are linked by file path; the original images are not copied.
 - **Note backup and restore:** Export raid and player-report notes together and restore missing entries without overwriting existing notes. Original screenshot files are not included.
 - **Convenience features:** Detect official-launcher and Steam installations, show the selected server regions, and install app updates after your confirmation.
 
@@ -90,11 +89,10 @@ Windows 10·11 / .NET Framework 4.8이 필요합니다. 포터블은 압축을 �
 
 ## 주요 기능
 
+- **레이드 기록 확인·관리:** 맵·게임 유형·연결·신고 기록을 확인하고, 메모·태그·스크린샷 경로를 함께 관리합니다.
+- **기록 검색:** 기간·게임·데이터센터 지역으로 필터링해 최근 기록을 최대 100개까지 확인합니다.
 - **서버 상태 비교:** 현재 핑, 게임 중 지연(RTT)·패킷 손실, 데이터센터와 추정 지역을 확인합니다.
 - **차단 목록 관리:** 차단 사유 메모, 개별·선택·전체 해제, 목록 내보내기·불러오기를 지원합니다. 로그를 지운 뒤에도 관리할 수 있습니다.
-- **레이드 상세 정보:** 맵·게임 유형·서버 배정 시간·연결 결과·신고 기록을 확인합니다. EFT는 로그로 확인된 캐릭터·파티 인원·시즌도 표시합니다.
-- **기록 검색:** 기간·게임·데이터센터 지역으로 필터링해 최근 기록을 최대 100개까지 확인합니다.
-- **메모와 스크린샷:** 레이드 메모·태그와 신고 대상·사유를 직접 기록합니다. 스크린샷은 원본 파일을 복사하지 않고 경로만 연결합니다.
 - **메모 백업·복원:** 레이드·신고 메모를 함께 내보내고, 기존 메모를 덮어쓰지 않고 빠진 항목만 복원합니다. 스크린샷 원본은 백업에 포함되지 않습니다.
 - **편의 기능:** 공식 런처·Steam 설치 경로 자동 탐색, 게임에서 선택한 서버 지역 표시, 사용자 확인 후 자동 업데이트를 지원합니다.
 
