@@ -4,6 +4,7 @@
 param(
     [string]$Version,
     [string]$VerifiedBuildDirectory,
+    [ValidatePattern('^(-[a-z0-9]+)*$')][string]$ReviewSuffix = '',
     [switch]$SkipTests
 )
 
@@ -25,7 +26,7 @@ $buildRoot = Join-Path $projectRoot 'build'
 $publishRoot = Join-Path $buildRoot ("publish-v" + $Version)
 $releasesRoot = Join-Path $buildRoot ("Releases-v" + $Version)
 $releasesStageRoot = Join-Path $buildRoot ("Releases-v" + $Version + '-staging')
-$reviewRoot = Join-Path $projectRoot ("review\TarkovServerGuard-v" + $Version)
+$reviewRoot = Join-Path $projectRoot ("review\TarkovServerGuard-v" + $Version + $ReviewSuffix)
 $releaseNotes = Join-Path $projectRoot ("release-notes-v" + $Version + '.md')
 $appIcon = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg.ico'
 
@@ -259,7 +260,7 @@ $hashLines = foreach ($file in $hashFiles) {
 Write-Utf8NoBom (Join-Path $reviewRoot 'SHA256SUMS.txt') @($hashLines)
 
 $reviewZip = Join-Path (Split-Path -Parent $reviewRoot) `
-    ("TarkovServerGuard-v" + $Version + '.zip')
+    ("TarkovServerGuard-v" + $Version + $ReviewSuffix + '.zip')
 if (Test-Path -LiteralPath $reviewZip) { Remove-Item -LiteralPath $reviewZip -Force }
 Compress-Archive -Path (Join-Path $reviewRoot '*') -DestinationPath $reviewZip -CompressionLevel Optimal
 $reviewZipHashPath = $reviewZip + '.sha256.txt'

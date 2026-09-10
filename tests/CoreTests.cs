@@ -332,9 +332,10 @@ namespace TarkovServerReporter.Tests
             Assert(season.ProgressionMode == TarkovProgressionMode.PvpSeason
                 && season.HostingMode == TarkovHostingMode.Server
                 && season.PvpSeasonNumber == 1
+                && season.PvpSeasonEvidence == PvpSeasonEvidence.SeasonCalendar
                 && season.ProgressionModeText == "PvP/S1"
                 && season.RaidTypeText == "PvP/S1",
-                "PvpSeason is numbered and classified independently from regular PvP");
+                "bare PvpSeason resolves the raid date against season history");
             Assert(pveServer.ProgressionMode == TarkovProgressionMode.Pve
                 && pveServer.HostingMode == TarkovHostingMode.Server
                 && pveServer.ProgressionModeText == "PvE(서버)"
@@ -379,7 +380,7 @@ namespace TarkovServerReporter.Tests
                 Path.Combine(folder, "application.log"),
                 string.Join("\r\n", new[]
                 {
-                    // Exact numeric log tokens are authoritative even when the client
+                    // Synthetic parser fixtures, NOT observed game-log evidence. Explicit numeric tokens are tested when the client
                     // version has no season mapping.
                     "2026.08.15 15:00:00.000|9.9.9.9.99999|Info|application|Session mode: PvpSeason1",
                     "2026.08.15 15:00:05.000|9.9.9.9.99999|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.151, Port: 17151, Location: Woods, Sid: SG-SIN01G001_season-one, GameMode: deathmatch, shortId: SEASON001'",
@@ -390,6 +391,8 @@ namespace TarkovServerReporter.Tests
                     // Unknown future versions are never guessed to be the latest known season.
                     "2026.08.15 17:00:00.000|9.9.9.9.99999|Info|application|Session mode: PvpSeason",
                     "2026.08.15 17:00:05.000|9.9.9.9.99999|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.153, Port: 17153, Location: Customs, Sid: KR-SEL01G001_season-unknown, GameMode: deathmatch, shortId: SEASON999'",
+                    "2026.08.15 17:30:00.000|1.1.5.0.47242|Info|application|Session mode: PvpSeason",
+                    "2026.08.15 17:30:05.000|1.1.5.0.47242|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.156, Port: 17156, Location: Lighthouse, Sid: KR-SEL01G001_season-patch, GameMode: deathmatch, shortId: SEASONPATCH'",
                     "2026.08.15 18:00:00.000|1.1.0.1.46777|Info|application|Session mode: Regular",
                     "2026.08.15 18:00:05.000|1.1.0.1.46777|Debug|application|TRACE-NetworkGameCreate profileStatus: 'RaidMode: Online, Ip: 203.0.113.154, Port: 17154, Location: Factory, Sid: KR-SEL01G001_regular, GameMode: deathmatch, shortId: REGULAR001'",
                     "2026.08.15 19:00:00.000|1.1.0.1.46777|Info|application|Session mode: Pve",
@@ -409,6 +412,15 @@ namespace TarkovServerReporter.Tests
                 item => item.ShortId == "SEASON999");
             ServerSession regular = firstScan.Sessions.Single(
                 item => item.ShortId == "REGULAR001");
+            ServerSession patched = firstScan.Sessions.Single(item => item.ShortId == "SEASONPATCH");
+            Assert(patched.ProgressionMode == TarkovProgressionMode.PvpSeason
+                && patched.PvpSeasonNumber == 1 && patched.ProgressionModeText == "PvP/S1"
+                && patched.PvpSeasonEvidence == PvpSeasonEvidence.SeasonCalendar,
+                "1.1.5 bare season resolves to S1 from the raid date");
+            ServerSession cachedPatched = RaidLogScanner.Scan(new TarkovLogPaths { EftPath = logs }, 100)
+                .Sessions.Single(item => item.ShortId == "SEASONPATCH");
+            Assert(cachedPatched.PvpSeasonNumber == 1 && cachedPatched.ProgressionModeText == "PvP/S1",
+                "cached and merged patched-version raid retains calendar season identity");
             ServerSession pve = firstScan.Sessions.Single(
                 item => item.ShortId == "PVE001");
 
@@ -429,10 +441,10 @@ namespace TarkovServerReporter.Tests
                 && seasonTwo.RaidTypeText == "PvP/S2",
                 "the exact PvpSeason2 token wins over a conflicting season-1 client version");
             Assert(unknownFuture.ProgressionMode == TarkovProgressionMode.PvpSeason
-                && !unknownFuture.PvpSeasonNumber.HasValue
-                && unknownFuture.PvpSeasonEvidence == PvpSeasonEvidence.None
-                && unknownFuture.ProgressionModeText == "PvP/S?",
-                "an unknown future version safely falls back to the unknown PvP season label");
+                && unknownFuture.PvpSeasonNumber == 1
+                && unknownFuture.PvpSeasonEvidence == PvpSeasonEvidence.SeasonCalendar
+                && unknownFuture.ProgressionModeText == "PvP/S1",
+                "unrecognized version digits do not override the recorded season date");
             Assert(regular.ProgressionMode == TarkovProgressionMode.Pvp
                 && !regular.PvpSeasonNumber.HasValue
                 && regular.ProgressionModeText == "PvP"

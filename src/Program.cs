@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Spirit-Schema")]
 [assembly: AssemblyProduct("Tarkov Server Guard")]
 [assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema. All rights reserved.")]
-[assembly: AssemblyVersion("0.8.6.0")]
-[assembly: AssemblyFileVersion("0.8.6.0")]
+[assembly: AssemblyVersion("0.8.7.0")]
+[assembly: AssemblyFileVersion("0.8.7.0")]
 
 namespace TarkovServerReporter
 {
@@ -40,6 +40,21 @@ namespace TarkovServerReporter
             // before this point so elevated batch operations never touch user settings.
             string previewPath = GetArgumentValue(args, "--preview");
             bool demoMode = HasArgument(args, "--demo") || !string.IsNullOrWhiteSpace(previewPath);
+            // Startup/update hooks and elevated firewall helpers must run before
+            // the UI-only guard. Preview builds remain isolated from the user's UI.
+            using (var instance = demoMode ? null : new SingleInstanceGuard(SingleInstanceGuard.ApplicationScope))
+            {
+                if (instance != null && !instance.IsPrimary)
+                {
+                    instance.RequestActivation();
+                    return;
+                }
+                RunApplication(demoMode, previewPath, args, instance);
+            }
+        }
+
+        private static void RunApplication(bool demoMode, string previewPath, string[] args, SingleInstanceGuard instance)
+        {
             AppPreferences preferences = demoMode
                 ? AppPreferences.CreateDefault()
                 : new AppPreferencesStore().Load();
@@ -51,6 +66,7 @@ namespace TarkovServerReporter
             var form = new MainForm(demoMode);
             form.Shown += delegate
             {
+                if (instance != null) instance.Attach(form);
                 if (demoMode || !UpdateCompletionNotice.HasPendingNotice())
                     return;
                 form.BeginInvoke(new Action(delegate

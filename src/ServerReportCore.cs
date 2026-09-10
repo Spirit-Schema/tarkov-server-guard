@@ -36,7 +36,8 @@ namespace TarkovServerReporter
     internal enum PvpSeasonEvidence
     {
         None,
-        VerifiedVersionMapping,
+        VerifiedVersionMapping, // Legacy evidence, retained for existing merge comparisons.
+        SeasonCalendar,
         ExplicitLogValue
     }
 

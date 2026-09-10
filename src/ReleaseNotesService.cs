@@ -30,6 +30,30 @@ namespace TarkovServerReporter
         {
             new BundledRelease
             {
+                Version = "0.8.7",
+                EnglishNotes =
+                    "0.8.7 update\n- Season numbers are resolved from raid dates and season history, independently of game version. Unresolved season numbers show PvP/S?; confirmed numbers keep PvP/S1 notation.\n- Raid details show duration / end time from the log, including the date for overnight raids.\n- Launching TSG again restores the existing window instead of opening another copy.\n- TSG checks for updates on each launch and every six hours while running. Later pauses only that version for 24 hours; failed checks or downloads do not count as deferrals.\n\n0.8.6 hotfix\n- Added a step-by-step usage guide to Add Party IPs.\n\nWhat's new since 0.8.3\n\n"
+                    + "- TSG remembers your window size and adjusted column widths for your next session.\n"
+                    + "- Choose Korean or English in Settings.\n"
+                    + "- Search Saved Notes by text, tags, map, player name, or report reason, and filter by note type.\n"
+                    + "- Add server IPs shared by your party as named lists, then remove a list's blocks together. Your personal blocks and blocks still used by other party lists stay in place.\n"
+                    + "- Made the interface easier to use.\n"
+                    + "- Improved log loading speed and reduced memory use when reading large logs.\n"
+                    + "- Made note saving, backups, and restores more reliable.\n\n"
+                    + "Party blocks apply only to this PC. Each party member needs to apply the same IPs on their own PC.",
+                Notes =
+                    "0.8.7 업데이트\n- 게임 버전 대신 레이드 날짜와 시즌 운영 이력을 대조해 시즌 번호를 판별합니다. 번호 미확인 시 PvP/S?로 표시하며 확인된 번호는 PvP/S1 축약 표기를 유지합니다.\n- 작전시간 / 작전종료를 함께 표시하고 날짜가 바뀌면 종료 날짜도 표시합니다.\n- 실행 중 다시 실행하면 새 창 대신 기존 창을 표시합니다.\n- 시작할 때와 실행 중 6시간마다 업데이트를 확인합니다. 나중에는 선택한 버전만 24시간 보류하며 확인·다운로드 실패를 보류로 처리하지 않습니다.\n\n0.8.6 핫픽스\n- 파티 IP 추가 창에 단계별 사용방법 안내를 추가했습니다.\n\n0.8.3 이후 달라진 점\n\n"
+                    + "- 창 크기와 직접 조절한 열 너비를 기억해 다음 실행에서도 이어서 사용합니다.\n"
+                    + "- 설정에서 한국어·영어를 선택할 수 있습니다.\n"
+                    + "- 메모 보관함에 검색과 종류 필터를 추가했습니다. 본문·태그·맵·닉네임·신고 사유로 메모를 찾을 수 있습니다.\n"
+                    + "- 파티원이 공유한 서버 IP를 목록별로 추가하고 한 번에 해제할 수 있습니다. 기존 개인 차단과 다른 파티 목록의 차단은 유지됩니다.\n"
+                    + "- UI 조작 편의성을 개선했습니다.\n"
+                    + "- 로그 조회 속도를 높이고, 큰 로그를 읽을 때의 메모리 사용량을 줄였습니다.\n"
+                    + "- 메모 저장·백업·복원의 안정성을 높였습니다.\n\n"
+                    + "파티 차단은 이 PC에만 적용됩니다. 각 파티원이 같은 IP를 직접 적용해야 합니다."
+            },
+            new BundledRelease
+            {
                 Version = "0.8.6",
                 EnglishNotes =
                     "0.8.6 hotfix\n- Added a step-by-step usage guide to Add Party IPs.\n\nWhat's new since 0.8.3\n\n"

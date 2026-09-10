@@ -41,7 +41,7 @@ $compilerOptions = @('/nologo', '/utf8output', '/platform:anycpu', '/optimize+',
 # Explicit source lists prevent dormant/removed features from entering a build.
 $appSourceNames = @(
     'AppLocalization.cs', 'AppLocalizationV084.cs', 'AppPreferencesStore.cs', 'WindowSizeStore.cs', 'ColumnWidthStore.cs', 'ApplicationSettingsForm.cs',
-    'UiLocalization.cs', 'AppBranding.cs', 'DataGridViewScrollCorner.cs', 'ResizeGuideDataGridView.cs', 'Program.cs', 'MainForm.cs',
+    'UiLocalization.cs', 'AppBranding.cs', 'DataGridViewScrollCorner.cs', 'ResizeGuideDataGridView.cs', 'Program.cs', 'SingleInstanceGuard.cs', 'MainForm.cs',
     'GitHubUpdateService.cs', 'ReleaseNotesService.cs', 'UpdatePromptForm.cs', 'PatchNotesForm.cs',
     'UsageNoticeForm.cs', 'LicenseForm.cs', 'ArenaBlockWarningForm.cs', 'FirewallRuleManager.cs',
     'BlockedServerMetadataStore.cs', 'BlockedServerBackup.cs', 'BlockedServerRestorePreviewForm.cs',
@@ -60,6 +60,9 @@ function New-TestSuite {
 }
 
 $suites = @(
+    New-TestSuite 'SingleInstanceTests' @('SingleInstanceGuard.cs') -Forms -Main 'TarkovServerReporter.Tests.SingleInstanceTests' -Arguments @($projectRoot)
+    New-TestSuite 'Patch087Tests' -Forms -UiHarness -Main 'TarkovServerReporter.Tests.Patch087Tests' -Arguments @($appOutput, $artifactRoot)
+    New-TestSuite 'UpdateLifecycleTests' $appSourceNames -Forms -UiHarness -Main 'TarkovServerReporter.Tests.UpdateLifecycleTests'
     New-TestSuite 'CoreTests' ($coreSources + @('FirewallRuleManager.cs', 'TarkovLogServices.cs'))
     New-TestSuite 'RaidClassificationTests' ($coreSources + @('TarkovLogServices.cs'))
     New-TestSuite 'DbIpLiteGeoTests' $coreSources
@@ -111,7 +114,7 @@ try {
     $inputPaths = @($appSources) + @(
         $PSCommandPath, (Join-Path $projectRoot 'tools\BuildHarness.ps1'), (Join-Path $projectRoot 'tools\BuildProcessJob.cs'), $appIcon,
         (Join-Path $projectRoot 'package-release.ps1'), (Join-Path $projectRoot 'tools\ReleaseVerification.ps1'),
-        (Join-Path $projectRoot 'tools\Test-OfflineReleaseUpdate.ps1'), (Join-Path $projectRoot 'release-notes-v0.8.6.md'),
+        (Join-Path $projectRoot 'tools\Test-OfflineReleaseUpdate.ps1'), (Join-Path $projectRoot 'release-notes-v0.8.7.md'),
         (Join-Path $projectRoot 'README.md'), (Join-Path $projectRoot 'README.en.md'), (Join-Path $projectRoot 'PRIVACY.md'), (Join-Path $projectRoot 'DEVELOPMENT.md'),
         (Join-Path $projectRoot 'app.manifest'), (Join-Path $projectRoot 'app.config'),
         (Join-Path $projectRoot 'LICENSE'), (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md')

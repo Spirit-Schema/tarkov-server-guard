@@ -25,6 +25,9 @@ internal static class GitHubUpdateTests
         Run("future clock state cannot suppress checks", TestFutureClockRecovery);
         Run("only newer stable releases are accepted", TestStableUpgradeBoundary);
         Run("later defers the same release for 24 hours", TestDeferral);
+        Run("startup checks bypass persisted cadence but preserve per-version deferral", TestStartupDeferral);
+        Run("a deferral chosen during a check is not overwritten", TestConcurrentDeferral);
+        Run("invalid automatic responses do not become successful checks", TestInvalidAutomaticResponse);
         Run("network failures preserve state and remain retryable", TestFailureBoundary);
         Run("cancelled checks preserve state and remain retryable", TestCancellationBoundary);
         Run("missing Velopack performs no persistent check", TestUnavailableEngine);
@@ -210,6 +213,66 @@ internal static class GitHubUpdateTests
         Assert(engine.CheckCount == 1, "A deferred release caused an unnecessary check.");
         clock.UtcNowValue = start.AddHours(24);
         Assert(Get(service) != null, "Deferred release was not shown after 24 hours.");
+    }
+
+    private static void TestStartupDeferral()
+    {
+        DateTime now = new DateTime(2026, 9, 10, 1, 0, 0, DateTimeKind.Utc);
+        var clock = new FakeClock(now);
+        string root = Path.Combine(Path.GetTempPath(), "TSG-UpdateRestart-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new FileUpdateCheckStateStore(root);
+            store.Save(new UpdateCheckState { LastCheckUtc = now.AddMinutes(-2) });
+            var engine = new FakeEngine("0.8.8");
+            var first = new GitHubUpdateService("0.8.7", engine, store, clock);
+            Assert(first.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult() != null,
+                "A restart within six hours must query and offer the new release.");
+            clock.UtcNowValue = now.AddMinutes(5);
+            first.Defer("0.8.8");
+            DateTime deadline = store.Load().DeferredUntilUtc;
+            var restarted = new GitHubUpdateService("0.8.7", engine, new FileUpdateCheckStateStore(root), clock);
+            Assert(restarted.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult() == null
+                && engine.CheckCount == 2, "Restart must still check while suppressing the deferred version.");
+            Assert(store.Load().DeferredUntilUtc == deadline, "Restart must not extend the user's deferral.");
+            var newer = new GitHubUpdateService("0.8.7", new FakeEngine("0.8.9"), store, clock);
+            Assert(newer.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult().VersionText == "0.8.9",
+                "A newer version is not hidden by an older version deferral.");
+            clock.UtcNowValue = deadline.AddTicks(-1);
+            Assert(restarted.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult() == null,
+                "The same version remains deferred until the exact deadline.");
+            clock.UtcNowValue = deadline;
+            Assert(restarted.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult() != null,
+                "The same version becomes eligible at the 24-hour deadline.");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private static void TestConcurrentDeferral()
+    {
+        var clock = new FakeClock(new DateTime(2026, 9, 10, 2, 0, 0, DateTimeKind.Utc));
+        var completion = new TaskCompletionSource<ApplicationUpdate>();
+        var store = new MemoryStateStore();
+        var engine = new FakeEngine("0.8.8") { PendingCheck = completion.Task };
+        var service = new GitHubUpdateService("0.8.7", engine, store, clock);
+        Task<ApplicationUpdate> running = service.CheckForUpdateAsync(CancellationToken.None, true);
+        Assert(service.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult() == null
+            && GetManual(service).Status == ManualUpdateCheckStatus.AlreadyRunning && engine.CheckCount == 1,
+            "Forced startup, timer, and manual requests cannot overlap.");
+        clock.UtcNowValue = clock.UtcNowValue.AddMinutes(2);
+        service.Defer("0.8.8");
+        completion.SetResult(new ApplicationUpdate("0.8.8", new object()));
+        Assert(running.GetAwaiter().GetResult() == null && service.IsVersionDeferred("0.8.8"),
+            "A newer user decision survives an in-flight check.");
+    }
+
+    private static void TestInvalidAutomaticResponse()
+    {
+        var store = new MemoryStateStore();
+        var service = new GitHubUpdateService("0.8.7", new FakeEngine("invalid-version"), store,
+            new FakeClock(DateTime.UtcNow));
+        Assert(service.CheckForUpdateAsync(CancellationToken.None, true).GetAwaiter().GetResult() == null
+            && store.SaveCount == 0, "Malformed metadata must not write successful-check or deferral state.");
     }
 
     private static void TestFailureBoundary()

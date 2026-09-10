@@ -20,7 +20,7 @@ I started building this free Windows app to stop those situations where your pin
 
 It automatically reads the official Tarkov and Arena logs, so you can view and manage the quality of servers you've connected to and your raid history on one screen.
 
-Current public release: **v0.8.6**. Choose Korean or English in Settings.
+Current public release: **v0.8.7**. Choose Korean or English in Settings.
 
 <br>
 
@@ -46,6 +46,13 @@ The executable is unsigned, so Windows may show an unknown-publisher warning. Us
 <br>
 
 ## What's new
+
+**0.8.7 update**
+
+- Season numbers are resolved from raid dates and season history, independently of game version. Unresolved season numbers show `PvP/S?`; confirmed numbers retain `PvP/S1` notation.
+- Raid details show the log-based end time beside duration, including the date for overnight raids.
+- Launching TSG again shows the existing window instead of opening another copy.
+- TSG checks for updates on launch and roughly every six hours while running. Later pauses that version for 24 hours; a newer release can still be announced. Failed checks or downloads do not count as deferrals. Automatic prompts wait until TSG is active and idle.
 
 **0.8.6 hotfix**
 

@@ -9,7 +9,7 @@ param(
     [Parameter(Mandatory = $true)][string]$VerifiedBuildDirectory,
     [string]$PreviousPackage,
     [string]$Version,
-    [ValidateSet('0.8.3', '0.8.5')][string]$PreviousVersion = '0.8.5'
+    [ValidateSet('0.8.3', '0.8.5', '0.8.6')][string]$PreviousVersion = '0.8.6'
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -24,6 +24,7 @@ if ([string]::IsNullOrWhiteSpace($PreviousPackage)) {
 $previousHashes = @{
     '0.8.3' = 'BD41A71F5524EB0941B4BB7901B5EE65F54CEFD3148A675FBA12C1096CBEF0F8'
     '0.8.5' = 'EC1D430473389E68AE727C52D7FB34A99EC07FC81D9933D37381C55AEEB9EF55'
+    '0.8.6' = 'D450D6535C0ABEE60D9ABDEDB456DCD969AFB8C2C64BF849CB39DDA61398B91B'
 }
 $previousHash = $previousHashes[$PreviousVersion]
 if ((Get-FileHash -LiteralPath $PreviousPackage -Algorithm SHA256).Hash -cne $previousHash) {

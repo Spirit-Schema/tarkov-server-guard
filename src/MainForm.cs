@@ -134,6 +134,10 @@ namespace TarkovServerReporter
         private bool _isFirewallChanging;
         private CancellationTokenSource _queryCancellation;
         private CancellationTokenSource _updateCheckCancellation;
+        private GitHubUpdateService _updateService;
+        private System.Windows.Forms.Timer _automaticUpdateTimer;
+        private DateTime _nextAutomaticUpdateCheckUtc;
+        private ApplicationUpdate _pendingAutomaticUpdate;
         private TableLayoutPanel _advancedDetailsLayout;
         private ContextMenuStrip _regionFilterMenu;
         private string _appliedEftPath;
@@ -709,7 +713,7 @@ namespace TarkovServerReporter
                     await InitializeAsync();
                     StartLauncherSelectionMonitoring();
                     ShowUsageNoticeOnce();
-                    StartAutomaticUpdateCheck();
+                    StartAutomaticUpdateMonitoring();
                 }
             };
         }
@@ -794,6 +798,13 @@ namespace TarkovServerReporter
             {
                 _initialFirewallStateRefresh.Dispose();
                 StopLauncherSelectionMonitoring();
+                if (_automaticUpdateTimer != null)
+                {
+                    _automaticUpdateTimer.Stop();
+                    _automaticUpdateTimer.Dispose();
+                    _automaticUpdateTimer = null;
+                }
+                _pendingAutomaticUpdate = null;
                 CancellationTokenSource cancellation = _queryCancellation;
                 if (cancellation != null)
                 {
@@ -817,18 +828,53 @@ namespace TarkovServerReporter
             base.Dispose(disposing);
         }
 
+        private GitHubUpdateService GetUpdateService()
+        {
+            if (_updateService == null)
+                _updateService = GitHubUpdateService.CreateProduction(GetApplicationSemanticVersion());
+            return _updateService;
+        }
+
+        private void StartAutomaticUpdateMonitoring()
+        {
+            if (_demoMode || IsDisposed || Disposing || _automaticUpdateTimer != null) return;
+            _automaticUpdateTimer = new System.Windows.Forms.Timer { Interval = 60000 };
+            _automaticUpdateTimer.Tick += delegate
+            {
+                TryShowPendingAutomaticUpdate();
+                DateTime now = DateTime.UtcNow;
+                if (now >= _nextAutomaticUpdateCheckUtc
+                    || _nextAutomaticUpdateCheckUtc > now.Add(GitHubUpdateService.CheckInterval))
+                    StartAutomaticUpdateCheck();
+            };
+            _automaticUpdateTimer.Start();
+            StartAutomaticUpdateCheck();
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            if (!_demoMode && IsHandleCreated && !IsDisposed && !Disposing)
+                BeginInvoke(new Action(TryShowPendingAutomaticUpdate));
+        }
+
         private async void StartAutomaticUpdateCheck()
         {
             if (_demoMode || IsDisposed || Disposing || _updateCheckCancellation != null) return;
             var cancellation = new CancellationTokenSource();
             _updateCheckCancellation = cancellation;
+            CancellationToken token = cancellation.Token;
+            // This deadline belongs to this running app, not the last process.
+            // Failed checks remain manually retryable; timer ticks cannot flood requests.
+            _nextAutomaticUpdateCheckUtc = DateTime.UtcNow.Add(GitHubUpdateService.CheckInterval);
             try
             {
-                await Task.Delay(900, cancellation.Token);
+                await Task.Delay(900, token);
                 if (IsDisposed || Disposing) return;
-                GitHubUpdateService service = GitHubUpdateService.CreateProduction(
-                    GetApplicationSemanticVersion());
-                await service.CheckAfterUiShownAsync(this, cancellation.Token);
+                GitHubUpdateService service = GetUpdateService();
+                ApplicationUpdate update = await Task.Run(() => service.CheckForUpdateAsync(token, true), token);
+                if (update != null && !IsDisposed && !Disposing && !token.IsCancellationRequested)
+                    _pendingAutomaticUpdate = update;
             }
             catch (OperationCanceledException)
             {
@@ -838,6 +884,33 @@ namespace TarkovServerReporter
             {
                 // Update availability must never prevent normal application use.
             }
+            finally
+            {
+                if (ReferenceEquals(_updateCheckCancellation, cancellation))
+                    _updateCheckCancellation = null;
+                cancellation.Dispose();
+            }
+            TryShowPendingAutomaticUpdate();
+        }
+
+        private async void TryShowPendingAutomaticUpdate()
+        {
+            if (_demoMode || IsDisposed || Disposing || _pendingAutomaticUpdate == null
+                || _updateCheckCancellation != null || !Enabled || !ContainsFocus
+                || WindowState == FormWindowState.Minimized
+                || _isFirewallChanging || _isMeasuring || _isRefreshing) return;
+            ApplicationUpdate update = _pendingAutomaticUpdate;
+            _pendingAutomaticUpdate = null;
+            var cancellation = new CancellationTokenSource();
+            _updateCheckCancellation = cancellation;
+            try
+            {
+                GitHubUpdateService service = GetUpdateService();
+                if (!service.IsVersionDeferred(update.VersionText))
+                    await service.ShowUpdatePromptAsync(this, update, cancellation.Token);
+            }
+            catch (OperationCanceledException) { }
+            catch { /* Automatic prompts must not interrupt normal app use. */ }
             finally
             {
                 if (ReferenceEquals(_updateCheckCancellation, cancellation))
@@ -1231,19 +1304,22 @@ namespace TarkovServerReporter
             SetStatus(AppText.Get("Main.Update.Checking"), Accent);
             try
             {
-                GitHubUpdateService service = GitHubUpdateService.CreateProduction(
-                    GetApplicationSemanticVersion());
-                ManualUpdateCheckResult result = await service.CheckForUpdateManuallyAsync(
-                    cancellation.Token);
+                GitHubUpdateService service = GetUpdateService();
+                CancellationToken token = cancellation.Token;
+                ManualUpdateCheckResult result = await Task.Run(() => service.CheckForUpdateManuallyAsync(token), token);
                 if (IsDisposed || Disposing || cancellation.IsCancellationRequested) return;
 
                 switch (result.Status)
                 {
                     case ManualUpdateCheckStatus.UpdateAvailable:
+                        _pendingAutomaticUpdate = null;
+                        _nextAutomaticUpdateCheckUtc = DateTime.UtcNow.Add(GitHubUpdateService.CheckInterval);
                         SetStatus(AppText.Format("Main.Update.Available", result.Update.VersionText), Accent);
                         await service.ShowUpdatePromptAsync(this, result.Update, cancellation.Token);
                         break;
                     case ManualUpdateCheckStatus.UpToDate:
+                        _pendingAutomaticUpdate = null;
+                        _nextAutomaticUpdateCheckUtc = DateTime.UtcNow.Add(GitHubUpdateService.CheckInterval);
                         SetStatus(AppText.Format("Main.Update.UpToDate", GetApplicationSemanticVersion()), Success);
                         break;
                     case ManualUpdateCheckStatus.AlreadyRunning:
@@ -5458,7 +5534,7 @@ namespace TarkovServerReporter
             string shortId = string.IsNullOrWhiteSpace(session.ShortId) ? "-" : session.ShortId;
             string[] values =
             {
-                FormatOperationDuration(session),
+                FormatOperationSummary(session),
                 matching + " / " + entry,
                 string.IsNullOrWhiteSpace(session.ConnectionResultText)
                     ? "-"
@@ -5498,6 +5574,23 @@ namespace TarkovServerReporter
             return totalMinutes > 0
                 ? AppText.Format("Main.Duration.MinutesSeconds", totalMinutes, remainingSeconds)
                 : AppText.Format("Main.Duration.Seconds", remainingSeconds);
+        }
+
+        private static string FormatOperationSummary(ServerSession session)
+        {
+            string duration = FormatOperationDuration(session);
+            string ended = AppText.Get("Common.Status.NotVerified");
+            if (session != null && session.OperationState == RaidOperationState.InProgress)
+                ended = AppText.Get("Main.Detail.InProgress");
+            else if (session != null && session.OperationDuration.HasValue)
+            {
+                DateTime end = session.OperationEndedAt.Value;
+                bool crossesDate = end.Date != session.DisplayDetectedAt.Date
+                    || end.Date != session.OperationStartedAt.Value.Date;
+                ended = end.ToString(crossesDate ? "yyyy-MM-dd HH:mm:ss" : "HH:mm:ss",
+                    CultureInfo.InvariantCulture);
+            }
+            return duration + " / " + ended;
         }
 
         private static string FormatDuration(double seconds)

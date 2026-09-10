@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
+// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -312,7 +312,9 @@ namespace TarkovServerReporter
                 return true;
             }
             if (string.Equals(value, "PvPs?", StringComparison.Ordinal)
-                || string.Equals(value, "PvP/S?", StringComparison.Ordinal))
+                || string.Equals(value, "PvP/S?", StringComparison.Ordinal)
+                || string.Equals(value, "시즌 PvP", StringComparison.Ordinal)
+                || string.Equals(value, "Seasonal PvP", StringComparison.Ordinal))
             {
                 normalized = "PvP/S?";
                 return true;
@@ -581,11 +583,11 @@ namespace TarkovServerReporter
             Add("Main.Column.ConnectionResultHelp", "마지막 서버 연결 구간의 결과와 재접속 횟수입니다. 셀에 마우스를 올리면 상태별 의미를 확인할 수 있습니다.", "Shows the last server connection attempt and reconnect count. Point to a cell for details about its status.");
             Add("Main.Status.Preparing", "준비 중…", "Preparing…");
             Add("Main.Status.AccessibleName", "작업 상태 안내", "Task Status");
-            Add("Main.Advanced.OperationTime", "작전시간", "Raid Duration");
+            Add("Main.Advanced.OperationTime", "작전시간 / 작전종료", "Duration / End");
             Add("Main.Advanced.AssignmentEntryTime", "서버배정 / 입장시간", "Match / Load Time");
             Add("Main.Advanced.GameVersion", "게임버전", "Game Version");
             Add("Main.Advanced.PortDataCenter", "포트 / 데이터센터", "Port / Data Center");
-            Add("Main.Advanced.OperationTimeHelp", "게임 시작부터 종료까지 로그를 기준으로 계산한 시간입니다.", "Duration calculated from the game start and end events in the log.");
+            Add("Main.Advanced.OperationTimeHelp", "로그 기준 작전시간과 종료 시각입니다. 실제 사망·탈출 시점과 차이가 있을 수 있으며 생환을 뜻하지 않습니다.", "Raid duration and end time from the log. The end event may differ from the actual death or extraction time and does not imply survival.");
             Add("Main.Advanced.AssignmentEntryHelp", "서버 배정과 서버 배정 후 레이드 입장까지 걸린 시간을 로그를 기준으로 표시합니다.", "Time spent matchmaking, then loading into the raid after a server was assigned. Both values come from the game log.");
             Add("Main.Advanced.ElapsedSuffix", " 걸림", " elapsed");
             Add("Main.Paths.FindingInitial", "공홈·Steam의 EFT·Arena 로그 폴더를 찾는 중…", "Looking for EFT and Arena log folders from the official launcher and Steam…");

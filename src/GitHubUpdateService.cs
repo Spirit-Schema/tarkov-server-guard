@@ -341,6 +341,7 @@ namespace TarkovServerReporter
         private readonly IUpdateCheckStateStore _stateStore;
         private readonly IUpdateClock _clock;
         private int _checkInProgress;
+        private int _promptInProgress;
 
         internal GitHubUpdateService(
             string currentVersion,
@@ -391,7 +392,7 @@ namespace TarkovServerReporter
             }
         }
 
-        internal async Task<ApplicationUpdate> CheckForUpdateAsync(CancellationToken cancellationToken)
+        internal async Task<ApplicationUpdate> CheckForUpdateAsync(CancellationToken cancellationToken, bool forceCheck = false)
         {
             if (!IsEngineAvailable()) return null;
             if (Interlocked.CompareExchange(ref _checkInProgress, 1, 0) != 0) return null;
@@ -399,7 +400,7 @@ namespace TarkovServerReporter
             {
                 DateTime nowUtc = EnsureUtc(_clock.UtcNow);
                 UpdateCheckState state = SafeLoadState();
-                if (!IsCheckDue(state, nowUtc)) return null;
+                if (!forceCheck && !IsCheckDue(state, nowUtc)) return null;
 
                 ApplicationUpdate candidate;
                 try
@@ -417,13 +418,16 @@ namespace TarkovServerReporter
                     return null;
                 }
 
+                SemanticVersion candidateVersion = null;
+                if (candidate != null && !SemanticVersion.TryParse(candidate.VersionText, out candidateVersion))
+                    return null;
+
+                // Reload after awaiting: do not overwrite a newer user deferral.
+                state = SafeLoadState();
+                nowUtc = EnsureUtc(_clock.UtcNow);
                 state.LastCheckUtc = nowUtc;
                 SafeSaveState(state);
-                if (candidate == null) return null;
-
-                SemanticVersion candidateVersion;
-                if (!SemanticVersion.TryParse(candidate.VersionText, out candidateVersion)
-                    || candidateVersion.IsPrerelease
+                if (candidate == null || candidateVersion.IsPrerelease
                     || candidateVersion.CompareTo(_currentVersion) <= 0) return null;
 
                 if (string.Equals(state.DeferredVersion, candidateVersion.ToString(),
@@ -448,7 +452,6 @@ namespace TarkovServerReporter
 
             try
             {
-                DateTime nowUtc = EnsureUtc(_clock.UtcNow);
                 ApplicationUpdate candidate;
                 try
                 {
@@ -474,7 +477,7 @@ namespace TarkovServerReporter
                     return ManualUpdateCheckResult.FromStatus(ManualUpdateCheckStatus.Failed);
 
                 UpdateCheckState state = SafeLoadState();
-                state.LastCheckUtc = nowUtc;
+                state.LastCheckUtc = EnsureUtc(_clock.UtcNow);
                 SafeSaveState(state);
 
                 if (candidate == null
@@ -500,7 +503,7 @@ namespace TarkovServerReporter
             ApplicationUpdate update;
             try
             {
-                update = await CheckForUpdateAsync(cancellationToken);
+                update = await CheckForUpdateAsync(cancellationToken, true);
             }
             catch (OperationCanceledException)
             {
@@ -518,50 +521,64 @@ namespace TarkovServerReporter
         {
             if (update == null || cancellationToken.IsCancellationRequested)
                 return Task.FromResult(0);
+            if (Interlocked.CompareExchange(ref _promptInProgress, 1, 0) != 0)
+                return Task.FromResult(0);
 
-            using (var prompt = new UpdatePromptForm(update.VersionText))
+            try
             {
-                bool applying = false;
-                prompt.UpdateRequested += async delegate
+                using (var prompt = new UpdatePromptForm(update.VersionText))
                 {
-                    if (applying) return;
-                    applying = true;
-                    prompt.BeginDownload();
+                    bool applying = false;
+                    prompt.UpdateRequested += async delegate
+                    {
+                        if (applying) return;
+                        applying = true;
+                        prompt.BeginDownload();
+                        try
+                        {
+                            await _engine.DownloadAndApplyAsync(
+                                update,
+                                prompt.ReportProgress,
+                                cancellationToken);
+                            prompt.ShowApplyDidNotRestartError();
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            prompt.CloseAfterCancellation();
+                        }
+                        catch
+                        {
+                            prompt.ShowDownloadError();
+                        }
+                        finally
+                        {
+                            applying = false;
+                        }
+                    };
+
+                    DialogResult result;
                     try
                     {
-                        await _engine.DownloadAndApplyAsync(
-                            update,
-                            prompt.ReportProgress,
-                            cancellationToken);
-                        prompt.ShowApplyDidNotRestartError();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        prompt.CloseAfterCancellation();
+                        result = owner == null ? prompt.ShowDialog() : prompt.ShowDialog(owner);
                     }
                     catch
                     {
-                        prompt.ShowDownloadError();
+                        return Task.FromResult(0);
                     }
-                    finally
-                    {
-                        applying = false;
-                    }
-                };
-
-                DialogResult result;
-                try
-                {
-                    result = owner == null ? prompt.ShowDialog() : prompt.ShowDialog(owner);
+                    if (result == DialogResult.Cancel && prompt.DeferRequested
+                        && !cancellationToken.IsCancellationRequested)
+                        Defer(update.VersionText);
                 }
-                catch
-                {
-                    return Task.FromResult(0);
-                }
-                if (result == DialogResult.Cancel)
-                    Defer(update.VersionText);
             }
+            finally { Interlocked.Exchange(ref _promptInProgress, 0); }
             return Task.FromResult(0);
+        }
+
+        internal bool IsVersionDeferred(string versionText)
+        {
+            UpdateCheckState state = SafeLoadState();
+            return string.Equals(state.DeferredVersion, versionText, StringComparison.OrdinalIgnoreCase)
+                && IsDeferralActive(state.DeferredUntilUtc, EnsureUtc(_clock.UtcNow));
         }
 
         internal void Defer(string versionText)

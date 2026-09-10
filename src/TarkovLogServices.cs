@@ -713,9 +713,8 @@ namespace TarkovServerReporter
             public int Number { get; set; }
             public string Key { get; set; }
             public string InternalName { get; set; }
-            public int VersionMajor { get; set; }
-            public int VersionMinor { get; set; }
-            public int VersionPatch { get; set; }
+            public DateTime StartsOn { get; set; }
+            public DateTime? EndsBefore { get; set; }
         }
 
         // Names and aliases remain metadata here. The UI intentionally renders only
@@ -728,13 +727,17 @@ namespace TarkovServerReporter
                 Number = 1,
                 Key = "kord-breach",
                 InternalName = "KORD BREACH",
-                VersionMajor = 1,
-                VersionMinor = 1,
-                VersionPatch = 0
+                // BSG's Steam announcement "Patch 1.1.0.0", 2026-08-03:
+                // https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/1839676055896016
+                // Confirmed active by the user on 2026-09-10. No official end
+                // date is confirmed. Close this interval when the next season
+                // starts; do not turn an estimated end date into game data.
+                StartsOn = new DateTime(2026, 8, 3),
+                EndsBefore = null
             }
         };
 
-        internal static PvpSeasonIdentity Resolve(int? explicitNumber, string clientVersion)
+        internal static PvpSeasonIdentity Resolve(int? explicitNumber, DateTime? raidTimestamp)
         {
             if (IsValidNumber(explicitNumber))
             {
@@ -746,18 +749,17 @@ namespace TarkovServerReporter
                     PvpSeasonEvidence.ExplicitLogValue);
             }
 
-            int[] version;
-            if (!TryParseNumericVersion(clientVersion, out version)) return null;
-            KnownSeason mapped = KnownSeasons.FirstOrDefault(item =>
-                version[0] == item.VersionMajor
-                && version[1] == item.VersionMinor
-                && version[2] == item.VersionPatch);
-            return mapped == null
-                ? null
-                : CreateIdentity(
-                    mapped.Number,
-                    mapped,
-                    PvpSeasonEvidence.VerifiedVersionMapping);
+            // Use the RAID date, never the current date or the session-mode event
+            // date. Client version digits do not identify a season. Unknown dates
+            // and future-dated records must not acquire today's active season.
+            if (!raidTimestamp.HasValue || raidTimestamp.Value.Date > DateTime.Today)
+                return null;
+            DateTime date = raidTimestamp.Value.Date;
+            KnownSeason[] matches = KnownSeasons.Where(item => date >= item.StartsOn
+                && (!item.EndsBefore.HasValue || date < item.EndsBefore.Value)).ToArray();
+            return matches.Length == 1
+                ? CreateIdentity(matches[0].Number, matches[0], PvpSeasonEvidence.SeasonCalendar)
+                : null;
         }
 
         internal static bool IsValidNumber(int? number)
@@ -779,26 +781,6 @@ namespace TarkovServerReporter
             };
         }
 
-        private static bool TryParseNumericVersion(string value, out int[] version)
-        {
-            version = null;
-            if (string.IsNullOrWhiteSpace(value)) return false;
-            string[] parts = value.Trim().Split('.');
-            if (parts.Length < 3 || parts.Length > 8) return false;
-            var parsed = new int[parts.Length];
-            for (int index = 0; index < parts.Length; index++)
-            {
-                if (!int.TryParse(
-                    parts[index],
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out parsed[index])
-                    || parsed[index] < 0)
-                    return false;
-            }
-            version = parsed;
-            return true;
-        }
     }
 
     public static class RaidLogScanner
@@ -1815,7 +1797,7 @@ namespace TarkovServerReporter
                     : (int?)null;
             PvpSeasonIdentity identity = PvpSeasonCatalog.Resolve(
                 explicitNumber,
-                clientVersion);
+                null);
             if (identity == null) return result;
             result.PvpSeasonNumber = identity.Number;
             result.PvpSeasonKey = identity.Key;
@@ -1879,7 +1861,7 @@ namespace TarkovServerReporter
                     InternalName = mode.PvpSeasonName,
                     Evidence = mode.PvpSeasonEvidence
                 }
-                : PvpSeasonCatalog.Resolve(null, session.ClientVersion);
+                : PvpSeasonCatalog.Resolve(null, session.DisplayDetectedAt);
             if (identity == null) return;
             session.PvpSeasonNumber = identity.Number;
             session.PvpSeasonKey = identity.Key;

@@ -22,6 +22,8 @@ namespace TarkovServerReporter
         private readonly ProgressBar _progressBar;
         private readonly Button _updateButton;
         private readonly Button _laterButton;
+        private bool _canDefer = true;
+        internal bool DeferRequested { get; private set; }
 
         internal event EventHandler UpdateRequested;
 
@@ -138,6 +140,7 @@ namespace TarkovServerReporter
             _laterButton = CreateButton(AppText.Get("UpdateDialog.Later"), Surface, TextPrimary);
             _laterButton.TabIndex = 1;
             _laterButton.DialogResult = DialogResult.Cancel;
+            _laterButton.Click += delegate { DeferRequested = _canDefer; };
 
             buttons.Controls.Add(_updateButton);
             buttons.Controls.Add(_laterButton);
@@ -168,6 +171,8 @@ namespace TarkovServerReporter
 
         internal void BeginDownload()
         {
+            _canDefer = false;
+            DeferRequested = false;
             RunOnUiThread(delegate
             {
                 _messageLabel.Text = AppText.Get("UpdateDialog.Downloading");
@@ -202,6 +207,8 @@ namespace TarkovServerReporter
 
         internal void CloseAfterCancellation()
         {
+            _canDefer = false;
+            DeferRequested = false;
             RunOnUiThread(delegate
             {
                 _laterButton.Enabled = true;
@@ -212,6 +219,8 @@ namespace TarkovServerReporter
 
         private void ShowError(string message)
         {
+            _canDefer = false;
+            DeferRequested = false;
             RunOnUiThread(delegate
             {
                 _messageLabel.Text = message;
