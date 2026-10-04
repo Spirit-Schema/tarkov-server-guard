@@ -185,6 +185,9 @@ namespace TarkovServerReporter.Tests
                 "the restored raid memo title translates to English");
             Assert(AppText.TranslateLiteral("차단") == "Block",
                 "another same-meaning duplicate literal translates safely");
+            Assert(AppText.TranslateLiteral("차단 해제") == "Unblock"
+                    && AppText.Get("Main.Context.Unblock") == AppText.Get("Common.Button.Unblock"),
+                "context actions retain the existing unambiguous literal translation for unblock");
             Assert(AppText.TranslateLiteral("확인") == "확인",
                 "a Korean literal with conflicting English meanings remains unchanged");
             Assert(AppText.TranslateLiteral(" 닫기") == " 닫기",

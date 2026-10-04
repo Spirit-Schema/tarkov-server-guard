@@ -94,3 +94,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+# Operation-note information (0.8.8 local beta)
+
+The operation note downloads public text data at runtime from [tarkov.dev JSON API](https://json.tarkov.dev/). Data is credited in the search interface. No API implementation code or game images are included. API software licensing does not establish a blanket license to redistribute all game data or images.
+
+A small set of extraction-condition summaries is independently paraphrased from [tarkov.help Reserve](https://tarkov.help/en/map/reserve/home), [Interchange](https://tarkov.help/en/map/interchange/home), [Cliff Descent](https://tarkov.help/en/article/cliff-descent) and [Scav Lands](https://tarkov.help/en/article/scav-lands). The source and check date are retained with those entries. Conditions remain general information, not a determination of current-raid availability.

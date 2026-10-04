@@ -296,6 +296,20 @@ namespace TarkovServerReporter
 
     internal static class AppBranding
     {
+        internal static Image TryCreateHeaderLogo()
+        {
+            try
+            {
+                using (var stream = typeof(AppBranding).Assembly.GetManifestResourceStream(
+                    "TarkovServerReporter.BrandLogo.png"))
+                {
+                    if (stream == null) return null;
+                    using (Image source = Image.FromStream(stream)) return new Bitmap(source);
+                }
+            }
+            catch { return null; }
+        }
+
         internal static Icon TryCreateApplicationIcon()
         {
             try

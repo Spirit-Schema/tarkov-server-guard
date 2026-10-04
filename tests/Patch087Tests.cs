@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -67,10 +67,10 @@ namespace TarkovServerReporter.Tests
                 Set(session, "OperationEndedAt", new DateTime(2026, 9, 10, 21, 22, 30));
                 SetEnum(session, "OperationState", "Completed");
                 string summary = Summary(main, session);
-                Assert(summary.EndsWith(" / 21:22:30", StringComparison.Ordinal) && summary.Contains("20"), "completed duration and end ordered correctly: " + summary);
+                Assert(summary.EndsWith(" / 21:22", StringComparison.Ordinal) && summary.Contains("20"), "completed duration and end ordered correctly: " + summary);
                 Set(session, "OperationStartedAt", new DateTime(2026, 9, 10, 23, 55, 0));
                 Set(session, "OperationEndedAt", new DateTime(2026, 9, 11, 0, 15, 0));
-                Assert(Summary(main, session).EndsWith(" / 2026-09-11 00:15:00", StringComparison.Ordinal), "cross-midnight date is explicit");
+                Assert(Summary(main, session).EndsWith(" / 09.11 00:15", StringComparison.Ordinal), "cross-midnight date is explicit");
                 SetEnum(session, "OperationState", "InProgress");
                 Assert(!Summary(main, session).Contains("00:15"), "in-progress ignores stale end value");
                 SetEnum(session, "OperationState", "Completed");
@@ -114,7 +114,7 @@ namespace TarkovServerReporter.Tests
                         main.GetMethod("SelectSession", Instance).Invoke(form, new[] { session });
                         Application.DoEvents();
                         var labels = (Label[])main.GetField("_detailInfoValueLabels", Instance).GetValue(form);
-                        Assert(labels[0].Text.Contains("2026-09-11"), "selected raid shows the full end date");
+                        Assert(labels[0].Text.Contains("09.11"), "selected raid shows the compact end date");
                         if (labels[0].Visible)
                         {
                             Size text = TextRenderer.MeasureText(labels[0].Text, labels[0].Font,

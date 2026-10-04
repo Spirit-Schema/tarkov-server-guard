@@ -134,6 +134,9 @@ namespace TarkovServerReporter
         private static readonly HashSet<string> RaidNoteFields = CreateFieldSet(
             "Key", "Game", "GameType", "RaidStartedUtc", "MapName", "NoteText",
             "ScreenshotPaths", "Tags", "CreatedUtc", "UpdatedUtc");
+        private static readonly HashSet<string> RaidNoteFieldsWithSnapshot = CreateFieldSet(
+            "Key", "Game", "GameType", "RaidStartedUtc", "MapName", "NoteText",
+            "ScreenshotPaths", "Tags", "CreatedUtc", "UpdatedUtc", "OperationSnapshotId");
         private static readonly HashSet<string> UserReportFields = CreateFieldSet(
             "Key", "ReportCount", "Entries", "MemoText", "Game", "GameType",
             "RaidStartedUtc", "MapName", "CreatedUtc", "UpdatedUtc");
@@ -670,7 +673,8 @@ namespace TarkovServerReporter
             error = null;
             IDictionary<string, object> item = raw as IDictionary<string, object>;
             string prefix = "레이드 메모 " + sourceIndex.ToString(CultureInfo.CurrentCulture) + "번";
-            if (item == null || !HasExactFields(item, RaidNoteFields))
+            if (item == null || (!HasExactFields(item, RaidNoteFields)
+                && !HasExactFields(item, RaidNoteFieldsWithSnapshot)))
                 return ParseItemFailure(
                     prefix, "fields-invalid", "의 필수 필드가 없거나 지원하지 않는 필드가 있습니다.",
                     out errorCode, out error);
@@ -680,6 +684,7 @@ namespace TarkovServerReporter
             string gameType;
             string map;
             string note;
+            string snapshotId = null;
             DateTime raidStarted;
             DateTime created;
             DateTime updated;
@@ -691,6 +696,7 @@ namespace TarkovServerReporter
                 || !TryReadUtc(item, "RaidStartedUtc", true, out raidStarted)
                 || !TryReadString(item, "MapName", MaximumMapLength, out map)
                 || !TryReadString(item, "NoteText", MaximumRaidNoteLength, out note)
+                || (item.ContainsKey("OperationSnapshotId") && !TryReadKey(item, "OperationSnapshotId", out snapshotId))
                 || !item.TryGetValue("ScreenshotPaths", out rawScreenshotPaths)
                 || !item.TryGetValue("Tags", out rawTags)
                 || !TryReadUtc(item, "CreatedUtc", false, out created)
@@ -750,6 +756,7 @@ namespace TarkovServerReporter
                 RaidStartedUtc = raidStarted,
                 MapName = map,
                 NoteText = RaidNoteStore.NormalizeLegacyNoteText(note),
+                OperationSnapshotId = snapshotId,
                 Tags = tags,
                 ScreenshotPaths = screenshotPaths,
                 CreatedUtc = created,
@@ -967,6 +974,8 @@ namespace TarkovServerReporter
                     + SerializedStringBytes(serializer, utf8, item.GameType)
                     + SerializedStringBytes(serializer, utf8, item.MapName)
                     + SerializedStringBytes(serializer, utf8, item.NoteText);
+                if (!string.IsNullOrEmpty(item.OperationSnapshotId))
+                    total += 32L + SerializedStringBytes(serializer, utf8, item.OperationSnapshotId);
                 foreach (string screenshotPath in item.ScreenshotPaths)
                     total += 8L + SerializedStringBytes(serializer, utf8, screenshotPath);
                 foreach (string tag in item.Tags)
@@ -1012,6 +1021,8 @@ namespace TarkovServerReporter
             AppendProperty(builder, serializer, "RaidStartedUtc", FormatUtc(item.RaidStartedUtc), false);
             AppendProperty(builder, serializer, "MapName", item.MapName, false);
             AppendProperty(builder, serializer, "NoteText", item.NoteText, false);
+            if (!string.IsNullOrEmpty(item.OperationSnapshotId))
+                AppendProperty(builder, serializer, "OperationSnapshotId", item.OperationSnapshotId, false);
             builder.Append(",\"ScreenshotPaths\":[");
             for (int index = 0; index < item.ScreenshotPaths.Count; index++)
             {
@@ -1085,6 +1096,9 @@ namespace TarkovServerReporter
                 "레이드 메모 게임유형 값이 너무 깁니다.");
             clone.MapName = RequireText(clone.MapName, MaximumMapLength, "raid-map-invalid", "레이드 메모 맵 값이 너무 깁니다.");
             clone.NoteText = RequireText(clone.NoteText, MaximumRaidNoteLength, "raid-note-invalid", "레이드 메모 본문이 너무 깁니다.");
+            if (!string.IsNullOrEmpty(clone.OperationSnapshotId)
+                && (clone.OperationSnapshotId.Length != 64 || clone.OperationSnapshotId.Any(character => !Uri.IsHexDigit(character))))
+                throw Validation("raid-snapshot-id-invalid", "작전노트 저장본 식별자가 올바르지 않습니다.");
             clone.RaidStartedUtc = RequireUtc(clone.RaidStartedUtc, true, "레이드 시작 시각");
             clone.CreatedUtc = RequireUtc(clone.CreatedUtc, false, "레이드 메모 생성 시각");
             clone.UpdatedUtc = RequireUtc(clone.UpdatedUtc, false, "레이드 메모 수정 시각");
@@ -1179,6 +1193,7 @@ namespace TarkovServerReporter
                 RaidStartedUtc = source.RaidStartedUtc,
                 MapName = source.MapName ?? string.Empty,
                 NoteText = RaidNoteStore.NormalizeLegacyNoteText(source.NoteText),
+                OperationSnapshotId = source.OperationSnapshotId,
                 ScreenshotPaths = source.ScreenshotPaths == null
                     ? new List<string>()
                     : new List<string>(source.ScreenshotPaths),
@@ -1226,6 +1241,7 @@ namespace TarkovServerReporter
                 && expected.RaidStartedUtc == actual.RaidStartedUtc
                 && string.Equals(expected.MapName ?? string.Empty, actual.MapName ?? string.Empty, StringComparison.Ordinal)
                 && string.Equals(expected.NoteText ?? string.Empty, actual.NoteText ?? string.Empty, StringComparison.Ordinal)
+                && string.Equals(expected.OperationSnapshotId ?? string.Empty, actual.OperationSnapshotId ?? string.Empty, StringComparison.OrdinalIgnoreCase)
                 && expected.CreatedUtc == actual.CreatedUtc
                 && expected.UpdatedUtc == actual.UpdatedUtc
                 && SequenceEqual(expected.ScreenshotPaths, actual.ScreenshotPaths)

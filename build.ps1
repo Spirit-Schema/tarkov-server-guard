@@ -36,6 +36,11 @@ New-Item -ItemType Directory -Force -Path $appRoot, $buildRoot, $artifactRoot | 
 $commonReferences = @('System.dll', 'System.Core.dll', 'Microsoft.CSharp.dll', 'System.Net.Http.dll', 'System.Web.Extensions.dll') |
     ForEach-Object { '/reference:' + $_ }
 $windowsFormsReferences = @('/reference:System.Drawing.dll', '/reference:System.Windows.Forms.dll')
+$wpfRoot = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF'
+if (-not (Test-Path -LiteralPath $wpfRoot)) { $wpfRoot = 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\WPF' }
+$windowsFormsReferences += @('WindowsBase.dll', 'PresentationCore.dll', 'PresentationFramework.dll', 'WindowsFormsIntegration.dll') |
+    ForEach-Object { '/reference:' + (Join-Path $wpfRoot $_) }
+$windowsFormsReferences += '/reference:System.Xaml.dll'
 $compilerOptions = @('/nologo', '/utf8output', '/platform:anycpu', '/optimize+', '/warn:4', '/warnaserror+')
 
 # Explicit source lists prevent dormant/removed features from entering a build.
@@ -48,7 +53,9 @@ $appSourceNames = @(
     'PartyBlockBundleStore.cs', 'PartyBlockInputForm.cs', 'PartyBlockHelpForm.cs', 'PartyBlockBundleReleaseForm.cs', 'BlockedServersForm.cs',
     'PingKickActionCell.cs', 'RaidNoteStore.cs', 'RaidNoteForm.cs', 'MemoArchiveBackup.cs',
     'MemoArchiveRestorePreviewForm.cs', 'RaidNoteArchiveForm.cs', 'UserReportMemoStore.cs', 'UserReportMemoForm.cs',
-    'DbIpLiteMmdbReader.cs', 'DbIpLiteGeoService.cs', 'ServerReportCore.cs', 'RaidQualityEvidence.cs', 'TarkovLogServices.cs'
+    'DbIpLiteMmdbReader.cs', 'DbIpLiteGeoService.cs', 'ServerReportCore.cs', 'RaidQualityEvidence.cs', 'TarkovLogServices.cs',
+    'OperationNoteModels.cs', 'OperationNoteStore.cs', 'OperationScreenshotLinker.cs', 'OperationSearchService.cs',
+    'OperationNoteNative.cs', 'OperationNoteWindow.cs', 'OperationNoteController.cs', 'OperationCaptureSettings.cs'
 )
 $coreSources = @('DbIpLiteMmdbReader.cs', 'DbIpLiteGeoService.cs', 'ServerReportCore.cs')
 $localizedSources = @('AppLocalization.cs', 'AppLocalizationV084.cs', 'UiLocalization.cs', 'AppBranding.cs')
@@ -60,6 +67,10 @@ function New-TestSuite {
 }
 
 $suites = @(
+    New-TestSuite 'OperationNoteUiTests' $appSourceNames -Forms -UiHarness -Main 'TarkovServerReporter.Tests.OperationNoteUiTests' -Arguments @($artifactRoot)
+    New-TestSuite 'OperationSearchTests' @('OperationSearchService.cs') -Main 'TarkovServerReporter.Tests.OperationSearchTests'
+    New-TestSuite 'Patch088RoadmapTests' -Forms -UiHarness -Main 'TarkovServerReporter.Tests.Patch088RoadmapTests' -Arguments @($appOutput, $artifactRoot)
+    New-TestSuite 'OperationNoteStoreTests' ($coreSources + @('RaidNoteStore.cs', 'OperationNoteModels.cs', 'OperationNoteStore.cs', 'OperationScreenshotLinker.cs')) -Forms -Main 'TarkovServerReporter.Tests.OperationNoteStoreTests'
     New-TestSuite 'SingleInstanceTests' @('SingleInstanceGuard.cs') -Forms -Main 'TarkovServerReporter.Tests.SingleInstanceTests' -Arguments @($projectRoot)
     New-TestSuite 'Patch087Tests' -Forms -UiHarness -Main 'TarkovServerReporter.Tests.Patch087Tests' -Arguments @($appOutput, $artifactRoot)
     New-TestSuite 'UpdateLifecycleTests' $appSourceNames -Forms -UiHarness -Main 'TarkovServerReporter.Tests.UpdateLifecycleTests'
@@ -109,12 +120,13 @@ try {
     if (-not $compiler) { throw '.NET Framework C# compiler (csc.exe) was not found.' }
     $context.Metadata['Compiler'] = $compiler
     $context.Metadata['CompilerFileVersion'] = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler).FileVersion
-    $appIcon = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg.ico'
+    $appIcon = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-wordmark.ico'
+    $brandLogo = Join-Path $projectRoot 'assets\branding\tarkov-server-guard-tsg-icon-master.png'
     $appSources = @($appSourceNames | ForEach-Object { Join-Path $sourceRoot $_ })
     $inputPaths = @($appSources) + @(
-        $PSCommandPath, (Join-Path $projectRoot 'tools\BuildHarness.ps1'), (Join-Path $projectRoot 'tools\BuildProcessJob.cs'), $appIcon,
+        $PSCommandPath, (Join-Path $projectRoot 'tools\BuildHarness.ps1'), (Join-Path $projectRoot 'tools\BuildProcessJob.cs'), $appIcon, $brandLogo,
         (Join-Path $projectRoot 'package-release.ps1'), (Join-Path $projectRoot 'tools\ReleaseVerification.ps1'),
-        (Join-Path $projectRoot 'tools\Test-OfflineReleaseUpdate.ps1'), (Join-Path $projectRoot 'release-notes-v0.8.7.md'),
+        (Join-Path $projectRoot 'tools\Test-OfflineReleaseUpdate.ps1'), (Join-Path $projectRoot 'release-notes-v0.8.7.md'), (Join-Path $projectRoot 'release-notes-v0.8.8.md'),
         (Join-Path $projectRoot 'README.md'), (Join-Path $projectRoot 'README.en.md'), (Join-Path $projectRoot 'PRIVACY.md'), (Join-Path $projectRoot 'DEVELOPMENT.md'),
         (Join-Path $projectRoot 'app.manifest'), (Join-Path $projectRoot 'app.config'),
         (Join-Path $projectRoot 'LICENSE'), (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md')
@@ -153,6 +165,7 @@ try {
     Invoke-CSharpCompiler 'App.Compile' ($compilerOptions + @(
         '/target:winexe', ('/out:' + $appOutput),
         ('/win32manifest:' + (Join-Path $projectRoot 'app.manifest')), ('/win32icon:' + $appIcon),
+        ('/resource:' + $brandLogo + ',TarkovServerReporter.BrandLogo.png'),
         ('/resource:' + (Join-Path $projectRoot 'LICENSE') + ',TarkovServerReporter.LICENSE.txt'),
         ('/resource:' + (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') + ',TarkovServerReporter.THIRD_PARTY_NOTICES.md')
     ) + $windowsFormsReferences + $commonReferences + $appSources)

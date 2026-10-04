@@ -98,7 +98,31 @@ namespace TarkovServerReporter
         private bool _syncingStickyActionGrid;
         private bool _stickyActionLayoutUpdatePending;
         private Button _queryButton;
-        private Button _copyIpButton;
+        private Button _operationNoteButton;
+        private NotifyIcon _trayIcon;
+        private ContextMenuStrip _trayMenu;
+        private ContextMenuStrip _historyActionMenu;
+        private bool _serverHistoryLoading;
+        private bool _blockedManagerOpening;
+        internal event EventHandler OperationNoteRequested;
+        internal event Action CaptureFoldersRequested;
+
+        internal TarkovLogPaths GetOperationNotePaths()
+        {
+            return new TarkovLogPaths { EftPath = _appliedEftPath, ArenaPath = _appliedArenaPath };
+        }
+
+        internal async void NotifyOperationNoteSaved()
+        {
+            if (!_demoMode) await LoadSessionsAsync();
+            if (!IsDisposed) RefreshNoteCells();
+        }
+
+        private void RequestOperationNote()
+        {
+            EventHandler handler = OperationNoteRequested;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
         private Button _blockedServersButton;
         private Button _notesArchiveButton;
         private Button _allFilterButton;
@@ -703,6 +727,7 @@ namespace TarkovServerReporter
             InitializeWindow();
             BuildInterface();
             ColumnWidthPersistence.Attach(this, "main", columnStorageRoot);
+            if (!_demoMode) InitializeTray();
 
             Shown += async delegate
             {
@@ -796,6 +821,9 @@ namespace TarkovServerReporter
         {
             if (disposing)
             {
+                if (_trayIcon != null) { _trayIcon.Visible = false; _trayIcon.Dispose(); _trayIcon = null; }
+                if (_trayMenu != null) { _trayMenu.Dispose(); _trayMenu = null; }
+                if (_historyActionMenu != null) { _historyActionMenu.Dispose(); _historyActionMenu = null; }
                 _initialFirewallStateRefresh.Dispose();
                 StopLauncherSelectionMonitoring();
                 if (_automaticUpdateTimer != null)
@@ -963,12 +991,27 @@ namespace TarkovServerReporter
             var title = new Label
             {
                 AutoSize = true,
-                Location = new Point(2, 0),
+                Location = new Point(46, 0),
                 Text = "Tarkov Server Guard",
                 Font = new Font("Malgun Gothic", 18F, FontStyle.Bold),
                 ForeColor = TextPrimary
             };
             panel.Controls.Add(title);
+            Image headerLogo = AppBranding.TryCreateHeaderLogo();
+            if (headerLogo != null)
+            {
+                var logo = new PictureBox
+                {
+                    Name = "HeaderBrandLogo",
+                    Location = new Point(2, 0),
+                    Size = new Size(38, 38),
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    Image = headerLogo,
+                    AccessibleName = "TSG"
+                };
+                logo.Disposed += delegate { headerLogo.Dispose(); };
+                panel.Controls.Add(logo);
+            }
 
             var usageNoticeButton = CreateUsageGuideButton();
             EventHandler positionUsageNoticeButton = delegate
@@ -1258,6 +1301,11 @@ namespace TarkovServerReporter
                     return TryApplyApplicationSettings(store, previous, selected);
                 }))
             {
+                dialog.CaptureFoldersRequested += delegate
+                {
+                    Action handler = CaptureFoldersRequested;
+                    if (handler != null) handler();
+                };
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 if (dialog.RestartRequested)
                 {
@@ -1661,10 +1709,10 @@ namespace TarkovServerReporter
                 AppText.Get("Main.Scan.Tooltip"));
             actionButtons.Controls.Add(_queryButton, 0, 0);
 
-            _copyIpButton = CreateButton(AppText.Get("Common.Button.CopyIp"), false);
-            _copyIpButton.Margin = new Padding(4, 3, 0, 5);
-            _copyIpButton.Click += delegate { CopySelectedIp(); };
-            actionButtons.Controls.Add(_copyIpButton, 1, 0);
+            _operationNoteButton = CreateButton(AppText.Get("Main.OperationNote.Open"), false);
+            _operationNoteButton.Margin = new Padding(4, 3, 0, 5);
+            _operationNoteButton.Click += delegate { RequestOperationNote(); };
+            actionButtons.Controls.Add(_operationNoteButton, 1, 0);
 
             string privacyNoticeText = AppText.Get(IsEnglishUi
                 ? "Main.Privacy.CompactNotice" : "Main.Privacy.FullNotice");
@@ -2029,7 +2077,7 @@ namespace TarkovServerReporter
             _historyGrid.ColumnHeadersDefaultCellStyle.Font = new Font("Malgun Gothic", 8.5F, FontStyle.Bold);
             _historyGrid.Columns.Add(CreateTextColumn("game", AppText.Get("Common.Label.Game"), 68));
             _historyGrid.Columns.Add(CreateTextColumn("time", AppText.Get("Main.Column.ConnectionTime"), 154));
-            var reportColumn = CreateTextColumn("userReport", AppText.Get("Main.Column.PlayerReports"), 86);
+            var reportColumn = CreateTextColumn("userReport", AppText.Get("Main.Column.PlayerReports"), 64);
             reportColumn.DefaultCellStyle = new DataGridViewCellStyle
             {
                 Alignment = DataGridViewContentAlignment.BottomCenter,
@@ -2132,6 +2180,19 @@ namespace TarkovServerReporter
                 AppendHeaderSortToolTip(column);
             }
             _historyGrid.ColumnHeaderMouseClick += HistoryGridColumnHeaderMouseClick;
+            _historyGrid.CellMouseDown += HistoryGridContextMouseDown;
+            _historyGrid.KeyDown += delegate(object sender, KeyEventArgs args)
+            {
+                if (args.KeyCode == Keys.Apps || (args.Shift && args.KeyCode == Keys.F10))
+                {
+                    DataGridViewRow selectedRow = _historyGrid.CurrentRow;
+                    if (selectedRow != null)
+                    {
+                        ShowHistoryContextMenu(selectedRow, new Point(24, _historyGrid.ColumnHeadersHeight + 12));
+                        args.Handled = true;
+                    }
+                }
+            };
             _historyGrid.CellMouseClick += async delegate(object sender, DataGridViewCellMouseEventArgs args)
             {
                 await HistoryGridCellMouseClickAsync(args);
@@ -2999,7 +3060,6 @@ namespace TarkovServerReporter
             int availableWindowWidth = Width;
             bool compact = availableWindowWidth > 0 && availableWindowWidth < responsiveThreshold;
             _advancedDetailsLayout.Visible = !compact;
-            if (IsEnglishUi)
             {
                 int right = compact ? details.ClientSize.Width - ScaleLogical(8, dpi)
                     : _advancedDetailsLayout.Left - ScaleLogical(14, dpi);
@@ -3444,6 +3504,7 @@ namespace TarkovServerReporter
             }
             if (applicable.Count > 0)
             {
+                BackfillObservedGamesAfterRefresh();
                 RefreshActionCells();
                 if (IsFirewallActionSortColumn(_historySortColumn))
                     ReapplyHistorySort(false, true);
@@ -5319,7 +5380,7 @@ namespace TarkovServerReporter
                 if (value == 0) return "0%";
                 double percent = value * 100.0;
                 return percent < 0.01
-                    ? "0.01%"
+                    ? AppText.Get("Main.Metric.LossBelowHundredth")
                     : string.Format("{0:0.##}%", percent);
             }
             return GetMetricUnavailableText(session);
@@ -5585,9 +5646,10 @@ namespace TarkovServerReporter
             else if (session != null && session.OperationDuration.HasValue)
             {
                 DateTime end = session.OperationEndedAt.Value;
-                bool crossesDate = end.Date != session.DisplayDetectedAt.Date
-                    || end.Date != session.OperationStartedAt.Value.Date;
-                ended = end.ToString(crossesDate ? "yyyy-MM-dd HH:mm:ss" : "HH:mm:ss",
+                DateTime start = session.OperationStartedAt.Value;
+                string format = end.Year != start.Year ? "yy.MM.dd HH:mm"
+                    : end.Date != start.Date ? "MM.dd HH:mm" : "HH:mm";
+                ended = end.ToString(format,
                     CultureInfo.InvariantCulture);
             }
             return duration + " / " + ended;
@@ -6079,7 +6141,7 @@ namespace TarkovServerReporter
             double value;
             if (!RaidMetricPresentation.TryGetPacketLoss(session, out value)) return TextMuted;
             if (value >= 0.05) return Danger;
-            if (value > 0) return Warning;
+            if (value >= 0.001) return Warning;
             return Success;
         }
 
@@ -6452,6 +6514,35 @@ namespace TarkovServerReporter
             UpdateServerRows(ipAddress, ping, geo);
         }
 
+        private Task BackfillObservedGamesAsync()
+        {
+            if (_demoMode) return Task.FromResult(true);
+            var observations = _allSessions.Where(session => session != null
+                    && FirewallRuleManager.IsValidIpv4(session.IpAddress)
+                    && (session.Game == TarkovGame.Eft || session.Game == TarkovGame.Arena))
+                .GroupBy(session => session.IpAddress, StringComparer.OrdinalIgnoreCase)
+                .Where(group =>
+                {
+                    FirewallQueryResult state;
+                    return _firewallStates.TryGetValue(group.Key, out state)
+                        && state != null && state.Success && state.IsBlocked;
+                })
+                .Select(group => new BlockedServerMetadata
+                {
+                    IpAddress = group.Key,
+                    ObservedEft = group.Any(session => session.Game == TarkovGame.Eft),
+                    ObservedArena = group.Any(session => session.Game == TarkovGame.Arena)
+                }).ToList();
+            // One atomic merge for all confirmed blocked IPs; unchanged evidence never rewrites the file.
+            return Task.Run(() => BlockedServerMetadataStore.MergeObservedGames(observations));
+        }
+
+        private async void BackfillObservedGamesAfterRefresh()
+        {
+            try { await BackfillObservedGamesAsync(); }
+            catch { /* Optional display evidence must not prevent normal history updates. */ }
+        }
+
         private void CacheBlockedServerMetadata(IEnumerable<string> ipAddresses)
         {
             if (ipAddresses == null) return;
@@ -6469,7 +6560,9 @@ namespace TarkovServerReporter
                 BlockedServerMetadataStore.UpdateLocation(
                     ipAddress,
                     session == null ? null : session.DataCenterCode,
-                    geo != null && geo.Success ? geo.ToDisplayText() : null);
+                    geo != null && geo.Success ? geo.ToDisplayText() : null,
+                    HasObservedGame(ipAddress, TarkovGame.Eft),
+                    HasObservedGame(ipAddress, TarkovGame.Arena));
             }
         }
 
@@ -6482,7 +6575,15 @@ namespace TarkovServerReporter
             BlockedServerMetadataStore.MarkBlocked(
                 ipAddress,
                 session == null ? null : session.DataCenterCode,
-                geo != null && geo.Success ? geo.ToDisplayText() : null);
+                geo != null && geo.Success ? geo.ToDisplayText() : null,
+                HasObservedGame(ipAddress, TarkovGame.Eft),
+                HasObservedGame(ipAddress, TarkovGame.Arena));
+        }
+
+        private bool HasObservedGame(string ipAddress, TarkovGame game)
+        {
+            return _allSessions.Any(session => session != null && session.Game == game
+                && string.Equals(session.IpAddress, ipAddress, StringComparison.OrdinalIgnoreCase));
         }
 
         private void RefreshActionCells()
@@ -6577,7 +6678,7 @@ namespace TarkovServerReporter
 
         private async Task ShowBlockedServersAsync()
         {
-            if (_isRefreshing || _isMeasuring || _isFirewallChanging) return;
+            if (_isRefreshing || _isMeasuring || _isFirewallChanging || _blockedManagerOpening) return;
             if (_demoMode)
             {
                 ShowActionNotice(AppText.Get("Main.Preview.NoBlockedServers"));
@@ -6585,8 +6686,13 @@ namespace TarkovServerReporter
             }
 
             bool changed;
+            _blockedManagerOpening = true;
+            try { await BackfillObservedGamesAsync(); }
+            finally { _blockedManagerOpening = false; }
+            if (IsDisposed || Disposing) return;
             using (var form = new BlockedServersForm())
             {
+                form.ServerHistoryRequested = ip => ShowSameServerHistoryAsync(ip, form);
                 ColumnWidthPersistence.Attach(form, "blocked", AppPreferencesStore.GetDefaultStorageRoot());
                 form.ShowDialog(this);
                 changed = form.FirewallStateChanged;
@@ -6630,6 +6736,199 @@ namespace TarkovServerReporter
                 if (IsFirewallActionSortColumn(_historySortColumn))
                     ReapplyHistorySort(false, true);
             }
+        }
+
+        private void InitializeTray()
+        {
+            _trayMenu = new ContextMenuStrip { BackColor = Surface, ForeColor = TextPrimary };
+            _trayMenu.Items.Add(AppText.Get("Main.Tray.Open"), null, delegate { RestoreMainWindow(); });
+            _trayMenu.Items.Add(AppText.Get("Main.OperationNote.Open"), null, delegate { RequestOperationNote(); });
+            _trayMenu.Items.Add(AppText.Get("Notes.Navigation.Label"), null, delegate
+            {
+                RestoreMainWindow();
+                _notesArchiveButton.PerformClick();
+            });
+            _trayMenu.Items.Add(AppText.Get("Main.BlockedServers.Button"), null, delegate
+            {
+                RestoreMainWindow();
+                _blockedServersButton.PerformClick();
+            });
+            _trayMenu.Items.Add(new ToolStripSeparator());
+            _trayMenu.Items.Add(AppText.Get("Main.Tray.Hide"), null, delegate { Hide(); });
+            _trayMenu.Items.Add(AppText.Get("Main.Tray.Exit"), null, delegate { Close(); });
+            _trayIcon = new NotifyIcon
+            {
+                Text = "Tarkov Server Guard",
+                Icon = Icon,
+                ContextMenuStrip = _trayMenu,
+                Visible = true
+            };
+            _trayIcon.DoubleClick += delegate { RestoreMainWindow(); };
+        }
+
+        private void RestoreMainWindow()
+        {
+            Show();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
+        private void HistoryGridContextMouseDown(object sender, DataGridViewCellMouseEventArgs args)
+        {
+            if (args.Button != MouseButtons.Right || args.RowIndex < 0) return;
+            DataGridViewRow row = _historyGrid.Rows[args.RowIndex];
+            _historyGrid.ClearSelection();
+            row.Selected = true;
+            if (args.ColumnIndex >= 0) _historyGrid.CurrentCell = row.Cells[args.ColumnIndex];
+            ShowHistoryContextMenu(row, _historyGrid.PointToClient(Cursor.Position));
+        }
+
+        private void ShowHistoryContextMenu(DataGridViewRow row, Point location)
+        {
+            ServerSession session = row == null ? null : row.Tag as ServerSession;
+            if (session == null) return;
+            SelectSession(session);
+            if (_historyActionMenu != null) _historyActionMenu.Dispose();
+            _historyActionMenu = new ContextMenuStrip { BackColor = Surface, ForeColor = TextPrimary };
+            bool validIp = FirewallRuleManager.IsValidIpv4(session.IpAddress);
+            var history = new ToolStripMenuItem(AppText.Get("Main.Context.SameServer"));
+            history.Enabled = validIp && !_serverHistoryLoading;
+            history.Click += async delegate { await ShowSameServerHistoryAsync(session.IpAddress); };
+            _historyActionMenu.Items.Add(history);
+            _historyActionMenu.Items.Add(new ToolStripSeparator());
+            FirewallQueryResult firewall;
+            bool stateKnown = _firewallStates.TryGetValue(session.IpAddress ?? string.Empty, out firewall)
+                && firewall != null && firewall.Success;
+            bool blocked = stateKnown && firewall.IsBlocked;
+            var block = new ToolStripMenuItem(AppText.Get(blocked ? "Main.Context.Unblock" : "Main.Context.Block"));
+            string actionColumn = blocked ? "unblockAction" : "blockAction";
+            block.Enabled = validIp && row.Cells[actionColumn].Tag is bool && (bool)row.Cells[actionColumn].Tag;
+            block.Click += async delegate
+            {
+                await ExecuteHistoryConnectionActionAsync(row, session,
+                    blocked ? PingKickAction.Unblock : PingKickAction.Block);
+            };
+            _historyActionMenu.Items.Add(block);
+            _historyActionMenu.Items.Add(AppText.Get("Main.Context.BlockGuide"), null, delegate { ShowBlockGuidance(); });
+            _historyActionMenu.Items.Add(new ToolStripSeparator());
+            var memo = new ToolStripMenuItem(AppText.Get(_noteStore.Exists(session)
+                ? "Main.Context.OpenMemo" : "Main.Context.WriteMemo"));
+            memo.Click += delegate { OpenHistoryMemo(session); };
+            _historyActionMenu.Items.Add(memo);
+            var screenshots = new ToolStripMenuItem(IsEnglishUi ? "View screenshots" : "스크린샷 보기");
+            try { screenshots.Enabled = !_demoMode && _noteStore.Load(session).ScreenshotPaths.Count > 0; }
+            catch { screenshots.Enabled = false; }
+            screenshots.Click += delegate
+            {
+                try { if (RaidNoteUi.ShowScreenshotsFor(this, session)) RefreshNoteCells(); }
+                catch (Exception ex) { SetStatus(AppText.Format("Notes.OpenFailed", ex.Message), Danger); }
+            };
+            _historyActionMenu.Items.Add(screenshots);
+            _historyActionMenu.Items.Add(new ToolStripSeparator());
+            var copy = new ToolStripMenuItem(AppText.Get("Common.Button.CopyIp"));
+            copy.Enabled = validIp;
+            copy.Click += delegate { CopyText(session.IpAddress); };
+            _historyActionMenu.Items.Add(copy);
+            _historyActionMenu.Items.Add(AppText.Get("Main.Context.CopySummary"), null,
+                delegate { CopyText(FormatHistorySummary(session)); });
+            _historyActionMenu.Show(_historyGrid, location);
+        }
+
+        private void OpenHistoryMemo(ServerSession session)
+        {
+            if (_demoMode) { ShowActionNotice(AppText.Get("Main.Preview.NoNotes")); return; }
+            try { if (RaidNoteUi.ShowFor(this, session)) RefreshNoteCells(); }
+            catch (Exception ex) { SetStatus(AppText.Format("Notes.OpenFailed", ex.Message), Danger); }
+        }
+
+        private static string FormatHistorySummary(ServerSession session)
+        {
+            return session.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                + " | " + GetMapAndTypeText(session)
+                + "\r\nIP: " + (session.HasServerIp ? session.IpAddress : AppText.Get("Common.Status.NotVerified"))
+                + "\r\nRTT: " + FormatActualRttDisplay(session)
+                + " | " + AppText.Get("Main.Column.InRaidPacketLoss") + ": " + FormatPacketLossDisplay(session)
+                + "\r\n" + AppText.Get("Main.Context.MeasurementTime") + ": "
+                + (session.NetworkStatisticsAt.HasValue
+                    ? session.NetworkStatisticsAt.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                    : AppText.Get("Common.Status.NotVerified"));
+        }
+
+        private async Task ShowSameServerHistoryAsync(string ipAddress, Form owner = null)
+        {
+            if (_serverHistoryLoading) return;
+            _serverHistoryLoading = true;
+            SetStatus(AppText.Get("Main.Context.HistoryLoading"), Accent);
+            try
+            {
+                RaidLogScanResult scan = _demoMode ? null : await Task.Run(() => RaidLogScanner.Scan(
+                    GetOperationNotePaths(), new RaidLogScanQuery { MaximumRecords = 1000 }));
+                if (IsDisposed || Disposing) return;
+                IList<ServerSession> source = _demoMode ? _allSessions : (scan == null ? null : scan.Sessions);
+                if (source == null) throw new InvalidOperationException(AppText.Get("Main.Context.HistoryUnavailable"));
+                IList<ServerSession> matches = source.Where(item => item != null
+                    && string.Equals(item.IpAddress, ipAddress, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(item => item.DisplayDetectedAt).ToList();
+                string period = source.Count == 0 ? "-" : source.Min(item => item.DisplayDetectedAt).ToString("yyyy-MM-dd")
+                    + " ~ " + source.Max(item => item.DisplayDetectedAt).ToString("yyyy-MM-dd");
+                string scope = AppText.Format("Main.Context.HistoryScope", source.Count, period, matches.Count);
+                if (!_demoMode && (scan == null || !scan.ScanCompletedWithoutErrors))
+                    scope += "\r\n" + AppText.Get("Main.Context.HistoryPartial");
+                using (var dialog = new BrandedForm
+                {
+                    Text = AppText.Get("Main.Context.SameServer") + " · " + ipAddress,
+                    BackColor = Background, ForeColor = TextPrimary,
+                    Size = new Size(920, 520), MinimumSize = new Size(700, 360),
+                    StartPosition = FormStartPosition.CenterParent,
+                    Font = Font
+                })
+                {
+                    var header = new Label { Dock = DockStyle.Top, Height = 66,
+                        Text = scope + "\r\n" + AppText.Get("Main.Context.HistoryMemoHint"), Padding = new Padding(12) };
+                    var grid = new DataGridView { Dock = DockStyle.Fill, BackgroundColor = Surface,
+                        ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
+                        RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                        EnableHeadersVisualStyles = false };
+                    grid.DefaultCellStyle.BackColor = Surface;
+                    grid.DefaultCellStyle.ForeColor = TextPrimary;
+                    grid.ColumnHeadersDefaultCellStyle.BackColor = SurfaceAlt;
+                    grid.ColumnHeadersDefaultCellStyle.ForeColor = TextPrimary;
+                    grid.Columns.Add("time", AppText.Get("Main.Context.Time"));
+                    grid.Columns.Add("map", AppText.Get("Main.Context.Map"));
+                    grid.Columns.Add("rtt", "RTT");
+                    grid.Columns.Add("loss", AppText.Get("Main.Column.InRaidPacketLoss"));
+                    foreach (ServerSession item in matches)
+                    {
+                        int index = grid.Rows.Add(item.DisplayDetectedAt.ToString("yyyy-MM-dd HH:mm"),
+                            GetMapAndTypeText(item), FormatActualRttDisplay(item), FormatPacketLossDisplay(item));
+                        grid.Rows[index].Tag = item;
+                        grid.Rows[index].Cells["loss"].Style.ForeColor = GetPacketLossColor(item);
+                    }
+                    grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs args)
+                    {
+                        if (args.RowIndex >= 0) OpenHistoryMemo((ServerSession)grid.Rows[args.RowIndex].Tag);
+                    };
+                    dialog.Controls.Add(grid);
+                    dialog.Controls.Add(header);
+                    dialog.ShowDialog(owner ?? this);
+                }
+                SetStatus(scope, TextMuted);
+            }
+            catch (Exception ex) { if (!IsDisposed) SetStatus(AppText.Get("Main.Context.HistoryUnavailable") + " " + ex.Message, Warning); }
+            finally { _serverHistoryLoading = false; }
+        }
+
+        private void ShowBlockGuidance()
+        {
+            MessageBox.Show(this, AppText.Get("Main.Context.BlockGuideBody"),
+                AppText.Get("Main.Context.BlockGuide"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void CopyText(string text)
+        {
+            try { Clipboard.SetText(text); SetStatus(AppText.Get("Main.Clipboard.Copied"), Success); }
+            catch (Exception ex) { SetStatus(AppText.Format("Main.Clipboard.Failed", ex.Message), Danger); }
         }
 
         private void CopySelectedIp()
@@ -6676,8 +6975,8 @@ namespace TarkovServerReporter
         private void UpdateActionButtons()
         {
             bool controlsAvailable = !_isRefreshing && !_isMeasuring && !_isFirewallChanging;
-            if (_copyIpButton != null)
-                _copyIpButton.Enabled = controlsAvailable && _selectedSession != null && _selectedSession.HasServerIp;
+            if (_operationNoteButton != null)
+                _operationNoteButton.Enabled = true;
             if (_queryButton != null)
             {
                 if (_isMeasuring)

@@ -49,6 +49,8 @@ namespace TarkovServerReporter
         public string DataCenter { get; set; }
         public string Location { get; set; }
         public string Note { get; set; }
+        public bool ObservedEft { get; set; }
+        public bool ObservedArena { get; set; }
         public DateTime? BlockedAtUtc { get; set; }
 
         public bool HasMetadata
@@ -58,7 +60,7 @@ namespace TarkovServerReporter
                 return !string.IsNullOrWhiteSpace(DataCenter)
                     || !string.IsNullOrWhiteSpace(Location)
                     || !string.IsNullOrWhiteSpace(Note)
-                    || BlockedAtUtc.HasValue;
+                    || BlockedAtUtc.HasValue || ObservedEft || ObservedArena;
             }
         }
     }
@@ -149,6 +151,8 @@ namespace TarkovServerReporter
             public string DataCenter { get; set; }
             public string Location { get; set; }
             public string Note { get; set; }
+            public bool ObservedEft { get; set; }
+            public bool ObservedArena { get; set; }
             public string BlockedAtUtc { get; set; }
         }
 
@@ -367,7 +371,7 @@ namespace TarkovServerReporter
             new[] { "Format", "Version", "Items" },
             StringComparer.Ordinal);
         private static readonly HashSet<string> ItemFields = new HashSet<string>(
-            new[] { "Ip", "DataCenter", "Location", "Note", "BlockedAtUtc" },
+            new[] { "Ip", "DataCenter", "Location", "Note", "BlockedAtUtc", "ObservedEft", "ObservedArena" },
             StringComparer.Ordinal);
 
         public static BlockedServerBackupExportResult CreateExport(
@@ -396,6 +400,8 @@ namespace TarkovServerReporter
                     entries.Add(new BlockedServerBackupEntry
                     {
                         IpAddress = ipAddress,
+                        ObservedEft = metadata != null && metadata.ObservedEft,
+                        ObservedArena = metadata != null && metadata.ObservedArena,
                         DataCenter = NormalizeOptionalText(
                             metadata == null ? null : metadata.DataCenter,
                             MaximumDataCenterLength),
@@ -440,6 +446,8 @@ namespace TarkovServerReporter
                     DataCenter = item.DataCenter,
                     Location = item.Location,
                     Note = item.Note,
+                    ObservedEft = item.ObservedEft,
+                    ObservedArena = item.ObservedArena,
                     BlockedAtUtc = item.BlockedAtUtc.HasValue
                         ? NormalizeUtc(item.BlockedAtUtc.Value).ToString("o", CultureInfo.InvariantCulture)
                         : null
@@ -642,6 +650,14 @@ namespace TarkovServerReporter
             string note;
             DateTime? blockedAtUtc;
             string error;
+            bool observedEft;
+            bool observedArena;
+            if (!TryReadOptionalBoolean(item, "ObservedEft", out observedEft)
+                || !TryReadOptionalBoolean(item, "ObservedArena", out observedArena))
+            {
+                parsed.ExclusionReason = "게임 관측 정보가 올바른 참/거짓 값이 아닙니다.";
+                return parsed;
+            }
             if (!TryReadOptionalText(item, "DataCenter", MaximumDataCenterLength, out dataCenter, out error)
                 || !TryReadOptionalText(item, "Location", MaximumLocationLength, out location, out error)
                 || !TryReadOptionalText(
@@ -662,11 +678,24 @@ namespace TarkovServerReporter
                 DataCenter = dataCenter,
                 Location = location,
                 Note = note,
+                ObservedEft = observedEft,
+                ObservedArena = observedArena,
                 BlockedAtUtc = blockedAtUtc
             };
             if (!seen.Add(parsed.SourceIpAddress))
                 parsed.ExclusionReason = "같은 파일 안에 중복된 서버 IP입니다.";
             return parsed;
+        }
+
+        private static bool TryReadOptionalBoolean(IDictionary<string, object> item,
+            string field, out bool value)
+        {
+            value = false;
+            object raw;
+            if (!item.TryGetValue(field, out raw)) return true;
+            if (!(raw is bool)) return false;
+            value = (bool)raw;
+            return true;
         }
 
         private static bool TryReadOptionalText(

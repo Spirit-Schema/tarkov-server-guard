@@ -88,7 +88,7 @@ namespace TarkovServerReporter
             Add("RaidNote.Section.Free", "자유메모", "Notes");
             Add("RaidNote.Placeholder", "예시) 귀중품 파밍 장소, 이동 동선, 저격 포인트, 보스 스폰 위치 등을 자유롭게 기록해 보세요.", "Write anything you'd like to remember about this raid.");
             Add("RaidNote.NicknamePlaceholder", "유저닉네임\r\n1.\r\n2.\r\n3.", "Player names\r\n1.\r\n2.\r\n3.");
-            Add("RaidNote.Attachments.Section", "스크린샷 첨부 · 파일은 복사하거나 업로드하지 않고 경로만 저장합니다", "Screenshots · Links to local files");
+            Add("RaidNote.Attachments.Section", "이미지·동영상 첨부 · 원본 경로만 저장합니다", "Images and videos · Links to local files");
             Add("RaidNote.Attach", "첨부", "Attach");
             Add("RaidNote.OpenFolder", "폴더 열기", "Open Folder");
             Add("RaidNote.Detach", "첨부 해제", "Remove Link");
@@ -96,10 +96,10 @@ namespace TarkovServerReporter
             Add("RaidNote.LocalOnly", "이 메모는 게임 로그와 별도로 로컬에 보관됩니다.", "This note is stored locally, separately from the game logs.");
             Add("RaidNote.OpenStorage", "메모 저장 폴더 열기", "Open Notes Folder");
             Add("RaidNote.TimeUnknown", "시각 확인 안 됨", "Time Unavailable");
-            Add("RaidNote.AttachDialog.Title", "스크린샷 첨부", "Attach Screenshots");
-            Add("RaidNote.AttachDialog.Filter", "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp", "Image files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp");
+            Add("RaidNote.AttachDialog.Title", "이미지·동영상 첨부", "Attach Images and Videos");
+            Add("RaidNote.AttachDialog.Filter", "이미지·동영상|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.jxr;*.mp4;*.webm;*.mov;*.avi;*.mkv;*.m4v", "Images and videos|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.jxr;*.mp4;*.webm;*.mov;*.avi;*.mkv;*.m4v");
             Add("RaidNote.AttachedCount", "{0}개 파일을 첨부했습니다.", "Files attached: {0}.");
-            Add("RaidNote.AttachmentRejected", "지원하는 로컬 이미지 파일만 첨부할 수 있습니다. 제외 {0}개", "Only supported local images can be attached. Files skipped: {0}.");
+            Add("RaidNote.AttachmentRejected", "지원하는 로컬 이미지·동영상만 첨부할 수 있습니다. 제외 {0}개", "Only supported local images and videos can be attached. Files skipped: {0}.");
             Add("RaidNote.AttachmentUnsafe", "지원하는 로컬 이미지·동영상 파일만 열 수 있습니다.", "Only supported local image and video files can be opened.");
             Add("RaidNote.AttachmentMissing", "첨부한 파일을 찾을 수 없습니다. 경로가 이동되었는지 확인해 주세요.", "The attached file could not be found. Check whether it was moved.");
             Add("RaidNote.AttachmentFolderUnsafe", "지원하는 로컬 이미지·동영상 파일의 위치만 열 수 있습니다.", "Only folders containing supported local image and video files can be opened.");
@@ -172,6 +172,12 @@ namespace TarkovServerReporter
             Add("BlockedServers.Button.RefreshA11y", "차단 규칙 목록 새로고침", "Refresh Block Rules");
             Add("BlockedServers.Busy.CloseBlocked", "방화벽·파일 작업과 최종 확인이 끝난 뒤 창을 닫을 수 있습니다.", "Please wait for the operation to finish before closing this window.");
             Add("BlockedServers.Column.Status", "상태", "Status");
+            Add("BlockedServers.Column.Game", "게임", "Game");
+            Add("BlockedServers.Game.Eft", "본편", "EFT");
+            Add("BlockedServers.Game.Arena", "아레나", "Arena");
+            Add("BlockedServers.Game.Both", "본편·아레나", "EFT·Arena");
+            Add("BlockedServers.Game.Unknown", "미확인", "Unknown");
+            Add("BlockedServers.Game.EvidenceHelp", "로컬 레이드 로그에서 관측한 게임입니다. 미확인은 관측 근거가 없는 기록이며 방화벽 차단은 게임별로 분리되지 않습니다.", "Games observed in local raid logs. Unknown means no recorded evidence. Firewall blocks are not separated by game.");
             Add("BlockedServers.Column.CurrentPingA11y", "현재 핑 열", "Current Ping Column");
             Add("BlockedServers.Column.Location", "데이터센터 / 지역", "Location");
             Add("BlockedServers.Column.Unblock", "개별해제", "Unblock");

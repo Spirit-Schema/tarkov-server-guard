@@ -174,6 +174,8 @@ namespace TarkovServerReporter.Tests
             sourceRaid.ScreenshotPaths.Add("Z:\\Transferred\\missing-first.png");
             sourceRaid.ScreenshotPaths.Add("Y:\\ArchivedComputer\\Shots\\missing-second.webp");
             sourceRaid.ScreenshotPaths.Add("Z:\\OldTestBuild\\existing-recording.mp4");
+            sourceRaid.ScreenshotPaths.Add("Z:\\NVIDIA\\Escape From Tarkov\\HDR screenshot.jxr");
+            sourceRaid.OperationSnapshotId = Key('d');
             MemoArchiveBackupExportResult export = MemoArchiveBackupService.CreateExport(
                 new[] { sourceRaid },
                 new[] { CreateReport(sharedKey, "source report", now.AddHours(-1)) },
@@ -200,9 +202,13 @@ namespace TarkovServerReporter.Tests
                     StringComparer.Ordinal)
                 && loadedReport != null && loadedReport.MemoText == "source report",
                 "round-trip restores screenshot links without requiring files to exist");
+            Assert(loadedRaid.OperationSnapshotId == sourceRaid.OperationSnapshotId,
+                "optional operation snapshot provenance survives backup and restore alongside HDR screenshot links");
 
             loadedRaid.NoteText = "local raid must survive";
             raids.Save(sharedKey, loadedRaid);
+            Assert(raids.Load(sharedKey).OperationSnapshotId == sourceRaid.OperationSnapshotId,
+                "explicit legacy memo edits preserve operation snapshot provenance");
             loadedReport.MemoText = "local report must survive";
             reports.Save(sharedKey, loadedReport);
             string raidPath = Path.Combine(raids.NotesFolder, sharedKey + ".json");

@@ -85,6 +85,9 @@ namespace TarkovServerReporter
         public string NoteText { get; set; }
         public List<string> ScreenshotPaths { get; set; }
         public List<string> Tags { get; set; }
+        // Optional provenance, separate from user-editable tags. Older memo records
+        // omit this field and remain valid.
+        public string OperationSnapshotId { get; set; }
         public DateTime CreatedUtc { get; set; }
         public DateTime UpdatedUtc { get; set; }
     }
@@ -102,12 +105,12 @@ namespace TarkovServerReporter
         private static readonly HashSet<string> SupportedScreenshotExtensions =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"
+                ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".jxr"
             };
         private static readonly HashSet<string> SupportedAttachmentExtensions =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp",
+                ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".jxr",
                 ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"
             };
         private static readonly char[] InvalidScreenshotFileNameCharacters =
@@ -302,6 +305,50 @@ namespace TarkovServerReporter
             Save(key, record, null);
         }
 
+        // The immutable operation-note snapshot is the source of this append. Its ID
+        // makes a retry idempotent even if the process exits after this write but before
+        // the operation store records its export receipt. Existing memo text and media
+        // links remain intact; later draft writes never call this method for a receipt.
+        internal bool AppendOperationSnapshot(ServerSession session, string text,
+            IEnumerable<string> screenshotPaths, DateTime savedUtc)
+        {
+            const string snapshotTag = "작전노트 저장본";
+            string key = CreateStableKey(session);
+            string snapshotId = CreateStableKey("operation-snapshot-v1\n" + key + "\n"
+                + savedUtc.ToUniversalTime().ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture));
+            lock (_sync)
+            using (MemoStoreWriteLease.Acquire(GetPath(key)))
+            {
+                RaidNoteRecord record = Load(key);
+                if (record == null && Exists(key))
+                    throw new InvalidDataException("기존 레이드 메모를 읽지 못해 작전노트를 덧붙이지 않았습니다.");
+                if (record == null) record = CreateFor(session);
+                if (string.Equals(record.OperationSnapshotId, snapshotId, StringComparison.Ordinal)) return false;
+                if (!string.IsNullOrEmpty(record.OperationSnapshotId))
+                    throw new InvalidDataException("이 레이드에는 다른 작전노트 저장본이 연결되어 있어 기존 내용을 보존했습니다.");
+                string heading = "── 작전노트 · "
+                    + savedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                    + " ──";
+                string block = heading + Environment.NewLine + (text ?? string.Empty);
+                string merged = string.IsNullOrWhiteSpace(record.NoteText) ? block
+                    : record.NoteText + Environment.NewLine + Environment.NewLine + block;
+                if (merged.Length > 200000)
+                    throw new InvalidOperationException("기존 메모와 작전노트의 합계가 저장 한도를 초과했습니다. 초안과 작전노트 저장본은 유지됩니다.");
+                record.NoteText = merged;
+                foreach (string path in screenshotPaths ?? new string[0])
+                {
+                    if (record.ScreenshotPaths.Contains(path, StringComparer.OrdinalIgnoreCase)) continue;
+                    if (record.ScreenshotPaths.Count >= MaximumScreenshotPathCount) break;
+                    record.ScreenshotPaths.Add(path);
+                }
+                if (record.Tags.Count < 100 && !record.Tags.Contains(snapshotTag, StringComparer.OrdinalIgnoreCase))
+                    record.Tags.Add(snapshotTag);
+                record.OperationSnapshotId = snapshotId;
+                Save(session, record);
+                return true;
+            }
+        }
+
         /// <summary>
         /// Restores a validated portable-backup record only when neither the primary nor
         /// fallback record already exists. The final File.Move is create-only, so a race
@@ -436,6 +483,7 @@ namespace TarkovServerReporter
                     record.ScreenshotPaths,
                     MaximumScreenshotPathCount),
                 Tags = NormalizeList(record.Tags, 100, 64, true),
+                OperationSnapshotId = NormalizeSnapshotId(record.OperationSnapshotId),
                 CreatedUtc = created,
                 UpdatedUtc = now
             };
@@ -457,6 +505,7 @@ namespace TarkovServerReporter
                 NoteText = Limit(NormalizeLegacyNoteText(record.NoteText), 200000),
                 ScreenshotPaths = CopyValidatedRestoredPaths(record.ScreenshotPaths),
                 Tags = NormalizeList(record.Tags, 100, 64, true),
+                OperationSnapshotId = NormalizeSnapshotId(record.OperationSnapshotId),
                 CreatedUtc = NormalizeDate(record.CreatedUtc),
                 UpdatedUtc = NormalizeDate(record.UpdatedUtc)
             };
@@ -483,6 +532,7 @@ namespace TarkovServerReporter
                     return null;
                 record.ScreenshotPaths = record.ScreenshotPaths ?? new List<string>();
                 record.Tags = record.Tags ?? new List<string>();
+                record.OperationSnapshotId = NormalizeSnapshotId(record.OperationSnapshotId);
                 record.GameType = Limit(record.GameType, 64);
                 record.NoteText = NormalizeLegacyNoteText(record.NoteText);
                 return record;
@@ -558,8 +608,8 @@ namespace TarkovServerReporter
         /// Checks the lexical contract for a local image or video attachment. It intentionally
         /// does not resolve the path or require the linked drive or file to exist on this PC.
         /// Existing records may contain videos saved by the v0.8.4.1 test build.
-        /// Keep those links usable and portable; new screenshot attachments use
-        /// IsSafeScreenshotAttachmentPath instead.
+        /// Keep those links usable and portable. The legacy editor also accepts
+        /// new video links; automatic screenshot classification remains image-only.
         /// </summary>
         internal static bool IsSafeAttachmentPath(string value)
         {
@@ -662,6 +712,7 @@ namespace TarkovServerReporter
             destination.NoteText = source.NoteText;
             destination.ScreenshotPaths = new List<string>(source.ScreenshotPaths);
             destination.Tags = new List<string>(source.Tags);
+            destination.OperationSnapshotId = source.OperationSnapshotId;
             destination.CreatedUtc = source.CreatedUtc;
             destination.UpdatedUtc = source.UpdatedUtc;
         }
@@ -670,6 +721,13 @@ namespace TarkovServerReporter
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
             return value.Length <= maximumLength ? value : value.Substring(0, maximumLength);
+        }
+
+        private static string NormalizeSnapshotId(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+            ValidateKey(value);
+            return value.ToLowerInvariant();
         }
 
         private static string GetSessionGameType(ServerSession session)

@@ -30,6 +30,7 @@ namespace TarkovServerReporter.Tests
                 TestAtomicBackupWrite(temporaryRoot);
                 TestBackupValidationAndPreview();
                 TestBackupMetadataMergeDoesNotOverwrite();
+                TestObservedGameEvidence();
                 TestBatchTokenBoundaries();
                 TestBatchAddTokenBoundaries();
                 TestBatchInputNormalization();
@@ -49,6 +50,45 @@ namespace TarkovServerReporter.Tests
                 ? "ALL STORAGE/BATCH TESTS PASSED"
                 : _failures + " STORAGE/BATCH TEST(S) FAILED");
             return _failures == 0 ? 0 : 1;
+        }
+
+        private static void TestObservedGameEvidence()
+        {
+            const string ip = "9.9.9.9";
+            Assert(BlockedServerMetadataStore.MarkBlocked(ip, null, null, true, false),
+                "EFT observation can be stored with a block");
+            Assert(BlockedServerMetadataStore.UpdateLocation(ip, null, null, false, true),
+                "Arena observation can enrich the same IP");
+            BlockedServerMetadata record = BlockedServerMetadataStore.LoadAll()[ip];
+            Assert(record.ObservedEft && record.ObservedArena,
+                "observations accumulate across games without replacing older evidence");
+            BlockedServerMetadataStore.UpdateNote(ip, "keep both games");
+            record = BlockedServerMetadataStore.LoadAll()[ip];
+            Assert(record.ObservedEft && record.ObservedArena,
+                "note edits preserve both game observations");
+            DateTime priorUpdated = record.UpdatedAtUtc;
+            Assert(BlockedServerMetadataStore.MergeObservedGames(new[] {
+                new BlockedServerMetadata { IpAddress = ip, ObservedEft = true, ObservedArena = true }
+            }), "existing game observations can be merged in one batch");
+            Assert(BlockedServerMetadataStore.LoadAll()[ip].UpdatedAtUtc == priorUpdated,
+                "unchanged game observations do not rewrite metadata timestamps");
+            var export = BlockedServerBackupService.CreateExport(
+                new[] { new ManagedBlockedServer { IpAddress = ip } }, BlockedServerMetadataStore.LoadAll());
+            var parsed = BlockedServerBackupService.Parse(export.Utf8Bytes);
+            Assert(parsed.Success && parsed.Items[0].Entry.ObservedEft && parsed.Items[0].Entry.ObservedArena,
+                "backup round-trip preserves known game evidence");
+            BlockedServerMetadataStore.Remove(new[] { ip });
+            Assert(BlockedServerMetadataStore.MergeMissingFromBackup(new[] { parsed.Items[0].Entry }),
+                "backup restores game evidence into a missing record");
+            record = BlockedServerMetadataStore.LoadAll()[ip];
+            Assert(record.ObservedEft && record.ObservedArena,
+                "restored game evidence remains both games");
+            BlockedServerMetadataStore.Remove(new[] { ip });
+            BlockedServerMetadataStore.MarkBlocked(ip, null, null);
+            record = BlockedServerMetadataStore.LoadAll()[ip];
+            Assert(!record.ObservedEft && !record.ObservedArena,
+                "a manual block with no log evidence remains unknown");
+            BlockedServerMetadataStore.Remove(new[] { ip });
         }
 
         private static void ConfigureTemporaryMetadataStore(string temporaryRoot)

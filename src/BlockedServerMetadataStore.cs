@@ -17,6 +17,8 @@ namespace TarkovServerReporter
         public string DataCenter { get; set; }
         public string Location { get; set; }
         public string Note { get; set; }
+        public bool ObservedEft { get; set; }
+        public bool ObservedArena { get; set; }
         public DateTime? BlockedAtUtc { get; set; }
         public DateTime UpdatedAtUtc { get; set; }
 
@@ -65,6 +67,8 @@ namespace TarkovServerReporter
             public string DataCenter { get; set; }
             public string Location { get; set; }
             public string Note { get; set; }
+            public bool ObservedEft { get; set; }
+            public bool ObservedArena { get; set; }
             public string BlockedAtUtc { get; set; }
             public string UpdatedAtUtc { get; set; }
         }
@@ -96,14 +100,51 @@ namespace TarkovServerReporter
             }
         }
 
-        public static bool UpdateLocation(string ipAddress, string dataCenter, string location)
+        public static bool UpdateLocation(string ipAddress, string dataCenter, string location,
+            bool observedEft = false, bool observedArena = false)
         {
-            return Upsert(ipAddress, dataCenter, location, null);
+            return Upsert(ipAddress, dataCenter, location, null, observedEft, observedArena);
         }
 
-        public static bool MarkBlocked(string ipAddress, string dataCenter, string location)
+        public static bool MarkBlocked(string ipAddress, string dataCenter, string location,
+            bool observedEft = false, bool observedArena = false)
         {
-            return Upsert(ipAddress, dataCenter, location, DateTime.UtcNow);
+            return Upsert(ipAddress, dataCenter, location, DateTime.UtcNow, observedEft, observedArena);
+        }
+
+        public static bool MergeObservedGames(IEnumerable<BlockedServerMetadata> observations)
+        {
+            if (observations == null) return true;
+            var candidates = observations.Where(item => item != null
+                && FirewallRuleManager.IsValidIpv4(item.IpAddress)
+                && (item.ObservedEft || item.ObservedArena)).ToList();
+            if (candidates.Count == 0) return true;
+            lock (SyncRoot)
+            {
+                try
+                {
+                    Dictionary<string, BlockedServerMetadata> records;
+                    if (!TryLoadForMutation(out records)) return false;
+                    bool changed = false;
+                    foreach (BlockedServerMetadata observation in candidates)
+                    {
+                        BlockedServerMetadata record;
+                        if (!records.TryGetValue(observation.IpAddress, out record))
+                        {
+                            record = new BlockedServerMetadata { IpAddress = observation.IpAddress };
+                            records.Add(record.IpAddress, record);
+                        }
+                        if ((!observation.ObservedEft || record.ObservedEft)
+                            && (!observation.ObservedArena || record.ObservedArena)) continue;
+                        record.ObservedEft |= observation.ObservedEft;
+                        record.ObservedArena |= observation.ObservedArena;
+                        record.UpdatedAtUtc = DateTime.UtcNow;
+                        changed = true;
+                    }
+                    return !changed || SaveCore(records);
+                }
+                catch { return false; }
+            }
         }
 
         public static bool UpdateNote(string ipAddress, string note)
@@ -140,7 +181,9 @@ namespace TarkovServerReporter
             string ipAddress,
             string dataCenter,
             string location,
-            DateTime? blockedAtUtc)
+            DateTime? blockedAtUtc,
+            bool observedEft = false,
+            bool observedArena = false)
         {
             if (!FirewallRuleManager.IsValidIpv4(ipAddress)) return false;
             string safeDataCenter = NormalizeText(dataCenter, 80);
@@ -165,6 +208,8 @@ namespace TarkovServerReporter
                         metadata.Location = safeLocation;
                     if (blockedAtUtc.HasValue)
                         metadata.BlockedAtUtc = NormalizeUtc(blockedAtUtc.Value);
+                    metadata.ObservedEft |= observedEft;
+                    metadata.ObservedArena |= observedArena;
                     metadata.UpdatedAtUtc = DateTime.UtcNow;
                     return SaveCore(records);
                 }
@@ -202,7 +247,7 @@ namespace TarkovServerReporter
                             ? (DateTime?)NormalizeUtc(entry.BlockedAtUtc.Value)
                             : null;
                         if (dataCenter == null && location == null && note == null
-                            && !blockedAtUtc.HasValue)
+                            && !blockedAtUtc.HasValue && !entry.ObservedEft && !entry.ObservedArena)
                             continue;
 
                         BlockedServerMetadata metadata;
@@ -213,6 +258,13 @@ namespace TarkovServerReporter
                         }
 
                         bool itemChanged = false;
+                        if ((entry.ObservedEft && !metadata.ObservedEft)
+                            || (entry.ObservedArena && !metadata.ObservedArena))
+                        {
+                            metadata.ObservedEft |= entry.ObservedEft;
+                            metadata.ObservedArena |= entry.ObservedArena;
+                            itemChanged = true;
+                        }
                         if (string.IsNullOrWhiteSpace(metadata.DataCenter) && dataCenter != null)
                         {
                             metadata.DataCenter = dataCenter;
@@ -370,6 +422,8 @@ namespace TarkovServerReporter
                         DataCenter = NormalizeText(item.DataCenter, 80),
                         Location = NormalizeText(item.Location, 180),
                         Note = NormalizeNote(item.Note),
+                        ObservedEft = item.ObservedEft,
+                        ObservedArena = item.ObservedArena,
                         BlockedAtUtc = nullableBlockedAt,
                         UpdatedAtUtc = updatedAt
                     };
@@ -401,6 +455,8 @@ namespace TarkovServerReporter
                         DataCenter = NormalizeText(item.DataCenter, 80),
                         Location = NormalizeText(item.Location, 180),
                         Note = NormalizeNote(item.Note),
+                        ObservedEft = item.ObservedEft,
+                        ObservedArena = item.ObservedArena,
                         BlockedAtUtc = FormatUtc(item.BlockedAtUtc),
                         UpdatedAtUtc = FormatUtc(item.UpdatedAtUtc == default(DateTime)
                             ? DateTime.UtcNow
@@ -484,6 +540,8 @@ namespace TarkovServerReporter
                     DataCenter = pair.Value.DataCenter,
                     Location = pair.Value.Location,
                     Note = pair.Value.Note,
+                    ObservedEft = pair.Value.ObservedEft,
+                    ObservedArena = pair.Value.ObservedArena,
                     BlockedAtUtc = pair.Value.BlockedAtUtc,
                     UpdatedAtUtc = pair.Value.UpdatedAtUtc
                 },

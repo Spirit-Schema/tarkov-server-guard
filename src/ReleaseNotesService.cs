@@ -30,6 +30,28 @@ namespace TarkovServerReporter
         {
             new BundledRelease
             {
+                Version = "0.8.8",
+                Notes = "0.8.8 로컬 베타 · 정식 미배포\n"
+                    + "- 단축키로 바로 작성하는 무료 작전노트를 추가했습니다. 체크리스트·고정 메모·자동 투명도와 레이드 저장 후 이어쓰기를 제공합니다.\n"
+                    + "- 아이템·맵·보스·탈출구·내 메모를 로컬에서 검색하고, 확인된 촬영 시각으로 레이드 스크린샷을 연결합니다.\n"
+                    + "- 차단 목록의 본편·아레나 구분, 주황 TSG 아이콘·헤더 로고, 간결한 작전종료·신고 표기를 적용했습니다.\n"
+                    + "- 미세 패킷손실 표기·색상, 우클릭 작업·트레이 메뉴와 차단 판단 안내를 개선했습니다.\n\n"
+                    + "0.8.3 이후 누적 기능\n"
+                    + "- 창 크기와 열 너비를 기억하고 한국어·영어 설정을 제공합니다.\n"
+                    + "- 메모 보관함 검색·종류 필터, 안정적인 저장·백업·복원을 제공합니다.\n"
+                    + "- 파티 차단 목록과 사용방법, 시즌 식별, 중복 실행 방지·업데이트 확인을 제공합니다.",
+                EnglishNotes = "0.8.8 local beta · not publicly released\n"
+                    + "- Added a free operation note with immediate hotkey typing, checklists, pinned notes, automatic background transparency and raid snapshots that preserve continued drafts.\n"
+                    + "- Search items, maps, bosses, exits and personal notes locally, and link screenshots using verified capture times.\n"
+                    + "- Added an EFT/Arena column to blocked servers, orange TSG branding and compact raid end/report labels.\n"
+                    + "- Improved tiny packet loss values and colors, context actions, tray commands and blocking guidance.\n\n"
+                    + "Cumulative changes since 0.8.3\n"
+                    + "- Window sizes and column widths are remembered; Korean and English settings are available.\n"
+                    + "- Saved Notes supports search, type filters and reliable storage, backup and restore.\n"
+                    + "- Includes party block lists and guides, season identification, single-instance handling and update checks."
+            },
+            new BundledRelease
+            {
                 Version = "0.8.7",
                 EnglishNotes =
                     "0.8.7 update\n- Season numbers are resolved from raid dates and season history, independently of game version. Unresolved season numbers show PvP/S?; confirmed numbers keep PvP/S1 notation.\n- Raid details show duration / end time from the log, including the date for overnight raids.\n- Launching TSG again restores the existing window instead of opening another copy.\n- TSG checks for updates on each launch and every six hours while running. Later pauses only that version for 24 hours; failed checks or downloads do not count as deferrals.\n\n0.8.6 hotfix\n- Added a step-by-step usage guide to Add Party IPs.\n\nWhat's new since 0.8.3\n\n"

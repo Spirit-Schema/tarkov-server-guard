@@ -628,7 +628,7 @@ namespace TarkovServerReporter
             if (value == 0) return "0%";
             double percent = value * 100.0;
             return percent < 0.01
-                ? "0.01%"
+                ? "0.01% 미만"
                 : string.Format("{0:0.##}%", percent);
         }
 

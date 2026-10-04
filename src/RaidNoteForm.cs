@@ -28,6 +28,16 @@ namespace TarkovServerReporter
             if (session == null) return false;
             return new RaidNoteStore().Exists(session);
         }
+        public static bool ShowScreenshotsFor(IWin32Window owner, ServerSession session)
+        {
+            if (session == null) throw new ArgumentNullException("session");
+            using (var form = new RaidNoteForm(session, new RaidNoteStore()))
+            {
+                form.Shown += delegate { form.FocusScreenshots(); };
+                form.ShowDialog(owner);
+                return form.Changed;
+            }
+        }
 
         public static bool ShowArchive(IWin32Window owner)
         {
@@ -47,6 +57,11 @@ namespace TarkovServerReporter
 
     public sealed class RaidNoteForm : BrandedForm
     {
+        internal void FocusScreenshots()
+        {
+            if (_screenshotList.Items.Count > 0) _screenshotList.SelectedIndex = 0;
+            _screenshotList.Focus();
+        }
         internal const string DefaultNoteTemplate = RaidNoteStore.LegacyDefaultNoteTemplate;
         internal const string NicknamePlaceholderText = "유저닉네임\r\n1.\r\n2.\r\n3.";
 
@@ -605,7 +620,7 @@ namespace TarkovServerReporter
                     continue;
                 }
                 if (!File.Exists(fullPath)
-                    || !RaidNoteStore.IsSafeScreenshotAttachmentPath(fullPath)
+                    || !RaidNoteStore.IsSafeAttachmentPath(fullPath)
                     || existing.Count >= RaidNoteStore.MaximumScreenshotPathCount)
                 {
                     rejected++;

@@ -75,7 +75,7 @@ namespace TarkovServerReporter.Tests
             File.WriteAllText(Path.Combine(_artifacts, "memo-rollback-summary.txt"),
                 "Product SHA-256: " + ProductHash() + Environment.NewLine
                 + "Languages: ko-KR, en" + Environment.NewLine
-                + "Verified: legacy create/edit/archive/report, image-only picker, existing video preservation, settings failures, no operation subsystem." + Environment.NewLine,
+                + "Verified: legacy create/edit/archive/report, image/video picker with executable rejection, existing video preservation, settings failures, old discarded subsystem absent; new beta entry retained." + Environment.NewLine,
                 new UTF8Encoding(false));
         }
 
@@ -148,9 +148,11 @@ namespace TarkovServerReporter.Tests
                 Assert(!File.Exists(primary), "Typing alone does not autosave or submit an operation plan.");
                 var list = Field<ListBox>(form, "_screenshotList");
                 Assert(!list.AllowDrop, "The restored attachment list does not introduce drag-and-drop workflow.");
-                Call(form, "AddScreenshotPaths", (object)new string[] { imagePath, videoPath });
-                Assert(list.Items.Count == 1 && (string)list.Items[0] == imagePath,
-                    "The legacy screenshot picker accepts an image and rejects a new video path.");
+                string unsupported = Path.Combine(root, "unsupported.exe");
+                File.WriteAllText(unsupported, "inert fixture, never executed");
+                Call(form, "AddScreenshotPaths", (object)new string[] { imagePath, videoPath, unsupported });
+                Assert(list.Items.Count == 2 && list.Items.Contains(imagePath) && list.Items.Contains(videoPath),
+                    "The existing editor accepts image/video links while refusing executable files.");
                 Assert(NoOperationActions(form), "The raid editor requires no submit-plan/report/continue action.");
                 Capture(form, language + "-raid-note.png");
                 Named<Button>(form, "RaidNoteSaveButton").PerformClick();
@@ -161,8 +163,8 @@ namespace TarkovServerReporter.Tests
             Assert((string)Get(record, "NoteText") == "사용자 작성 원문 - never translate\r\nfirst raid memo",
                 "User-authored memo text survives localized editing unchanged.");
 
-            // Simulate an already saved v0.8.4.1 media link. Rollback removes
-            // new video input but must preserve existing data on an ordinary edit.
+            // Existing media links, including a repeated path, remain portable
+            // and are normalized without touching any original file.
             ((IList)Get(record, "ScreenshotPaths")).Add(videoPath);
             Call(raidStore, "Save", key, record);
             using (var editor = (Form)New("RaidNoteForm", record, raidStore))
@@ -306,8 +308,9 @@ namespace TarkovServerReporter.Tests
                 Assert(settings.Text == (language == "en" ? "Settings" : "설정"), "Main settings entry point is retained in both languages.");
                 Assert(Descendants(main).OfType<Button>().Any(button => button.Text == (language == "en" ? "Saved Notes" : "메모 보관함")),
                     "Main exposes the restored memo archive entry point.");
-                Assert(!Descendants(main).Any(control => control.Text == "작전노트" || control.Text == "Operation Note"),
-                    "Main contains no postponed operation-note entry point.");
+                Assert(Descendants(main).OfType<Button>().Any(control =>
+                    string.Equals(control.Text, language == "en" ? "Operation note" : "작전노트", StringComparison.OrdinalIgnoreCase)),
+                    "The new v0.8.8 operation-note entry coexists with the unchanged legacy archive.");
                 main.Close();
             }
         }

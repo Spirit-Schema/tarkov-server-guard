@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Spirit-Schema")]
 [assembly: AssemblyProduct("Tarkov Server Guard")]
 [assembly: AssemblyCopyright("Copyright © 2026 Spirit-Schema. All rights reserved.")]
-[assembly: AssemblyVersion("0.8.7.0")]
-[assembly: AssemblyFileVersion("0.8.7.0")]
+[assembly: AssemblyVersion("0.8.8.0")]
+[assembly: AssemblyFileVersion("0.8.8.0")]
 
 namespace TarkovServerReporter
 {
@@ -64,6 +64,18 @@ namespace TarkovServerReporter
                 AppText.SetLanguage(languageOverride);
 
             var form = new MainForm(demoMode);
+            OperationNoteController operationNote = null;
+            // Preview screenshots remain deterministic and never register shortcuts or open caches.
+            if (string.IsNullOrWhiteSpace(previewPath))
+            {
+                form.Shown += delegate
+                {
+                    if (demoMode && !HasArgument(args, "--operation-note-demo")) return;
+                    operationNote = new OperationNoteController(form, demoMode, preferences);
+                    if (HasArgument(args, "--operation-note") || HasArgument(args, "--operation-note-demo"))
+                        operationNote.Open(HasArgument(args, "--operation-note-demo"));
+                };
+            }
             form.Shown += delegate
             {
                 if (instance != null) instance.Attach(form);
@@ -112,6 +124,7 @@ namespace TarkovServerReporter
             }
             finally
             {
+                if (operationNote != null) operationNote.Dispose();
                 NetworkServices.DisposeGeoService();
             }
         }

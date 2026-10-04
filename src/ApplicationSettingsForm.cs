@@ -63,6 +63,7 @@ namespace TarkovServerReporter
         private ComboBox _languageComboBox;
         private Label _statusLabel;
         private bool _loading;
+        internal event Action CaptureFoldersRequested;
 
         public ApplicationSettingsForm(AppPreferences preferences)
             : this(preferences, null)
@@ -177,6 +178,10 @@ namespace TarkovServerReporter
             cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
             buttons.Controls.Add(save);
             buttons.Controls.Add(cancel);
+            Button capture = ApplicationSettingsTheme.CreateButton(
+                AppText.CurrentLanguage == AppText.KoreanLanguage ? "촬영 폴더" : "Capture folders", false);
+            capture.Click += delegate { if (CaptureFoldersRequested != null) CaptureFoldersRequested(); };
+            buttons.Controls.Add(capture);
             root.Controls.Add(buttons, 0, 3);
             root.SetColumnSpan(buttons, 2);
             AcceptButton = save;

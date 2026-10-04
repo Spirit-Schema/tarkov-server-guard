@@ -34,6 +34,8 @@ namespace TarkovServerReporter
 
     public sealed class BlockedServersForm : BrandedForm
     {
+        internal Func<string, Task> ServerHistoryRequested { get; set; }
+        private ContextMenuStrip _rowMenu;
         internal const string CurrentPingBlockedText = "차단 중 · 측정 불가";
         internal const string CurrentPingBlockedHelp =
             "차단 규칙이 해당 IP의 모든 아웃바운드 통신(ICMP 포함)을 막으므로 차단 중에는 "
@@ -812,6 +814,7 @@ namespace TarkovServerReporter
             _partyReleaseButton.Click += async delegate { await ReleasePartyBundleAsync(); };
             _grid.CellContentClick += GridCellContentClick;
             _grid.CellMouseClick += GridCellMouseClick;
+            _grid.CellMouseDown += GridContextMouseDown;
             _grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
             _grid.CellPainting += GridCellPainting;
             _grid.CellMouseMove += GridCellMouseMove;
@@ -842,7 +845,11 @@ namespace TarkovServerReporter
                 _statusLabel.ForeColor = Color.FromArgb(231, 184, 73);
                 _statusLabel.Text = AppText.Get("BlockedServers.Busy.CloseBlocked");
             };
-            Disposed += delegate { _toolTip.Dispose(); };
+            Disposed += delegate
+            {
+                _toolTip.Dispose();
+                if (_rowMenu != null) _rowMenu.Dispose();
+            };
             Shown += async delegate { await RefreshRulesAsync(); };
         }
 
@@ -916,6 +923,7 @@ namespace TarkovServerReporter
                 Name = "ip",
                 HeaderText = AppText.Get("BlockedServers.Column.Ip"),
                 ReadOnly = true,
+                MinimumWidth = 96,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 45F
             });
@@ -945,6 +953,7 @@ namespace TarkovServerReporter
                 Name = "location",
                 HeaderText = AppText.Get("BlockedServers.Column.Location"),
                 ReadOnly = true,
+                MinimumWidth = 80,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 40F
             });
@@ -1006,9 +1015,17 @@ namespace TarkovServerReporter
             removeColumn.HeaderCell.Style.WrapMode = DataGridViewTriState.False;
             removeColumn.HeaderCell.Style.Padding = new Padding(0);
             grid.Columns.Add(removeColumn);
+            grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "game",
+                HeaderText = AppText.Get("BlockedServers.Column.Game"),
+                ReadOnly = true,
+                Width = 94,
+                DisplayIndex = 2
+            });
             foreach (string sortableColumn in new[]
             {
-                "ip", "status", "location", "blockedAt", "note", "kind"
+                "ip", "status", "location", "blockedAt", "note", "kind", "game"
             })
             {
                 DataGridViewColumn column = grid.Columns[sortableColumn];
@@ -1020,6 +1037,7 @@ namespace TarkovServerReporter
             }
             grid.HandleCreated += delegate { ApplyGridDpiMetrics(grid); };
             grid.DpiChangedAfterParent += delegate { ApplyGridDpiMetrics(grid); };
+            if (grid.IsHandleCreated) ApplyGridDpiMetrics(grid);
             return grid;
         }
 
@@ -1039,6 +1057,18 @@ namespace TarkovServerReporter
             TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
             using (Graphics graphics = grid.CreateGraphics())
             {
+                // The game column reduces spare fill space at the minimum window
+                // size. Keep headers plus sort glyphs readable and let the grid
+                // scroll horizontally instead of compressing the IP/location away.
+                foreach (string name in new[] { "ip", "location" })
+                {
+                    DataGridViewColumn column = grid.Columns[name];
+                    Font font = column.HeaderCell.InheritedStyle.Font ?? headerFont;
+                    Size text = TextRenderer.MeasureText(graphics, column.HeaderText, font,
+                        new Size(1000, 1000), flags);
+                    column.MinimumWidth = Math.Max((int)Math.Round((name == "ip" ? 96F : 80F) * scale),
+                        text.Width + (int)Math.Round(26F * scale));
+                }
                 headerText = TextRenderer.MeasureText(
                     graphics,
                     AppText.Get("BlockedServers.Column.Unblock"),
@@ -1154,6 +1184,8 @@ namespace TarkovServerReporter
                     AppText.Get("BlockedServers.Button.UnblockOne"));
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = server;
+                row.Cells["game"].Value = GetObservedGameText(metadata);
+                row.Cells["game"].ToolTipText = AppText.Get("BlockedServers.Game.EvidenceHelp");
                 _blockedServerOriginalOrder[row] = index;
                 row.Cells["status"].Style.ForeColor = Danger;
                 ApplyCurrentPingCell(row);
@@ -1298,6 +1330,50 @@ namespace TarkovServerReporter
             await RemoveAddressesAsync(new[] { server.IpAddress });
         }
 
+        private void GridContextMouseDown(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (_busy || e.Button != MouseButtons.Right || e.RowIndex < 0) return;
+            DataGridViewRow row = _grid.Rows[e.RowIndex];
+            ManagedBlockedServer server = row.Tag as ManagedBlockedServer;
+            if (server == null) return;
+            _grid.ClearSelection();
+            row.Selected = true;
+            if (_rowMenu != null) _rowMenu.Dispose();
+            _rowMenu = new ContextMenuStrip { BackColor = Surface, ForeColor = TextPrimary };
+            var history = new ToolStripMenuItem(AppText.Get("Main.Context.SameServer"));
+            history.Enabled = FirewallRuleManager.IsValidIpv4(server.IpAddress) && ServerHistoryRequested != null;
+            history.Click += async delegate { await ServerHistoryRequested(server.IpAddress); };
+            _rowMenu.Items.Add(history);
+            _rowMenu.Items.Add(new ToolStripSeparator());
+            var remove = new ToolStripMenuItem(AppText.Get("Main.Context.Unblock"));
+            remove.Enabled = FirewallRuleManager.IsValidIpv4(server.IpAddress);
+            remove.Click += delegate
+            {
+                GridCellContentClick(_grid, new DataGridViewCellEventArgs(_grid.Columns["remove"].Index, row.Index));
+            };
+            _rowMenu.Items.Add(remove);
+            _rowMenu.Items.Add(new ToolStripSeparator());
+            var metadata = BlockedServerMetadataStore.LoadAll();
+            BlockedServerMetadata record;
+            metadata.TryGetValue(server.IpAddress, out record);
+            _rowMenu.Items.Add(AppText.Get(record != null && !string.IsNullOrWhiteSpace(record.Note)
+                ? "Main.Context.OpenMemo" : "Main.Context.WriteMemo"), null, delegate { ShowNoteEditor(row); });
+            _rowMenu.Items.Add(new ToolStripSeparator());
+            var copy = new ToolStripMenuItem(AppText.Get("Common.Button.CopyIp"));
+            copy.Enabled = FirewallRuleManager.IsValidIpv4(server.IpAddress);
+            copy.Click += delegate
+            {
+                try
+                {
+                    Clipboard.SetText(server.IpAddress);
+                    _statusLabel.Text = AppText.Get("Main.Clipboard.Copied");
+                }
+                catch (Exception ex) { _statusLabel.Text = AppText.Format("Main.Clipboard.Failed", ex.Message); }
+            };
+            _rowMenu.Items.Add(copy);
+            _rowMenu.Show(_grid, _grid.PointToClient(Cursor.Position));
+        }
+
         private void GridCellMouseClick(object sender, DataGridViewCellMouseEventArgs e)
         {
             if (_busy || e.Button != MouseButtons.Left || e.RowIndex < 0 || e.ColumnIndex < 0)
@@ -1396,6 +1472,14 @@ namespace TarkovServerReporter
             if (_grid.CurrentCell != null)
                 _grid.InvalidateCell(_grid.CurrentCell);
             UpdateButtons();
+        }
+
+        private static string GetObservedGameText(BlockedServerMetadata metadata)
+        {
+            return AppText.Get(metadata != null && metadata.ObservedEft
+                ? (metadata.ObservedArena ? "BlockedServers.Game.Both" : "BlockedServers.Game.Eft")
+                : (metadata != null && metadata.ObservedArena
+                    ? "BlockedServers.Game.Arena" : "BlockedServers.Game.Unknown"));
         }
 
         private void ApplyBlockedServerSort()

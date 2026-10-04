@@ -1,4 +1,4 @@
-// Copyright © 2026 Spirit-Schema. All rights reserved.
+﻿// Copyright © 2026 Spirit-Schema. All rights reserved.
 // Licensed under the Tarkov Server Guard Source-Available Freeware License 1.0. See LICENSE.
 
 using System;
@@ -2023,8 +2023,8 @@ namespace TarkovServerReporter.Tests
             foreach (double tinyPositive in new[] { double.Epsilon, 0.0000001 })
             {
                 measured.NetworkLoss = tinyPositive;
-                Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "0.01%",
-                    "every positive packet loss below one hundredth of a percent is clamped to the display floor");
+                Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "0.01% 미만",
+                    "tiny positive loss is identified without inflating it to the display precision");
             }
             measured.NetworkLoss = 0.0001;
             Assert(RaidMetricPresentation.FormatPacketLoss(measured) == "0.01%",

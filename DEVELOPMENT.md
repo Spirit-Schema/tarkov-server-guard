@@ -1,5 +1,20 @@
 # 개발·빌드 안내
 
+## 0.8.8 로컬 베타
+
+현재 소스는 정식 미배포 검수본입니다. 전체 검증: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -OutputDirectory .\build\test-v0.8.8`.
+
+- 실제 로그 연결: `build\test-v0.8.8\TarkovServerGuard.exe --operation-note`.
+- 격리 예시 레이드 체험: `build\test-v0.8.8\TarkovServerGuard.exe --demo --operation-note-demo`. 별도 창에서 시작·종료·예시 보관함을 조작합니다. 예시 저장소는 `%LOCALAPPDATA%\TarkovServerGuard\Beta088Demo`입니다.
+- 기본 단축키는 `Ctrl+Shift+O`로 열기/숨기기, `Ctrl+Shift+E`로 입력 활성화입니다. 저장된 기존 사용자 단축키가 있으면 그 값을 유지합니다. 열면 본문에 포커스합니다.
+- 실제로 관측한 본편 레이드의 시작·종료가 확인됐을 때 한 번에 저장할 수 있습니다. 이전의 관계없는 기록에 현재 초안을 임의 연결하지 않습니다. 저장본은 별도로 보존되며 기존 레이드 메모·보관함에서 읽습니다.
+- 초안은 300ms 주기와 숨김·잠금·종료 때 보존합니다. 작업 영역 40px 밖으로 이동하면 입력 통과로 잠그고, 여전히 노트가 foreground일 때만 이전 HWND·PID를 확인해 복귀합니다. 마우스 캡처 중에는 잠금을 보류합니다.
+- 검색 데이터는 공개 정적 JSON만 내려받아 `%LOCALAPPDATA%\TarkovServerGuard\OperationSearchCache`에 캐시합니다. 24시간 경과 시 재확인하며 실패 재시도는 최소 10분 간격입니다. 검색어·메모는 요청에 포함하지 않습니다. 영어 이름으로 검색할 수 있지만 결과 설명은 이 베타에서 한국어 기준입니다.
+- 스크린샷은 타르코프 기본 폴더·NVIDIA 폴더를 탐지합니다. 다른 위치는 설정의 `촬영 폴더`에서 추가합니다. NVIDIA HDR `.jxr`와 Steam 시각형 파일명을 지원합니다. 촬영시각과 유일한 레이드 구간이 확인된 사진만 연결하며 원본은 이동·삭제하지 않습니다.
+- WinForms 본체에 .NET Framework 4.8 WPF 투명 창을 연결합니다. 추가 다운로드 런타임 없이 배경 알파와 글자 가독성을 분리합니다.
+
+실게임의 전용 전체화면·관리자 권한·IME 조합, 실제 촬영 직후 연결은 별도 검수 대상입니다. 자동화의 실제 HWND 시험과 게임 검증을 구분합니다.
+
 ## 개발 빌드와 테스트
 
 Windows PowerShell에서 실행합니다.
